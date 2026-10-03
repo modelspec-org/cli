@@ -76,6 +76,7 @@ type unit struct {
 	models  []*Model
 	broken  bool // some file of the module could not be read
 	idx     *unitIndex
+	visits  int // concepts visited building the index: see steps
 }
 
 // unitIndex finds the concepts of a unit by kind and name, and the kind of a
@@ -95,6 +96,7 @@ func (u *unit) index() *unitIndex {
 	idx := &unitIndex{byKind: map[Kind]map[string]*Concept{}, trio: map[string]Kind{}}
 	for _, m := range u.models {
 		for _, c := range m.Concepts {
+			u.visits++
 			if idx.byKind[c.Kind] == nil {
 				idx.byKind[c.Kind] = map[string]*Concept{}
 			}
@@ -133,6 +135,12 @@ func (u *unit) trioKind(name string) (Kind, bool) {
 // its own but is not a second source for the name. Broken models are skipped, and
 // references into their modules are not reported.
 func Check(models []*Model, opts Options) []Finding {
+	return runCheck(models, opts).result()
+}
+
+// runCheck does the work of Check and returns the checker, whose steps a test
+// can read.
+func runCheck(models []*Model, opts Options) *checker {
 	c := &checker{opts: opts, byName: map[string][]*unit{}, props: map[*Concept]*propSet{}, memberSets: map[*Concept]map[string]bool{}}
 	groups := map[string]*unit{}
 	var order []*unit
@@ -156,7 +164,8 @@ func Check(models []*Model, opts Options) []Finding {
 	for _, u := range order {
 		c.unit(u)
 	}
-	return c.result()
+	c.units = order
+	return c
 }
 
 type checker struct {
@@ -166,6 +175,23 @@ type checker struct {
 	cur        *Model
 	props      map[*Concept]*propSet
 	memberSets map[*Concept]map[string]bool // see memberSet
+	units      []*unit
+	builds     int // member sets built: see steps
+}
+
+// steps counts the work that lookups do, in units that do not depend on time: the
+// concepts visited to index the units, the members listed to build member sets,
+// and the sets and names consulted or copied to answer whether a name is a
+// property. Tests assert that it grows with the size of the model, and not with
+// the number of lookups.
+func (c *checker) steps() (concepts, members, probes int) {
+	for _, u := range c.units {
+		concepts += u.visits
+	}
+	for _, p := range c.props {
+		probes += p.probes
+	}
+	return concepts, c.builds, probes
 }
 
 func (c *checker) add(line int, rule string, sev Severity, format string, args ...any) {
@@ -421,6 +447,7 @@ type propSet struct {
 	lookups  int
 	union    map[string]bool
 	complete bool
+	probes   int // sets consulted and names copied: see checker.steps
 }
 
 func (p *propSet) has(name string) bool {
@@ -430,6 +457,7 @@ func (p *propSet) has(name string) bool {
 	if p.union == nil {
 		if p.lookups++; p.lookups*len(p.used) <= p.fields+len(p.used) {
 			for _, set := range p.used {
+				p.probes++
 				if set[name] {
 					return true
 				}
@@ -439,6 +467,7 @@ func (p *propSet) has(name string) bool {
 		p.union = make(map[string]bool, p.fields)
 		for _, set := range p.used {
 			for n := range set {
+				p.probes++
 				p.union[n] = true
 			}
 		}
@@ -453,6 +482,7 @@ func (c *checker) memberSet(k *Concept) map[string]bool {
 	}
 	set := make(map[string]bool, len(k.Members))
 	for _, mem := range k.Members {
+		c.builds++
 		set[mem.Name] = true
 	}
 	c.memberSets[k] = set

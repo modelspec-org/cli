@@ -6,15 +6,10 @@ import (
 	"testing"
 )
 
-// The checker's work is linear in the size of the model: eight times the model
-// allocates about eight times the memory, where a scan for each reference, or a
-// map of an entity's properties rebuilt for each bind, took sixty-four times. The
-// allocator's own count stands for steps (see allocated): it does not depend on
-// time or on the load of the machine. Not parallel, because the count is of the
-// whole process.
-func TestCheckIsLinear(t *testing.T) {
-	// hcl builds a model of n units of each part; json builds the same in JSON.
-	shapes := map[string]func(n int) (string, func(src string) (*Model, []Finding)){
+// linearShapes are models of n units of each part that the checker's work must
+// grow linearly with: the function builds a model's source and says how to read it.
+func linearShapes() map[string]func(n int) (string, func(src string) (*Model, []Finding)) {
+	return map[string]func(n int) (string, func(src string) (*Model, []Finding)){
 		"binds to one entity's properties": func(n int) (string, func(string) (*Model, []Finding)) {
 			var b strings.Builder
 			b.WriteString("entity \"E\" {\n  key = [\"p0\"]\n")
@@ -74,7 +69,16 @@ func TestCheckIsLinear(t *testing.T) {
 			return fmt.Sprintf("recordset \"r\" {\n  key = [%s\"c0\"]\n  query = \"q\"\n%s}\n", key.String(), b.String()), parseHCLString
 		},
 	}
-	for name, build := range shapes {
+}
+
+// The checker's work is linear in the size of the model: eight times the model
+// allocates about eight times the memory, where a scan for each reference, or a
+// map of an entity's properties rebuilt for each bind, took sixty-four times. The
+// allocator's own count stands for steps (see allocated): it does not depend on
+// time or on the load of the machine. Not parallel, because the count is of the
+// whole process.
+func TestCheckIsLinear(t *testing.T) {
+	for name, build := range linearShapes() {
 		smallSrc, parse := build(128)
 		largeSrc, _ := build(1024)
 		check := func(src string) func() {
@@ -131,5 +135,97 @@ func TestUnitIndexAgreesWithAScan(t *testing.T) {
 	}
 	if u.index() != u.index() {
 		t.Error("the index is built more than once")
+	}
+}
+
+// The allocation test above cannot see a scan, which allocates nothing. These
+// count the steps the lookups take (concepts visited, members listed, sets
+// probed): a unit's index visits each concept once however many lookups there
+// are, a member set is built once, and an entity's property lookups cost at most
+// twice the fields of the components it uses however many lookups there are.
+func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{100, 1000} {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&b, "entity \"E%d\" {\n  key = []\n}\n", i)
+		}
+		m, _ := ParseHCL("a"+hclExt, []byte(b.String()))
+		u := &unit{models: []*Model{m}}
+		for i := 0; i < 5*n; i++ {
+			if u.find(KindEntity, fmt.Sprintf("E%d", i%n)) == nil {
+				t.Fatal("not found")
+			}
+			if _, ok := u.trioKind("none"); ok {
+				t.Fatal("found")
+			}
+		}
+		if u.visits != n {
+			t.Errorf("%d concepts, %d lookups: %d concepts visited, want each once", n, 10*n, u.visits)
+		}
+	}
+	// Member sets: one build for a concept's members, however often it is asked for.
+	for _, n := range []int{100, 1000} {
+		k := &Concept{}
+		for i := 0; i < n; i++ {
+			k.Members = append(k.Members, Member{Name: fmt.Sprintf("m%d", i)})
+		}
+		c := &checker{memberSets: map[*Concept]map[string]bool{}}
+		for i := 0; i < 5*n; i++ {
+			c.memberSet(k)
+		}
+		if _, members, _ := c.steps(); members != n {
+			t.Errorf("%d members: %d listed, want each once", n, members)
+		}
+	}
+	// Property lookups: the probes stop growing once the merged set is built.
+	for _, n := range []int{50, 500} {
+		var b strings.Builder
+		fields := 0
+		for i := 0; i < 5; i++ {
+			fmt.Fprintf(&b, "component \"C%d\" {\n", i)
+			for j := 0; j < n; j++ {
+				fmt.Fprintf(&b, "  field \"f%d_%d\" {\n    type = \"int\"\n  }\n", i, j)
+				fields++
+			}
+			b.WriteString("}\n")
+		}
+		b.WriteString("entity \"E\" {\n  use = [\"C0\", \"C1\", \"C2\", \"C3\", \"C4\"]\n  key = []\n}\n")
+		m, _ := ParseHCL("a"+hclExt, []byte(b.String()))
+		u := &unit{name: "a", models: []*Model{m}}
+		c := &checker{byName: map[string][]*unit{"a": {u}}, props: map[*Concept]*propSet{}, memberSets: map[*Concept]map[string]bool{}, units: []*unit{u}}
+		p := c.propertyNames(u, u.find(KindEntity, "E"))
+		probes := func(lookups int) int {
+			for i := 0; i < lookups; i++ {
+				p.has("none")
+			}
+			_, _, probes := c.steps()
+			return probes
+		}
+		few, many := probes(3), probes(20*fields)
+		if bound := 2 * (fields + 5); many > bound || many-few > bound {
+			t.Errorf("%d fields: %d probes after %d lookups, bound %d", fields, many, 20*fields, bound)
+		}
+	}
+	// Through a whole check, each concept of a unit is visited once and no member
+	// set is built twice, at two sizes of each shape.
+	for name, build := range linearShapes() {
+		for _, n := range []int{64, 512} {
+			src, parse := build(n)
+			m, _ := parse(src)
+			c := runCheck([]*Model{m}, Options{})
+			concepts, members, probes := c.steps()
+			total := 0
+			for _, k := range m.Concepts {
+				total += len(k.Members)
+			}
+			wantConcepts := len(m.Concepts)
+			if name == "a recordset key of many columns" {
+				wantConcepts = 0 // it refers to no concept, so no index is built
+			}
+			if concepts != wantConcepts || members > total || probes > 2*(total+n) {
+				t.Errorf("%s, n=%d: %d of %d concepts visited, %d of %d members listed, %d probes", name, n, concepts, wantConcepts, members, total, probes)
+			}
+		}
 	}
 }
