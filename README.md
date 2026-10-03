@@ -233,22 +233,64 @@ on a line, and 50 for a file), exit 1:
 Brackets, quotes and operators inside strings, heredocs and comments are text, so a file whose
 `pattern = <<EOT … [[[ … EOT` holds unbalanced brackets is read normally.
 
-**What is bounded.** Nesting is the one recursion left, so it is counted from tokens: more than 64 levels
-(`MaxDepth`) of braces, brackets, strings and heredocs (JSON: arrays and objects) is a `limit` finding.
-A source larger than 4 MiB (`MaxInputBytes`) is refused before it is read (the size comes from the file's
-metadata), and one that is not valid UTF-8 is refused before it is parsed. A heredoc of more than 1,000 lines
-(`MaxHeredocLines`) is refused too, because the HCL parser joins a heredoc's lines in time that grows
-with the square of their number (40,000 lines take a second; 400,000, over a minute). No more than 50 syntax
-errors are shown for a file. Real models nest four or five levels in HCL and six to eight in JSON.
+**What is bounded.** One table, every number in the code:
 
-**Time.** After these checks the worst time over about 35 hostile shapes of a 4 MiB file (a list of a million
-numbers, a million strings, blocks, heredocs of 999 lines, 64-deep nesting, a million syntax errors, and so
-on) was about 2 seconds (`modelspec lint` of one file, a loaded laptop). The shapes that were slow
-before the checks (the heredoc and a list of a million numbers) are now refused or linear.
+| Limit | Value | What happens past it |
+| --- | --- | --- |
+| size of one source file | 4 MiB (`MaxInputBytes`) | refused before it is read (the size is from the file's metadata); not valid UTF-8 is refused before it is parsed |
+| nesting of braces, brackets, quoted strings and heredocs (JSON: arrays and objects) | 64 levels (`MaxDepth`) | `limit` finding; counted from tokens, so brackets in strings and comments do not count |
+| lines of one heredoc | 1,000 (`MaxHeredocLines`) | `limit` finding naming the number of lines; `$` and `%` in a query do not change the count |
+| syntax errors or non-literal tokens shown for one file | 50 (`MaxSyntaxFindings`) | the rest are not listed; one finding says so |
+| findings kept by one reader, one check and one run | 1,000 (`MaxFindings`) | the rest are counted, not kept: one more finding says how many were left out, with how many were errors and how many warnings. It is an error if any dropped one was, so the exit code is what it would be with no limit. The summary line's counts (`N errors`) are of the findings listed, the last finding's text has the rest. The limit is in the library, so memory is bounded too |
+
+Real models nest four or five levels in HCL and six to eight in JSON, and no query or pattern comes near a
+thousand lines.
+
+**Why strings and heredocs are linear.** The HCL parser joins the pieces of a string or heredoc one at a time,
+copying the text and shifting the list of pieces each time, which takes time that grows with the square of
+their number; and the lexer starts a new piece at each `$` and `%` (and, in a heredoc, at each line). A
+`pattern` of 200,000 `$a` (400 KB) took 24 seconds, one of 1 MiB nearly three minutes, one of 4 MiB of `$${`
+nearly seven. `modelspec` rewrites the `$` and `%` inside literal text before the parser sees it, so that they
+stay inside their piece (in a quoted string as the escapes `\u0024` and `\u0025`, which the parser reads as the
+same text; in a heredoc, which has no escapes, as two private-use characters that are turned back into `$`
+and `%` in the value), and the pieces left are the lines of a heredoc, which are capped. The values read are
+the ones the HCL library reads from the original text (a test compares them over random strings and heredocs
+full of `$`, `%`, their escapes and the private-use characters themselves). A string of 2 million `$a` (4 MiB)
+now takes about one second.
+
+**The checker is linear too.** A reference used to be found by scanning every concept of the module, and an
+entity's properties rebuilt for every `bind` that named it: valid models of 4 MB took minutes (see the table
+below). Concepts are now indexed once for each module and the properties of an entity once for each entity (the
+fields of a component are kept once, not copied into each entity that uses it).
+Tests count the memory allocated at two sizes of each shape, which does not depend on the load of the machine,
+and fail when eight times the model costs more than fourteen times the memory.
+
+**Time, measured.** `modelspec lint` of one file within the 4 MiB limit, valid or not, in HCL or JSON: every input of
+the table below, and about 80 others of the shapes I could think of (long lists, many blocks, labels, strings,
+heredocs, references, duplicate names), took 1.6 seconds or less, on a laptop that was shared with other work (load
+average about 3.5), so the figures are upper bounds. Before and after, in seconds:
+
+| Input (all within the limit) | Before | After |
+| --- | --- | --- |
+| `pattern = "` + `$a` x 200,000 + `"` (400 KB) | 25 | 0.5 |
+| the same with `$${` x 200,000 (600 KB) | 7.9 | 0.1 |
+| `$a` x 524,000 (1 MiB) | 162 | 0.3 |
+| `$${` x 1,390,000 (4 MiB) | 412 | 0.7 |
+| `$a` x 2,090,000 (4 MiB) | not finished in 450 | 1.2 |
+| one entity of 40,000 properties and a collection of 55,000 fields bound to them (4.1 MB, HCL) | 83 | 0.5 |
+| the same in JSON, 60,000 properties and 80,000 binds (4.1 MB) | 206 | 0.1 |
+| 60,000 components and a `use` list of 280,000 names (4.1 MB) | 32 | 0.7 |
+| an enum of 900,000 repeats of one value (3.6 MB) | 1.8, and 76 MB of findings | 1.1, and 1,001 findings |
+
+The slowest input I could construct for the code as it is now is a block label of 4 million `$` (1.5 seconds); next,
+4 MiB made of heredocs of the most lines allowed, empty or of one letter (1.3), and `$a` repeated to 4 MiB (1.2).
+A directory of such files takes the sum.
+No time is proved: the HCL library could have other paths that are slower than linear, and a new version of it needs
+the fuzz run below and these inputs again.
 
 **What is and is not proved.** The checks are a test of the tokens, so nothing recursive in the HCL parser
 is reachable except the nesting of braces and brackets, which is bounded. There is a test that runs
-`ParseHCL` with the process stack limited to 8 MiB on 10,000 repeats of every construct that made the parser
+`ParseHCL` with the process stack limited to 4 MiB on 5,000 repeats of every construct that made the parser
 recurse (it fails by overflowing the stack if the pre-parse refusal is removed), and one input for each
 refused token. A new version of the `hcl` library, which could add tokens or recursion, needs
 `scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
@@ -351,9 +393,13 @@ nothing for the shared workflow to wait for: its `require_workflow_success` opti
 workflow's run and continues without it after 180 seconds, is not used. There is no tag trigger and no
 manual dispatch, so a hand-pushed tag releases nothing.
 
-The shared workflow and every action are pinned to a full commit SHA with the version in a comment
-(`strongo/cicd` v1.21.0 is `5d96b1f3fbb3`; `git ls-remote https://github.com/strongo/cicd refs/tags/v1.21.0`
-shows it).
+The shared workflow and every action named in `ci.yml` and `release.yml` are pinned to a full commit SHA with the
+version in a comment (`strongo/cicd` v1.21.0 is `5d96b1f3fbb3`; `git ls-remote https://github.com/strongo/cicd
+refs/tags/v1.21.0` shows it). That does not make every action that runs in a release a pinned one: the shared workflow
+at that commit itself runs `actions/checkout@v7`, `actions/setup-go@v7`, `orhun/git-cliff-action@v4.9.1` and
+`goreleaser/goreleaser-action@v7` by tag, in the job that holds `contents: write` (and `actions/setup-node@v7` only when
+its `node_version` input is set, which it is not here). The pin fixes the shared workflow's own steps, not the code those
+four tags point to at the time of a release; the fix is upstream, in `strongo/cicd`.
 
 Recovery, **as read from the shared workflow's source at that commit and not exercised here**:
 
@@ -407,6 +453,11 @@ The tests in `internal/covergate` parse `.github/workflows` and fail if:
 - a second workflow is named `CI`, or any file other than `ci.yml` and `release.yml` is under
   `.github/workflows` (a new workflow has to be added to an explicit allow-list with its reason);
 - any Go file has a build constraint, so nothing can hide from the gate.
+
+The gate itself also refuses a `TestMain` anywhere in the module (it reads the test files of every package): a
+`TestMain` can run the tests and then exit 0, which hides a failing test while every statement still counts as
+covered. If a package needs set-up or tear-down, do it in the tests that need it with `t.Cleanup`, or give the code a
+seam (a parameter or a variable) that a test sets.
 
 **These tests are a tripwire, not the control.** They run in the pull request that changes the workflows, so
 a change that edits them, or a workflow they do not parse, passes its own tests. The real control is a branch
