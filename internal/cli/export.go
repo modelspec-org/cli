@@ -111,10 +111,19 @@ func ioErrorOrNil(err error) error {
 // checked whole, and the modules it needs are supplied) and returns its model when
 // it has no error. The findings for the file go to standard error.
 func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*modelspec.Model, error) {
+	info, err := env.FS.Stat(file)
+	if err != nil {
+		return nil, ioError(err)
+	}
+	if info.IsDir() {
+		return nil, usageErrorf("%s is a directory; export takes one HCL file (lint takes directories)", file)
+	}
 	res, err := modelspec.Lint(env.FS, []string{file}, modelspec.LintOptions{Modules: assign})
 	if err != nil {
 		return nil, ioError(err)
 	}
+	// A file that Stat found and is not a directory is the one file Lint loaded
+	// under the name it was given, so exactly one model has it for its File.
 	var model *modelspec.Model
 	for _, m := range res.Models {
 		if m.File == filepath.Clean(file) {

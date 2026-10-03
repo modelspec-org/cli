@@ -36,6 +36,9 @@ func (m *memFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	if m.writeErr != nil {
 		return m.writeErr
 	}
+	if info, err := m.MapFS.Stat(strings.TrimPrefix(filepath.Clean(name), "/")); err == nil && info.IsDir() {
+		return &fs.PathError{Op: "open", Path: name, Err: errors.New("is a directory")}
+	}
 	m.written[name] = data
 	m.perms[name] = perm
 	return nil
@@ -600,6 +603,79 @@ func TestExportIOFailures(t *testing.T) {
 	h.fsys.listErr = errors.New("cannot list")
 	if code := h.run(append([]string{"export", layoutPath("sales", "a.modelspec.hcl")}, exportID...)...); code != 2 || !strings.Contains(h.errb.String(), "cannot list") {
 		t.Errorf("layout listing failure: exit %d, stderr %q", code, h.errb)
+	}
+}
+
+// Every command with every kind of wrong path: a directory where a file is
+// wanted, a missing path, an empty string, a path given twice. None may panic, and
+// each is a usage or I/O error (exit 2), or a plain success where the command can
+// do what was asked; with --format json the exit-2 cases write the JSON error.
+func TestWrongPaths(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"a.modelspec.hcl":       goodHCL,
+		"d/b.modelspec.hcl":     goodHCL,
+		"empty/readme.txt":      "",
+		"c.modelspec.json":      "{}",
+		"shared/core.hcl":       coreHCL,
+		"booking.modelspec.hcl": bookingHCL,
+	}
+	tests := []struct {
+		name     string
+		args     []string
+		wantCode int
+		wantErr  string
+	}{
+		{"lint an empty string", []string{"lint", ""}, 2, "modelspec: "},
+		{"lint a missing path", []string{"lint", "nope"}, 2, "nope"},
+		{"lint a directory with no models", []string{"lint", "empty"}, 2, "no ModelSpec files"},
+		{"lint a file twice", []string{"lint", "a.modelspec.hcl", "a.modelspec.hcl"}, 0, ""},
+		{"lint a file and its directory", []string{"lint", "d", "d/b.modelspec.hcl", "d"}, 0, ""},
+		{"lint a non-model file", []string{"lint", "empty/readme.txt"}, 2, "not a ModelSpec file"},
+		{"lint --module with an empty path", []string{"lint", "--module", "core=", "a.modelspec.hcl"}, 2, "modelspec: "},
+		{"lint --module with an empty name", []string{"lint", "--module", "=shared", "a.modelspec.hcl"}, 2, "invalid --module"},
+		{"lint --module with a missing path", []string{"lint", "--module", "core=nope", "a.modelspec.hcl"}, 2, "nope"},
+		{"lint --module with a path twice", []string{"lint", "--module", "core=shared", "--module", "core=shared/core.hcl", "a.modelspec.hcl"}, 0, ""},
+		{"lint --module, one path as two modules", []string{"lint", "--module", "x=shared", "--module", "y=shared"}, 2, `assigned to module "x" and to module "y"`},
+		{"export a directory", append([]string{"export", "d"}, exportID...), 2, "is a directory"},
+		{"export the current directory", append([]string{"export", "."}, exportID...), 2, "is a directory"},
+		{"export an empty string", append([]string{"export", ""}, exportID...), 2, "modelspec: "},
+		{"export a missing file", append([]string{"export", "nope.modelspec.hcl"}, exportID...), 2, "nope"},
+		{"export a non-model file", append([]string{"export", "empty/readme.txt"}, exportID...), 2, "not a ModelSpec file"},
+		{"export a file twice", append([]string{"export", "a.modelspec.hcl", "a.modelspec.hcl"}, exportID...), 2, "export takes one HCL file"},
+		{"export --check a directory", []string{"export", "--check", "d", "c.modelspec.json", "--module-id", "x", "--module-version", "1"}, 2, "is a directory"},
+		{"export --check against a directory", []string{"export", "--check", "a.modelspec.hcl", "d"}, 2, "modelspec: "},
+		{"export --check against a missing file", []string{"export", "--check", "a.modelspec.hcl", "nope.json"}, 2, "nope.json"},
+		{"export --check against an empty string", []string{"export", "--check", "a.modelspec.hcl", ""}, 2, "modelspec: "},
+		{"export --check the same file twice", []string{"export", "--check", "a.modelspec.hcl", "a.modelspec.hcl"}, 1, "not valid JSON"},
+		{"export --module with an empty path", append([]string{"export", "a.modelspec.hcl", "--module", "core="}, exportID...), 2, "modelspec: "},
+		{"export --module naming the file itself", append([]string{"export", "a.modelspec.hcl", "--module", "core=a.modelspec.hcl"}, exportID...), 0, ""},
+		{"export --out a directory", append([]string{"export", "a.modelspec.hcl", "--out", "d"}, exportID...), 2, "is a directory"},
+	}
+	for _, tc := range tests {
+		for _, format := range []string{"text", "json"} {
+			if format == "json" && tc.args[0] != "lint" {
+				continue // only lint has --format
+			}
+			t.Run(tc.name+" ("+format+")", func(t *testing.T) {
+				t.Parallel()
+				h := newHarness(files)
+				args := tc.args
+				if format == "json" && args[0] == "lint" {
+					args = append([]string{"lint", "--format", "json"}, args[1:]...)
+				}
+				code := h.run(args...)
+				if code != tc.wantCode {
+					t.Fatalf("exit %d, want %d\nstdout: %s\nstderr: %s", code, tc.wantCode, h.out, h.errb)
+				}
+				if !strings.Contains(h.errb.String(), tc.wantErr) {
+					t.Errorf("stderr = %q, want containing %q", h.errb, tc.wantErr)
+				}
+				if format == "json" && tc.wantCode == 2 && !strings.Contains(h.out.String(), `"exit":2`) {
+					t.Errorf("--format json: stdout = %q, want the JSON error", h.out)
+				}
+			})
+		}
 	}
 }
 
