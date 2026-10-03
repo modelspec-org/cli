@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -24,6 +25,12 @@ type memFS struct {
 	perms    map[string]fs.FileMode
 	writeErr error
 	listErr  error // makes ReadDir of a directory that has models in it fail
+	reads    []string
+}
+
+func (m *memFS) ReadFile(name string) ([]byte, error) {
+	m.reads = append(m.reads, name)
+	return m.MapFS.ReadFile(strings.TrimPrefix(filepath.Clean(name), "/"))
 }
 
 func (m *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -806,5 +813,50 @@ func TestOSEnv(t *testing.T) {
 	}
 	if env.Update.BinaryName != "modelspec" || env.Update.Repository != "modelspec-org/cli" || env.Update.CurrentVersion != env.Build.Version || env.Build.Name != "modelspec" {
 		t.Fatalf("OSEnv identity = %+v / %+v", env.Update, env.Build)
+	}
+}
+
+// A model within the size limit can export to a twin over it, which lint would
+// then refuse: export refuses to write it (to a file or to standard output), and
+// says so.
+func TestExportRefusesATwinOverTheLimit(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	b.WriteString("entity \"E\" {\n  key = [\"p0\"]\n")
+	for i := 0; i < 85000; i++ {
+		fmt.Fprintf(&b, "  property \"p%d\" { type = \"int\" }\n", i)
+	}
+	b.WriteString("}\n")
+	if b.Len() >= modelspec.MaxInputBytes {
+		t.Fatalf("the model is %d bytes, over the limit itself", b.Len())
+	}
+	// The refusal comes before the choice of where to write, so one run stands for both.
+	h := newHarness(map[string]string{"a.modelspec.hcl": b.String()})
+	code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}, exportID...)...)
+	if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), "the JSON form of a.modelspec.hcl is") || !strings.Contains(h.errb.String(), "over the 4194304-byte limit") || !strings.Contains(h.errb.String(), "nothing was written") {
+		t.Fatalf("exit %d, stdout %d bytes, written %d, stderr %.300s", code, h.out.Len(), len(h.fsys.written), h.errb)
+	}
+}
+
+// Every file a command reads is limited, the JSON operand of export --check too:
+// one over the limit is refused without being read.
+func TestExportCheckRefusesAJSONOperandOverTheLimit(t *testing.T) {
+	t.Parallel()
+	h := newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
+	h.fsys.MapFS["big.json"] = &fstest.MapFile{Data: make([]byte, modelspec.MaxInputBytes+1)}
+	code := h.run("export", "--check", "a.modelspec.hcl", "big.json")
+	if code != 1 || !strings.Contains(h.errb.String(), "big.json: file is 4194305 bytes; the limit is 4194304 bytes") {
+		t.Fatalf("exit %d, stderr %q", code, h.errb)
+	}
+	for _, name := range h.fsys.reads {
+		if name == "big.json" {
+			t.Fatal("the oversized file was read")
+		}
+	}
+	// A file of exactly the limit is read (and is not the model's export).
+	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
+	h.fsys.MapFS["edge.json"] = &fstest.MapFile{Data: []byte(strings.Repeat(" ", modelspec.MaxInputBytes))}
+	if code := h.run("export", "--check", "a.modelspec.hcl", "edge.json"); code != 1 || strings.Contains(h.errb.String(), "the limit is") {
+		t.Fatalf("exit %d, stderr %.200s", code, h.errb)
 	}
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -85,11 +86,15 @@ their JSON form.`,
 			if err != nil {
 				return &exitError{code: ExitFindings, err: err}
 			}
+			twin := node.Encode()
+			if len(twin) > modelspec.MaxInputBytes {
+				return &exitError{code: ExitFindings, err: fmt.Errorf("the JSON form of %s is %d bytes, over the %d-byte limit on every file this tool reads, so lint and export --check would refuse it; nothing was written", args[0], len(twin), modelspec.MaxInputBytes)}
+			}
 			if out == "" {
-				_, err = env.Stdout.Write(node.Encode())
+				_, err = env.Stdout.Write(twin)
 				return ioErrorOrNil(err)
 			}
-			return ioErrorOrNil(env.FS.WriteFile(out, node.Encode(), 0o644))
+			return ioErrorOrNil(env.FS.WriteFile(out, twin, 0o644))
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", "", "write the JSON to this file instead of standard output")
@@ -157,7 +162,11 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 }
 
 func runCheck(env *Env, m *modelspec.Model, jsonFile string, id modelspec.ModuleIdentity) error {
-	committed, err := env.FS.ReadFile(jsonFile)
+	committed, err := modelspec.ReadSource(env.FS, jsonFile)
+	var tooLarge *modelspec.TooLargeError
+	if errors.As(err, &tooLarge) {
+		return &exitError{code: ExitFindings, err: err}
+	}
 	if err != nil {
 		return ioError(err)
 	}

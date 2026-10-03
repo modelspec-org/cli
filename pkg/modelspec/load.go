@@ -27,6 +27,37 @@ type FS interface {
 	SameFile(a, b fs.FileInfo) bool
 }
 
+// TooLargeError is the error of a file over MaxInputBytes, which is not read.
+type TooLargeError struct {
+	File string
+	Size int64
+}
+
+func (e *TooLargeError) Error() string {
+	return fmt.Sprintf("%s: file is %d bytes; the limit is %d bytes", e.File, e.Size, MaxInputBytes)
+}
+
+// ReadSource reads a file, which every command that reads a model goes through:
+// one larger than MaxInputBytes is refused with a *TooLargeError before it is read
+// into memory, and again after, in case it grew between the two.
+func ReadSource(fsys FS, name string) ([]byte, error) {
+	info, err := fsys.Stat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > MaxInputBytes {
+		return nil, &TooLargeError{File: name, Size: info.Size()}
+	}
+	src, err := fsys.ReadFile(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(src) > MaxInputBytes {
+		return nil, &TooLargeError{File: name, Size: int64(len(src))}
+	}
+	return src, nil
+}
+
 // OSFS is the operating system's filesystem. The zero value is ready to use.
 type OSFS struct {
 	getwd func() (string, error) // os.Getwd when nil; a seam for tests
@@ -331,23 +362,19 @@ func Load(fsys FS, files []Source, assign []Assignment) ([]*Model, []Finding, er
 	var findings []Finding
 	hclAt := map[string]*Model{} // by Abs
 	for _, f := range files {
-		info, err := fsys.Stat(f.Path)
-		if err != nil {
-			return nil, nil, err
-		}
 		var m *Model
-		if info.Size() > MaxInputBytes {
-			// Refused before the file is read into memory.
+		src, err := ReadSource(fsys, f.Path)
+		var tooLarge *TooLargeError
+		switch {
+		case errors.As(err, &tooLarge):
 			m = &Model{File: f.Path, Form: FormHCL, Name: moduleNameFromFile(f.Path), Broken: true}
 			if strings.HasSuffix(f.Path, JSONSuffix) {
 				m.Form = FormJSON
 			}
-			findings = append(findings, oversize(f.Path, info.Size()))
-		} else {
-			src, err := fsys.ReadFile(f.Path)
-			if err != nil {
-				return nil, nil, err
-			}
+			findings = append(findings, oversize(f.Path, tooLarge.Size))
+		case err != nil:
+			return nil, nil, err
+		default:
 			var parse []Finding
 			m, parse = Parse(f.Path, src)
 			findings = append(findings, parse...)

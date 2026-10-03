@@ -679,3 +679,30 @@ func TestOSFS(t *testing.T) {
 		t.Fatalf("a dangling link named explicitly: %v", err)
 	}
 }
+
+// ReadSource is the one way a file is read: refused by its size before the read,
+// and by its length after it when the file grew in between; errors pass through.
+func TestReadSource(t *testing.T) {
+	t.Parallel()
+	fsys := newMemFS(map[string]string{"edge": strings.Repeat("x", MaxInputBytes), "grew": strings.Repeat("x", MaxInputBytes+1), "small": "ok"})
+	fsys.sizes["grew"] = 10 // Stat said 10 bytes; the file is larger when read
+	if src, err := ReadSource(fsys, "edge"); err != nil || len(src) != MaxInputBytes {
+		t.Errorf("a file of the limit: %d bytes, %v", len(src), err)
+	}
+	var tooLarge *TooLargeError
+	if _, err := ReadSource(fsys, "grew"); !errors.As(err, &tooLarge) || tooLarge.Size != MaxInputBytes+1 || tooLarge.File != "grew" || !strings.Contains(err.Error(), "grew: file is 4194305 bytes; the limit is 4194304 bytes") {
+		t.Errorf("a file that grew: %v", err)
+	}
+	if _, err := ReadSource(fsys, "missing"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a missing file: %v", err)
+	}
+	spy := &failRead{memFS: fsys}
+	if _, err := ReadSource(spy, "small"); err == nil || err.Error() != "read failed" {
+		t.Errorf("a read error: %v", err)
+	}
+}
+
+// failRead is an FS whose reads fail.
+type failRead struct{ *memFS }
+
+func (failRead) ReadFile(string) ([]byte, error) { return nil, errors.New("read failed") }
