@@ -9,17 +9,51 @@
 //     (a stack overflow in the HCL parser is fatal and fails the run);
 //  2. the publish profile refuses whatever the default profile refuses;
 //  3. a model that lints clean exports (HCL) to JSON that parses, round-trips
-//     and lints clean under the same name.
+//     and lints clean under the same name;
+//  4. one input costs a bounded amount of work: the bytes allocated reading and
+//     checking it stay within allocBase plus allocPerByte for each byte of the
+//     input (a count of the work done, which does not depend on the load of the
+//     machine, as time does), and no input takes ten seconds. An input over either
+//     fails the run, as a crash does; a fuzzer that is only given a time limit
+//     reports a pass after an input that stalled it.
 package fuzz
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelspec-org/cli/pkg/modelspec"
 )
+
+// The budget of one input. Reading and checking a large valid file (under both
+// profiles, as refusal does) allocates about 470 times its size; the budget is four
+// times that, and a fixed amount for the smallest inputs.
+const (
+	allocBase    = 4 << 20
+	allocPerByte = 2000
+	maxTime      = 10 * time.Second
+)
+
+// within runs the work for one input and fails when it cost more than the budget.
+func within(t *testing.T, src []byte, work func()) {
+	t.Helper()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	work()
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+	if used, limit := after.TotalAlloc-before.TotalAlloc, uint64(allocBase+allocPerByte*len(src)); used > limit {
+		t.Fatalf("an input of %d bytes allocated %d bytes, over the budget of %d", len(src), used, limit)
+	}
+	if elapsed > maxTime {
+		t.Fatalf("an input of %d bytes took %v, over the limit of %v", len(src), elapsed, maxTime)
+	}
+}
 
 func enabled(f *testing.F) {
 	f.Helper()
@@ -52,6 +86,12 @@ func seeds(f *testing.F, dir, suffix string) {
 	f.Add([]byte("entity \"A\" {\n  key = a[*][*][*][*]\n}\n"))
 	f.Add([]byte("x = <<EOT\n%{\nif x}%{/**/if y}\nEOT\n"))
 	f.Add([]byte("x = a::b() + c.d[0] ? (1) : [for a in b : a]\n"))
+	// Inputs that were once slow or large: numbers with a huge exponent or many
+	// digits, and long names.
+	f.Add([]byte("enum \"E\" {\n  values = [1e10000000]\n}\n"))
+	f.Add([]byte("entity \"A\" {\n  key = []\n  max_len = 1e4000000\n}\n"))
+	f.Add([]byte("{\"modelspec\": \"1.0-draft\", \"enums\": {\"E\": {\"values\": [1e10000000, 1" + strings.Repeat("0", 400) + "]}}}"))
+	f.Add([]byte("entity \"" + strings.Repeat("A", 3000) + "\" {\n}\n"))
 }
 
 func lint(m *modelspec.Model, parse []modelspec.Finding, p modelspec.Profile) []modelspec.Finding {
@@ -72,8 +112,14 @@ func FuzzHCL(f *testing.F) {
 	enabled(f)
 	seeds(f, "hcl", ".modelspec.hcl")
 	f.Fuzz(func(t *testing.T, src []byte) {
-		m, parse := modelspec.ParseHCL("fuzz.modelspec.hcl", src)
-		if !refusal(t, m, parse) || len(m.Unmapped) > 0 {
+		var m *modelspec.Model
+		var parse []modelspec.Finding
+		clean := false
+		within(t, src, func() {
+			m, parse = modelspec.ParseHCL("fuzz.modelspec.hcl", src)
+			clean = refusal(t, m, parse)
+		})
+		if !clean || len(m.Unmapped) > 0 {
 			return
 		}
 		node, err := m.JSON(modelspec.ModuleIdentity{ID: "x/fuzz", Name: "fuzz", Version: "1"})
@@ -95,7 +141,9 @@ func FuzzJSON(f *testing.F) {
 	enabled(f)
 	seeds(f, "json", ".modelspec.json")
 	f.Fuzz(func(t *testing.T, src []byte) {
-		m, parse := modelspec.ParseJSON("fuzz.modelspec.json", src)
-		refusal(t, m, parse)
+		within(t, src, func() {
+			m, parse := modelspec.ParseJSON("fuzz.modelspec.json", src)
+			refusal(t, m, parse)
+		})
 	})
 }
