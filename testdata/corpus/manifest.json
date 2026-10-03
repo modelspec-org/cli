@@ -1336,6 +1336,42 @@
    },
    "path": "standalone/twin-name-differs/todo.modelspec.hcl"
   },
+  "standalone/backslash-before-dollar-in-label": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "standalone/backslash-before-dollar-in-pattern": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "standalone/carriage-return-after-dollar-in-heredoc": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
   "standalone/chinook-pair": {
    "default": {
     "verdict": "accept"

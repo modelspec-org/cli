@@ -72,11 +72,24 @@ func parserInput(src []byte, tokens hclsyntax.Tokens) ([]byte, map[int]bool) {
 
 // rewriteText replaces `$` and `%` in the text of a literal token by dollar and
 // percent, and `$${` and `%%{` by the same followed by the brace. In a heredoc
-// a private-use character of its own is protected by an escape.
+// a private-use character of its own is protected by an escape. In a quoted
+// string a backslash and the character after it are one unit that is copied as it
+// is, so that an escape the HCL library refuses (`\$`, `\%`) reaches it as written
+// and is refused as before, and `\\$` is a backslash and then a `$`.
 func rewriteText(text, dollar, percent string, heredoc bool) string {
 	var b strings.Builder
 	for i := 0; i < len(text); {
 		switch {
+		case !heredoc && text[i] == '\\':
+			_, size := utf8.DecodeRuneInString(text[i+1:])
+			b.WriteString(text[i : i+1+size])
+			i += 1 + size
+		case heredoc && (text[i] == '$' || text[i] == '%') && strings.HasPrefix(text[i+1:], "\r"):
+			// The lexer takes the character after a `$` or `%` into the same piece,
+			// and a carriage return there is how a line may end in `$` or `%` with
+			// a bare CR before the line break. It is kept with the `$`, as written.
+			b.WriteString(text[i : i+2])
+			i += 2
 		case strings.HasPrefix(text[i:], "$${"):
 			b.WriteString(dollar + "{")
 			i += 3

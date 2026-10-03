@@ -355,7 +355,7 @@ The standard does not settle these, so `modelspec` does not invent an answer (ea
 ## Parity with the other readers
 
 `go test` compares `modelspec lint` with committed verdicts of two other readers over the corpus
-in `testdata/corpus` (**114 manifest items**; each is a file, a SpecScore-layout tree or a set of standalone files, or an
+in `testdata/corpus` (**117 manifest items**; each is a file, a SpecScore-layout tree or a set of standalone files, or an
 entry under `parts/` that is one file of another item given alone and must give the verdict of its whole module;
 `testdata/corpus/manifest.json` is the expected verdict of each, under both profiles; a test fails when this
 number is not the manifest's):

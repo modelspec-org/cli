@@ -44,15 +44,31 @@ func patternOf(t *testing.T, src string) string {
 	return a.Value.Str
 }
 
-// Rewriting `$` and `%` out of the pieces changes nothing a reader can see: over
-// random strings and heredocs full of `$`, `%`, their escapes, braces, private-use
-// characters (the ones the rewrite itself uses) and, in quoted strings, escapes,
-// the value is the one the HCL library reads from the original source.
+// cliPattern reads the pattern the way the CLI does.
+func cliPattern(src string) (string, bool) {
+	m, fs := ParseHCL("a"+hclExt, []byte(src))
+	if len(fs) != 0 || len(m.Concepts) != 1 {
+		return "", false
+	}
+	a, ok := m.Concepts[0].Members[0].Attr("pattern")
+	if !ok {
+		return "", false
+	}
+	return a.Value.Str, true
+}
+
+// Rewriting `$` and `%` out of the pieces changes nothing a reader can see, in
+// either direction. Over random strings and heredocs full of `$`, `%`, their
+// escapes, braces, private-use characters (the ones the rewrite itself uses) and,
+// in quoted strings, a backslash before every kind of character, the CLI refuses
+// whatever the unmodified HCL library refuses, and where the library accepts, the
+// CLI reads the same value .
 func TestRewritingLiteralsKeepsTheirValues(t *testing.T) {
 	t.Parallel()
 	rnd := rand.New(rand.NewSource(1))
-	quoted := []string{"a", "b c", "$", "%", "$${", "%%{", "{", "}", "\\n", "\\\"", "\\\\", "\u00e9", "\ue000", "\ue001", "\ue002", "\\u0024", "\\uE000", "\\u00e9", " ", "$$", "%%", "$1", "%s"}
-	raw := []string{"a", "b c", "$", "%", "$${", "%%{", "{", "}", "\"", "\\", "\u00e9", "\ue000", "\ue001", "\ue002", " ", "\t", "$$", "%%", "$1", "%s", "\n", "\n", "  ", "\U0001F600"}
+	quoted := []string{"a", "b c", "$", "%", "$${", "%%{", "{", "}", "\\n", "\\\"", "\\\\", "\u00e9", "\ue000", "\ue001", "\ue002", "\\u0024", "\\uE000", "\\u00e9", " ", "$$", "%%", "$1", "%s",
+		"\\", "\\$", "\\%", "\\{", "\\}", "\\a", "\\q", "\\ ", "\\\u00e9", "\\\ue000", "\\\U0001F600", "\\$${", "\\%%{", "\\u", "\\U0001F600", "\\u00", "\\x41", "\\0"}
+	raw := []string{"a", "b c", "$", "%", "$${", "%%{", "{", "}", "\"", "\\", "\u00e9", "\ue000", "\ue001", "\ue002", " ", "\t", "$$", "%%", "$1", "%s", "\n", "\n", "  ", "\U0001F600", "\r", "\\$", "\\n"}
 	build := func(alphabet []string, n int) string {
 		var b strings.Builder
 		prev := ""
@@ -66,12 +82,12 @@ func TestRewritingLiteralsKeepsTheirValues(t *testing.T) {
 		}
 		return b.String()
 	}
-	checked := 0
-	for i := 0; i < 300; i++ {
+	var both, libRefused int
+	for i := 0; i < 3000; i++ {
 		var src string
 		switch i % 3 {
 		case 0:
-			src = patternModel("\"" + build(quoted, 1+rnd.Intn(30)) + "\"")
+			src = patternModel("\"" + build(quoted, 1+rnd.Intn(12)) + "\"")
 		case 1:
 			src = patternModel("<<EOT\n" + build(raw, 1+rnd.Intn(40)) + "\nEOT")
 		default:
@@ -81,17 +97,57 @@ func TestRewritingLiteralsKeepsTheirValues(t *testing.T) {
 			}
 			src = patternModel("<<-EOT\n" + body + "  EOT")
 		}
-		want, ok := referencePattern(t, src)
-		if !ok || len(hclFindings(src)) != 0 {
-			continue // not a valid model: an interpolation made by neighbours, or a stray marker
-		}
-		checked++
-		if got := patternOf(t, src); got != want {
+		want, libOK := referencePattern(t, src)
+		got, cliOK := cliPattern(src)
+		switch {
+		case !libOK && cliOK:
+			t.Fatalf("source %q: the HCL library refuses it and the CLI reads %q", src, got)
+		case !libOK:
+			libRefused++
+		case !cliOK:
+			t.Fatalf("source %q: the HCL library reads %q and the CLI refuses it", src, want)
+		case got != want:
 			t.Fatalf("source %q: value %q, the HCL library reads %q", src, got, want)
+		default:
+			both++
 		}
 	}
-	if checked < 250 {
-		t.Fatalf("only %d of 300 generated inputs were valid models", checked)
+	t.Logf("%d read the same, %d refused by both", both, libRefused)
+	if both < 800 || libRefused < 400 {
+		t.Fatalf("the generated inputs did not cover both directions: %d, %d", both, libRefused)
+	}
+}
+
+// A carriage return directly after `$` or `%` at the end of a heredoc line is
+// part of the `$` piece for the HCL lexer, and stays valid.
+func TestCarriageReturnAfterDollarInHeredoc(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{"a$\r\r", "a%\r\r", "a$\r\r\nb%\r\r", "$\r", "a$\rb", "$\r$\r\r"} {
+		src := patternModel("<<EOT\n" + body + "\nEOT")
+		want, libOK := referencePattern(t, src)
+		got, cliOK := cliPattern(src)
+		if libOK != cliOK || got != want {
+			t.Errorf("%q: library %q %v, CLI %q %v", body, want, libOK, got, cliOK)
+		}
+	}
+}
+
+// The inputs of a review that the HCL library refuses and the rewrite used to
+// make valid by replacing a `$` or `%` behind a backslash.
+func TestBackslashBeforeDollarOrPercentIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, src := range []string{
+		patternModel(`"^\$[0-9]+\%$"`),
+		"entity \"A\\$B\" {\n}\n",
+		"entity \"A\\%B\" {\n}\n",
+	} {
+		if _, fs := ParseHCL("a"+hclExt, []byte(src)); len(fs) == 0 {
+			t.Errorf("accepted %q", src)
+		}
+	}
+	// An escaped backslash and then a `$` is a backslash and a `$`.
+	if got := patternOf(t, patternModel(`"a\\$b\\%"`)); got != `a\$b\%` {
+		t.Errorf("value %q", got)
 	}
 }
 
