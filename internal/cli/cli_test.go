@@ -539,6 +539,30 @@ func TestExportModules(t *testing.T) {
 	}
 }
 
+// A model that refers to its own module by name exports with module.name written
+// even when none is given, so the JSON lints clean saved under any file name.
+func TestExportOfAModelThatRefersToItself(t *testing.T) {
+	t.Parallel()
+	self := "entity \"Node\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"parent\" {\n    entity = \"tree.Node\"\n  }\n}\n"
+	h := newHarness(map[string]string{"tree.modelspec.hcl": self})
+	if code := h.run("export", "tree.modelspec.hcl", "--module-id", "x/tree", "--module-version", "1", "--out", "other.modelspec.json"); code != 0 {
+		t.Fatalf("export: exit %d, stderr %q", code, h.errb)
+	}
+	written := h.fsys.written["other.modelspec.json"]
+	if !strings.Contains(string(written), `"name": "tree"`) {
+		t.Fatalf("module.name not written:\n%s", written)
+	}
+	lint := newHarness(map[string]string{"other.modelspec.json": string(written)})
+	if code := lint.run("lint"); code != 0 {
+		t.Fatalf("lint of the export: exit %d, stdout %q", code, lint.out)
+	}
+	// Under another name it is refused, with the reason.
+	h = newHarness(map[string]string{"tree.modelspec.hcl": self})
+	if code := h.run("export", "tree.modelspec.hcl", "--module-id", "x/tree", "--module-version", "1", "--module-name", "forest"); code != 1 || !strings.Contains(h.errb.String(), "module.name must be") {
+		t.Fatalf("other name: exit %d, stderr %q", code, h.errb)
+	}
+}
+
 func TestExportFailures(t *testing.T) {
 	t.Parallel()
 	good, _ := exportString(t, goodHCL)

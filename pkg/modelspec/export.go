@@ -17,7 +17,7 @@ import (
 // `migration` blocks (no document says how they map to JSON), and module
 // identity for HCL, which the grammar has no place for, so the caller must
 // supply id and version (the format requires those two; name is written only
-// when given). A model read from JSON already has its identity, which id
+// when given, or when the model refers to its own module by name). A model read from JSON already has its identity, which id
 // overrides when non-zero.
 func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
 	if len(m.Unmapped) > 0 {
@@ -35,6 +35,12 @@ func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
 	}
 	if id.Name != "" && id.Name != m.Name && m.refersTo(m.Name) {
 		return nil, fmt.Errorf("cannot export: the model refers to its own module as %q, so module.name must be %q; with %q the JSON would not lint clean on its own", m.Name, m.Name, id.Name)
+	}
+	if id.Name == "" && m.refersTo(m.Name) {
+		// A JSON file takes its module's name from module.name or, without it, from
+		// its file name; a model that refers to itself by name must not depend on
+		// what the file is called.
+		id.Name = m.Name
 	}
 	module := obj(field("id", str(id.ID)))
 	if id.Name != "" {

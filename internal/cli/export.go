@@ -25,7 +25,8 @@ standard output, or to --out.
 
 The JSON form carries a module identity that the HCL has no place for, so
 export needs --module-id and --module-version (the format requires those two);
---module-name is written only when given.
+--module-name is written when given, and also when the model refers to its own
+module by name (so the JSON lints clean whatever file it is saved as).
 
 export lints the file first, as lint does under the default profile (so the module
 the file belongs to is checked whole, as lint checks it), and refuses a file with

@@ -219,8 +219,24 @@ func TestExportRefusesANameThatBreaksOwnReferences(t *testing.T) {
 		if _, err := m.JSON(ModuleIdentity{ID: "x/m", Name: "m", Version: "1"}); err != nil {
 			t.Errorf("%s with the module's own name: %v", name, err)
 		}
-		if _, err := m.JSON(ModuleIdentity{ID: "x/m", Version: "1"}); err != nil {
+		// Without a name, module.name is written, so the JSON lints clean on its own
+		// whatever file it is saved as.
+		node, err := m.JSON(ModuleIdentity{ID: "x/m", Version: "1"})
+		if err != nil {
 			t.Errorf("%s without a name: %v", name, err)
+			continue
+		}
+		if n, ok := node.Get("module"); !ok {
+			t.Errorf("%s: no module object", name)
+		} else if got, ok := n.Get("name"); !ok || got.Str != "m" {
+			t.Errorf("%s without a name: module.name = %v, want \"m\"", name, got)
+		}
+		back, parse := ParseJSON("saved-as-something-else"+jsonExt, node.Encode())
+		// (The fixtures have empty keys, which is no reference problem.)
+		for _, f := range append(parse, Check([]*Model{back}, Options{})...) {
+			if f.Rule == RuleReference || f.Rule == RuleSyntax || f.Rule == RuleShape {
+				t.Errorf("%s without a name: the export does not lint clean as another file name: %v", name, f)
+			}
 		}
 	}
 	// No such reference: any name will do. Others' names, bare names and a bind of two parts are not self-references.
