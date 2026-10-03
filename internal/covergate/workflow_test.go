@@ -71,11 +71,18 @@ func TestCheckRelease(t *testing.T) {
 
 func TestRepositoryWorkflows(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
-	if err != nil {
-		t.Fatal(err)
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
 	}
-	if p := CheckCI(string(data)); len(p) != 0 {
+	ci, release := read("ci.yml"), read("release.yml")
+	if p := CheckCI(ci); len(p) != 0 {
 		t.Fatalf("the repository's ci.yml: %v", p)
+	}
+	if p := CheckRelease(ci, release); len(p) != 0 {
+		t.Fatalf("the repository's release.yml: %v", p)
 	}
 }

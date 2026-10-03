@@ -1,0 +1,81 @@
+version: 2
+
+project_name: modelspec
+
+before:
+  hooks:
+    # VERIFY tidiness; never impose it. A mutating `go mod tidy` would rewrite
+    # go.mod inside the ephemeral release runner, so the published binaries could
+    # be built from something other than the tagged tree. `-diff` writes nothing
+    # and exits non-zero on drift, so the release stops instead of healing itself.
+    - go mod tidy -diff
+
+builds:
+  - id: modelspec
+    main: ./cmd/modelspec
+    binary: modelspec
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/strongo/buildinfo.version={{.Version}}
+      - -X github.com/strongo/buildinfo.commit={{.FullCommit}}
+      - -X github.com/strongo/buildinfo.date={{.Date}}
+
+archives:
+  - id: modelspec
+    ids:
+      - modelspec
+    name_template: "modelspec_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+
+# One checksums file per release, SHA-256, named the way
+# github.com/strongo/cli-helpers/selfupdate expects for `modelspec self-update`.
+checksum:
+  name_template: "modelspec_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+# macOS signing and notarisation. Inactive until the five values below are
+# provided as secrets: `isEnvSet` is false without MACOS_SIGN_P12, so local,
+# snapshot and credential-less releases build unsigned binaries unchanged.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids: [modelspec]
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        wait: true
+        issuer_id: "{{ .Env.NOTARIZE_ISSUER_ID }}"
+        key_id: "{{ .Env.NOTARIZE_KEY_ID }}"
+        key: "{{ .Env.NOTARIZE_KEY }}"
+        timeout: 20m
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch

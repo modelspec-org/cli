@@ -1,8 +1,8 @@
 name: CI
 
-# One job for the gates that need only Go: formatting, vet, module tidiness,
-# the tests with the race detector, and the exact coverage gate. Packaging checks
-# live in the second job (added with .goreleaser.yml).
+# Two jobs, run in parallel. The first needs only Go: formatting, vet, module
+# tidiness, the tests with the race detector, and the exact coverage gate. The
+# second checks the GoReleaser configuration and builds every release target.
 #
 # The coverage gate is `go run ./cmd/covergate cover.out`. It has no threshold to
 # set: it fails unless every statement is covered. internal/covergate's tests
@@ -57,3 +57,30 @@ jobs:
 
       - name: Coverage gate (every statement)
         run: go run ./cmd/covergate cover.out
+
+  # Packaging checks: the GoReleaser configuration is valid and every advertised
+  # target builds. Runs beside the test job, so it adds no wall time.
+  release-check:
+    name: GoReleaser check and snapshot build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.18.2
+          args: check
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.18.2
+          args: build --snapshot --clean

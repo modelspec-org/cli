@@ -1,0 +1,57 @@
+name: Release
+
+# Continuous delivery: every push to main runs the shared strongo/cicd release
+# workflow, which computes the next version from conventional commits, creates the
+# tag, and has GoReleaser publish the binaries and the SHA-256 checksums file to
+# GitHub Releases. A push with only docs/ci/chore/refactor commits tags nothing.
+#
+# The shared workflow's `require_workflow_success` makes it wait for the `CI`
+# workflow (whose test job runs the exact coverage gate) on the same commit, and
+# refuse to tag or publish unless that passed, so nothing uncovered is released.
+#
+# This workflow needs no secret beyond the GITHUB_TOKEN every run has. The
+# optional secrets below are forwarded so that macOS signing and notarisation
+# start the moment they exist: when you add the five MACOS_*/NOTARIZE_* secrets,
+# also set `require_notarized_macos: true` here (the shared workflow refuses to
+# publish with MACOS_SIGN_P12 set and that input false). Until then
+# .goreleaser.yml builds unsigned macOS binaries, because its notarize block is
+# gated on `isEnvSet "MACOS_SIGN_P12"`.
+#
+# modelspec is pre-1.0: allow_major_version_bump stays false, so a `feat!:` is
+# capped to a minor bump. Cut v1.0.0 deliberately, by changing that input.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Pinned to an exact strongo/cicd tag; this workflow's source was read at
+    # v1.21.0 to confirm that every secret is optional and that, without them,
+    # it publishes binaries and checksums to GitHub Releases and skips the rest.
+    uses: strongo/cicd/.github/workflows/release.yml@v1.21.0
+    permissions:
+      contents: write
+      # Lets require_workflow_success read the CI workflow's result.
+      actions: read
+    with:
+      require_workflow_success: 'CI'
+      go_version: '1.27.0'
+      allow_major_version_bump: false
+      # No Homebrew cask is published, so there is no cask to smoke-test.
+      artifact_smoke_test_homebrew_cask: false
+    secrets:
+      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+      NOTARIZE_ISSUER_ID: ${{ secrets.NOTARIZE_ISSUER_ID }}
+      NOTARIZE_KEY_ID: ${{ secrets.NOTARIZE_KEY_ID }}
+      NOTARIZE_KEY: ${{ secrets.NOTARIZE_KEY }}
