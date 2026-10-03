@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -135,6 +136,7 @@ func TestRun(t *testing.T) {
 		{"a package contributes no statements", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\nm/b/y.go:1.1,2.2 0 1\n"), 1, "package m/b has statements and contributes none to the cover profile", "", listing(pkg("m/a", true), pkg("m/b", true))},
 		{"a package with no statements may be absent", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\n"), 0, "passed: 3 of 3", "", listing(pkg("m/a", true), pkg("m/consts", false))},
 		{"a TestMain in a package that is fully covered", []string{"cover.out"}, memOpen(twoPackages), 1, "coverage gate FAILED: m/a/x_test.go declares TestMain, which can hide a failing test", "", listing(Package{Path: "m/a", HasStatements: true, TestMains: []string{"m/a/x_test.go"}}, pkg("m/b", true))},
+		{"a build constraint in a package that is fully covered", []string{"cover.out"}, memOpen(twoPackages), 1, "coverage gate FAILED: m/a/x_race_test.go: //go:build race: a Go file with a build constraint can be left out of a test run", "", listing(Package{Path: "m/a", HasStatements: true, Constraints: []string{"m/a/x_race_test.go: //go:build race"}}, pkg("m/b", true))},
 		{"a vanished package and an uncovered statement are both reported", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\nm/a/x.go:3.1,4.2 1 0\n"), 1, "package m/b has statements and is not in the cover profile", "", listing(pkg("m/a", true), pkg("m/b", true))},
 		{"the package list cannot be read", []string{"cover.out"}, memOpen(twoPackages), 2, "", "no go.mod", func() ([]Package, error) { return nil, errors.New("no go.mod") }},
 	}
@@ -254,6 +256,15 @@ func TestOSPackages(t *testing.T) {
 		"tm/b_test.go": "package tm_test\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) { os.Exit(m.Run()) }\n",
 		"tm/c_test.go": "package tm\n\nimport \"testing\"\n\ntype T struct{}\n\nfunc (T) TestMain(m *testing.M) {}\n\nfunc TestOther(t *testing.T) {}\n\nvar TestMainValue = 1\n",
 		"tm/main_x.go": "package tm\n\nfunc TestMain() {}\n",
+		// A TestMain the platform and the tags of this run would not build is read
+		// all the same: behind a build line, in a file named for another platform,
+		// and in a directory whose only files are left out of the build.
+		"hidden/h.go":                  "package hidden\n\nfunc F() int {\n\treturn 1\n}\n",
+		"hidden/race_test.go":          "//go:build race\n\npackage hidden\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) { os.Exit(0) }\n",
+		"hidden/os_linux_test.go":      "package hidden\n\nimport \"testing\"\n\nfunc TestMain(m *testing.M) { m.Run() }\n",
+		"hidden/os_windows_test.go":    "package hidden\n\nimport \"testing\"\n\nfunc TestMain(m *testing.M) { m.Run() }\n",
+		"hidden/old_test.go":           "// +build never\n\npackage hidden\n",
+		"allhidden/x_windows_amd64.go": "package allhidden\n\nfunc F() { println() }\n",
 	})
 	got, err := OSPackages(root)()
 	if err != nil {
@@ -263,7 +274,7 @@ func TestOSPackages(t *testing.T) {
 	for _, p := range got {
 		names = append(names, fmt.Sprintf("%s:%v", p.Path, p.HasStatements))
 	}
-	want := "example.com/m:true example.com/m/constrained:true example.com/m/consts:false example.com/m/deep/er:true example.com/m/empty:false example.com/m/mixed:true example.com/m/onlytests:false example.com/m/tm:true"
+	want := "example.com/m:true example.com/m/allhidden:false example.com/m/constrained:true example.com/m/consts:false example.com/m/deep/er:true example.com/m/empty:false example.com/m/hidden:true example.com/m/mixed:true example.com/m/onlytests:false example.com/m/tm:true"
 	if strings.Join(names, " ") != want {
 		t.Fatalf("packages = %v\nwant %s", names, want)
 	}
@@ -271,12 +282,52 @@ func TestOSPackages(t *testing.T) {
 	// function of a non-test file with that name are not one.
 	for _, p := range got {
 		wantMains := ""
-		if p.Path == "example.com/m/tm" {
+		switch p.Path {
+		case "example.com/m/tm":
 			wantMains = "example.com/m/tm/a_test.go example.com/m/tm/b_test.go"
+		case "example.com/m/hidden":
+			wantMains = "example.com/m/hidden/os_linux_test.go example.com/m/hidden/os_windows_test.go example.com/m/hidden/race_test.go"
 		}
 		if gotMains := strings.Join(p.TestMains, " "); gotMains != wantMains {
 			t.Errorf("%s declares TestMain in %q, want %q", p.Path, gotMains, wantMains)
 		}
+	}
+}
+
+// Every build constraint of every Go file is named, in the directories where go/build
+// lists no file at all too, and Missing turns each into a message.
+func TestOSPackagesNamesBuildConstraints(t *testing.T) {
+	t.Parallel()
+	root := write(t, map[string]string{
+		"go.mod":                       "module example.com/m\n\ngo 1.27\n",
+		"ok/a.go":                      "package ok\n\nfunc F() int {\n\treturn 1\n}\n",
+		"ok/a_test.go":                 "package ok\n",
+		"hidden/h.go":                  "package hidden\n\nfunc F() int {\n\treturn 1\n}\n",
+		"hidden/race_test.go":          "//go:build race\n\npackage hidden\n",
+		"hidden/os_linux_test.go":      "package hidden\n",
+		"allhidden/x_windows_amd64.go": "package allhidden\n",
+		"hidden/plain.txt":             "not go\n",
+		"hidden/sub/s.go":              "package sub\n",
+	})
+	got, err := OSPackages(root)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, p := range got {
+		found = append(found, p.Constraints...)
+	}
+	want := []string{
+		"example.com/m/allhidden/x_windows_amd64.go: the file name carries a GOOS or GOARCH build constraint (amd64)",
+		"example.com/m/hidden/os_linux_test.go: the file name carries a GOOS or GOARCH build constraint (linux)",
+		"example.com/m/hidden/race_test.go: //go:build race",
+	}
+	if !slices.Equal(found, want) {
+		t.Fatalf("constraints = %q\nwant %q", found, want)
+	}
+	msgs := Missing(got, map[string]int{"example.com/m/ok": 1, "example.com/m/hidden": 1})
+	if len(msgs) != 3 || !strings.Contains(msgs[1], "hidden/os_linux_test.go: the file name carries") || !strings.Contains(msgs[1], "a Go file with a build constraint can be left out of a test run") {
+		t.Fatalf("messages = %q", msgs)
 	}
 }
 
@@ -297,6 +348,12 @@ func TestOSPackagesErrors(t *testing.T) {
 		if _, err := OSPackages(write(t, tc.files))(); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: error = %v, want containing %q", tc.name, err, tc.want)
 		}
+	}
+	// A file that cannot be read.
+	root := write(t, map[string]string{"go.mod": "module m\n", "a.go": "package a\n"})
+	failing := func(name string) ([]byte, error) { return nil, errors.New("unreadable " + filepath.Base(name)) }
+	if _, err := osPackages(root, failing)(); err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Errorf("an unreadable file: %v", err)
 	}
 	// A directory that cannot be read: the walk reports it.
 	if _, err := OSPackages(filepath.Join(t.TempDir(), "absent"))(); err == nil {

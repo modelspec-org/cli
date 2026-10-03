@@ -11,10 +11,20 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
 
+// The gate reads every .go file of every package directory of the module, whatever
+// its name or build constraint, because go/build lists only the files that this
+// platform and these tags would build: a TestMain behind `//go:build race`, or in
+// a file named x_linux_test.go, would not be listed, and would run only on the
+// platform or with the tag that is not the gate's. So a TestMain is refused in any
+// file, and so is any build constraint (a //go:build or // +build line, or a GOOS
+// or GOARCH file-name suffix): a file with one can be left out of a test run, and
+// so of the coverage profile, where the gate cannot see it.
+//
 // A TestMain runs the tests itself, so it can run them and then exit 0, and every
 // test of the package can fail with the run green: the gate counts statements that
 // ran, not tests that passed. No package may declare one. (If a package needs
@@ -31,6 +41,7 @@ type Package struct {
 	Path          string
 	HasStatements bool
 	TestMains     []string // the test files that declare a TestMain
+	Constraints   []string // a message for each build constraint of a Go file
 }
 
 // Packages lists the packages of the module. Run takes it as a parameter so that
@@ -42,14 +53,21 @@ type Packages func() ([]Package, error)
 // with Go files for this platform, except those whose name begins with "." or
 // "_", testdata directories, and nested modules. A directory with only test files
 // is a package without statements.
-func OSPackages(root string) Packages {
+func OSPackages(root string) Packages { return osPackages(root, os.ReadFile) }
+
+// osPackages is OSPackages reading files with readFile, a seam for tests.
+func osPackages(root string, readFile func(string) ([]byte, error)) Packages {
 	return func() ([]Package, error) {
 		var dirs []string
+		goFiles := map[string][]string{} // the .go files of each directory
 		err := filepath.WalkDir(root, func(dir string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if !d.IsDir() {
+				if strings.HasSuffix(d.Name(), ".go") {
+					goFiles[filepath.Dir(dir)] = append(goFiles[filepath.Dir(dir)], d.Name())
+				}
 				return nil
 			}
 			if dir != root {
@@ -75,10 +93,7 @@ func OSPackages(root string) Packages {
 		for _, dir := range dirs {
 			pkg, err := build.Default.ImportDir(dir, 0)
 			var none *build.NoGoError
-			if errors.As(err, &none) {
-				continue
-			}
-			if err != nil {
+			if err != nil && !errors.As(err, &none) {
 				return nil, err
 			}
 			rel, _ := filepath.Rel(root, dir)
@@ -90,13 +105,27 @@ func OSPackages(root string) Packages {
 				}
 				p.HasStatements = p.HasStatements || has
 			}
-			for _, f := range append(append([]string(nil), pkg.TestGoFiles...), pkg.XTestGoFiles...) {
-				has, err := declaresTestMain(filepath.Join(dir, f))
+			// Every Go file of the directory, not only the ones go/build lists.
+			if len(goFiles[dir]) == 0 {
+				continue
+			}
+			for _, name := range goFiles[dir] {
+				src, err := readFile(filepath.Join(dir, name))
+				if err != nil {
+					return nil, err
+				}
+				for _, problem := range constraintProblems(name, src) {
+					p.Constraints = append(p.Constraints, p.Path+"/"+problem)
+				}
+				if !strings.HasSuffix(name, "_test.go") {
+					continue
+				}
+				has, err := declaresTestMain(name, src)
 				if err != nil {
 					return nil, err
 				}
 				if has {
-					p.TestMains = append(p.TestMains, path.Join(p.Path, f))
+					p.TestMains = append(p.TestMains, path.Join(p.Path, name))
 				}
 			}
 			out = append(out, p)
@@ -137,9 +166,34 @@ func hasStatements(file string) (bool, error) {
 	return found, nil
 }
 
-// declaresTestMain reports whether the Go file declares a function TestMain.
-func declaresTestMain(file string) (bool, error) {
-	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+var knownOS = strings.Fields("aix android darwin dragonfly freebsd hurd illumos ios js linux nacl netbsd openbsd plan9 solaris wasip1 windows zos")
+var knownArch = strings.Fields("386 amd64 amd64p32 arm armbe arm64 arm64be loong64 mips mipsle mips64 mips64le mips64p32 mips64p32le ppc ppc64 ppc64le riscv riscv64 s390 s390x sparc sparc64 wasm")
+
+// constraintProblems reports the build constraint, if any, of one Go file: the
+// name of the file with its reason.
+func constraintProblems(name string, src []byte) []string {
+	var problems []string
+	stem := strings.TrimSuffix(strings.TrimSuffix(name, ".go"), "_test")
+	parts := strings.Split(stem, "_")
+	if n := len(parts); n >= 2 {
+		last := parts[n-1]
+		if slices.Contains(knownOS, last) || slices.Contains(knownArch, last) {
+			problems = append(problems, name+": the file name carries a GOOS or GOARCH build constraint ("+last+")")
+		}
+	}
+	for _, line := range strings.Split(string(src), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "//go:build") || strings.HasPrefix(line, "// +build") {
+			problems = append(problems, name+": "+line)
+		}
+	}
+	return problems
+}
+
+// declaresTestMain reports whether the Go file, named file, with the source src,
+// declares a function TestMain.
+func declaresTestMain(file string, src []byte) (bool, error) {
+	f, err := parser.ParseFile(token.NewFileSet(), file, src, 0)
 	if err != nil {
 		return false, err
 	}
@@ -151,12 +205,15 @@ func declaresTestMain(file string) (bool, error) {
 	return false, nil
 }
 
-// Missing returns a message for each test file that declares a TestMain, and for each package that has statements and is absent
+// Missing returns a message for each Go file with a build constraint, for each test file that declares a TestMain, and for each package that has statements and is absent
 // from the profile or contributes no statements to it. perPackage is the statement
 // count of each package path in the profile.
 func Missing(pkgs []Package, perPackage map[string]int) []string {
 	var out []string
 	for _, p := range pkgs {
+		for _, c := range p.Constraints {
+			out = append(out, fmt.Sprintf("%s: a Go file with a build constraint can be left out of a test run and so of the coverage profile, where the gate cannot see it; no file may have one", c))
+		}
 		for _, file := range p.TestMains {
 			out = append(out, fmt.Sprintf("%s declares TestMain, which can hide a failing test (it may run the tests and exit 0); no package may have one", file))
 		}

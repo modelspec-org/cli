@@ -15,38 +15,6 @@ import (
 // release builds windows binaries, and a file for windows only would be
 // invisible to a Linux run.
 
-var knownOS = strings.Fields("aix android darwin dragonfly freebsd hurd illumos ios js linux nacl netbsd openbsd plan9 solaris wasip1 windows zos")
-var knownArch = strings.Fields("386 amd64 amd64p32 arm armbe arm64 arm64be loong64 mips mipsle mips64 mips64le mips64p32 mips64p32le ppc ppc64 ppc64le riscv riscv64 s390 s390x sparc sparc64 wasm")
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
-// constraintProblems reports the build constraint, if any, of one Go file.
-func constraintProblems(name string, src []byte) []string {
-	var problems []string
-	stem := strings.TrimSuffix(strings.TrimSuffix(name, ".go"), "_test")
-	parts := strings.Split(stem, "_")
-	if n := len(parts); n >= 2 {
-		last := parts[n-1]
-		if contains(knownOS, last) || contains(knownArch, last) {
-			problems = append(problems, name+": the file name carries a GOOS or GOARCH build constraint ("+last+")")
-		}
-	}
-	for _, line := range strings.Split(string(src), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "//go:build") || strings.HasPrefix(line, "// +build") {
-			problems = append(problems, name+": "+line)
-		}
-	}
-	return problems
-}
-
 func TestConstraintProblems(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

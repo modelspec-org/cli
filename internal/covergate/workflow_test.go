@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -423,7 +424,7 @@ func checkWorkflowFiles(names []string, allowed map[string]string) []string {
 		}
 	}
 	for n := range allowed {
-		if !contains(names, n) {
+		if !slices.Contains(names, n) {
 			problems = append(problems, fmt.Sprintf("the allow-list names %s, which does not exist", n))
 		}
 	}
@@ -665,7 +666,7 @@ func TestPinnedActionsAreFullSHAs(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, ref := range usesOf(doc["jobs"]) {
-			if ref != gateUses && !contains(used, ref) {
+			if ref != gateUses && !slices.Contains(used, ref) {
 				used = append(used, ref)
 			}
 		}
