@@ -49,6 +49,9 @@ func seeds(f *testing.F, dir, suffix string) {
 	f.Add([]byte("[[[[[[[[[[[[[[[["))
 	f.Add([]byte("x = <<EOT\n\"\nEOT\nkey = [[[[\n"))
 	f.Add([]byte("x = -------------1"))
+	f.Add([]byte("entity \"A\" {\n  key = a[*][*][*][*]\n}\n"))
+	f.Add([]byte("x = <<EOT\n%{\nif x}%{/**/if y}\nEOT\n"))
+	f.Add([]byte("x = a::b() + c.d[0] ? (1) : [for a in b : a]\n"))
 }
 
 func lint(m *modelspec.Model, parse []modelspec.Finding, p modelspec.Profile) []modelspec.Finding {

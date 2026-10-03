@@ -2,7 +2,9 @@ package modelspec
 
 import (
 	"fmt"
+	"math/big"
 	"sort"
+	"strconv"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -18,9 +20,9 @@ func ParseHCL(file string, src []byte) (*Model, []Finding) {
 		m.Broken = true
 		return m, []Finding{f}
 	}
-	if f, bad := hclLimits(file, src); bad {
+	if found := hclLiterals(file, src); len(found) > 0 {
 		m.Broken = true
-		return m, []Finding{f}
+		return m, found
 	}
 	p := &hclReader{m: m}
 	parsed, diags := hclsyntax.ParseConfig(src, file, hcl.Pos{Line: 1, Column: 1})
@@ -172,8 +174,8 @@ func (p *hclReader) attrs(body *hclsyntax.Body) []Attr {
 
 // literalNode reads an expression that must be a literal (decision 0009:
 // strings, numbers, booleans and lists, no expressions, references or
-// functions). The expression is checked structurally first: HCL would happily
-// fold `1 > 0` to true, but that is an expression, not a literal.
+// functions). Only syntax a literal can contain reaches the parser (hclLiterals),
+// so what is left to refuse is a bare word (a reference) and an object.
 func literalNode(expr hclsyntax.Expression, line int) (*Node, string) {
 	if _, isObject := expr.(*hclsyntax.ObjectConsExpr); isObject {
 		return nil, "map-style values are not ModelSpec v0 syntax; declare members with named blocks (decision 0007)"
@@ -181,28 +183,37 @@ func literalNode(expr hclsyntax.Expression, line int) (*Node, string) {
 	if !isLiteralExpr(expr) {
 		return nil, "must be a literal string, number, boolean or list; expressions, references and functions are not ModelSpec v0 (decision 0009)"
 	}
-	// A literal expression always evaluates without a context.
-	val, _ := expr.Value(nil)
-	return ctyNode(val, line)
+	tuple, isList := expr.(*hclsyntax.TupleConsExpr)
+	if !isList {
+		return scalarNode(expr, line)
+	}
+	// The items are read from the syntax tree, not through a list value of the
+	// HCL library: that builds a value of the whole list first, which is slow
+	// for a list of a million items.
+	n := &Node{Type: NodeArray, Line: line, Items: make([]*Node, 0, len(tuple.Exprs))}
+	for _, item := range tuple.Exprs {
+		if _, nested := item.(*hclsyntax.TupleConsExpr); nested {
+			return nil, "nested lists are not ModelSpec v0"
+		}
+		el, msg := scalarNode(item, line)
+		if msg != "" {
+			return nil, msg
+		}
+		n.Items = append(n.Items, el)
+	}
+	return n, ""
 }
 
 // isLiteralExpr reports whether the expression is written as a literal: a
-// constant, a string without interpolation, a negative number, or a list of
-// those.
+// constant, a string, a negative number, or a list of those. Syntax that cannot
+// be a literal was refused before parsing (hclLiterals), so the only expressions
+// that can reach this are constants, plain strings (a template with no
+// interpolation or directive), a sign before a number, lists, objects and bare
+// words (references); the last two are not literals.
 func isLiteralExpr(expr hclsyntax.Expression) bool {
 	switch x := expr.(type) {
-	case *hclsyntax.LiteralValueExpr:
+	case *hclsyntax.LiteralValueExpr, *hclsyntax.TemplateExpr, *hclsyntax.UnaryOpExpr:
 		return true
-	case *hclsyntax.TemplateExpr:
-		for _, part := range x.Parts {
-			if _, ok := part.(*hclsyntax.LiteralValueExpr); !ok {
-				return false
-			}
-		}
-		return true
-	case *hclsyntax.UnaryOpExpr:
-		_, ok := x.Val.(*hclsyntax.LiteralValueExpr)
-		return ok && x.Op == hclsyntax.OpNegate
 	case *hclsyntax.TupleConsExpr:
 		for _, item := range x.Exprs {
 			if !isLiteralExpr(item) {
@@ -215,33 +226,33 @@ func isLiteralExpr(expr hclsyntax.Expression) bool {
 	}
 }
 
-// ctyNode converts the value of a literal expression. Only literal expressions
-// reach it, so a value that is not null, a string, a boolean or a number is a
-// list.
-func ctyNode(val cty.Value, line int) (*Node, string) {
-	t := val.Type()
-	switch {
+// scalarNode converts a literal that is not a list. A sign before a number is
+// the only operator that reaches it.
+func scalarNode(expr hclsyntax.Expression, line int) (*Node, string) {
+	if neg, ok := expr.(*hclsyntax.UnaryOpExpr); ok {
+		// hclLiterals lets `-` through only before a number.
+		num := neg.Val.(*hclsyntax.LiteralValueExpr).Val
+		return &Node{Type: NodeNumber, Str: numberText(new(big.Float).Neg(num.AsBigFloat())), Line: line}, ""
+	}
+	val, _ := expr.Value(nil) // a literal evaluates without a context
+	switch t := val.Type(); {
 	case val.IsNull():
 		return nil, "null is not a ModelSpec value"
 	case t == cty.String:
 		return &Node{Type: NodeString, Str: val.AsString(), Line: line}, ""
 	case t == cty.Bool:
 		return &Node{Type: NodeBool, Bool: val.True(), Line: line}, ""
-	case t == cty.Number:
-		return &Node{Type: NodeNumber, Str: val.AsBigFloat().Text('f', -1), Line: line}, ""
 	default:
-		n := &Node{Type: NodeArray, Line: line}
-		for it := val.ElementIterator(); it.Next(); {
-			_, ev := it.Element()
-			item, msg := ctyNode(ev, line)
-			if msg != "" {
-				return nil, msg
-			}
-			if item.Type == NodeArray {
-				return nil, "nested lists are not ModelSpec v0"
-			}
-			n.Items = append(n.Items, item)
-		}
-		return n, ""
+		return &Node{Type: NodeNumber, Str: numberText(val.AsBigFloat()), Line: line}, ""
 	}
+}
+
+// numberText writes a number as its shortest decimal. Integers that fit 64 bits,
+// nearly all numbers in a model, take a fast path: the general conversion of a
+// 512-bit value takes microseconds, which adds up in a list of a million items.
+func numberText(f *big.Float) string {
+	if i, accuracy := f.Int64(); accuracy == big.Exact {
+		return strconv.FormatInt(i, 10)
+	}
+	return f.Text('f', -1)
 }

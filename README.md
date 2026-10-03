@@ -158,9 +158,9 @@ Both forms, on the same typed model:
 | --- | --- |
 | `syntax` | HCL syntax, with the real HCL parser; JSON syntax |
 | `encoding` | the source is UTF-8 |
-| `limit` | the source is within the size and nesting limits (below) |
+| `limit` | the source is within the size, nesting and heredoc limits (below) |
 | `shape` | blocks, labels and JSON groups have the structure ModelSpec defines; no unknown block types |
-| `literal` | HCL attribute values are literals: no expressions, references, functions or map-style containers (decisions 0007, 0009) |
+| `literal` | HCL attribute values are literals: no expressions, references, functions or map-style containers (decisions 0007, 0009). Syntax a literal cannot contain is refused from the tokens before the file is parsed (below) |
 | `reference` | `entity`, `component`, `enum`, `use`, collection `source` and `bind` resolve, with the right kind, including module-qualified names (decisions 0013, 0014) |
 | `reserved-name` | no concept is named `entities`, `components`, `enums`, `collections` or `recordsets` (decision 0015) |
 | `duplicate-name` | names are unique per scope in a module: entity, component and enum share one scope; collections and recordsets have their own (decision 0015); property and field names are unique; JSON object keys are never repeated |
@@ -197,37 +197,63 @@ HCL corpus).
   together.
 - **SpecScore's own rules**, such as a module's `dependsOn`, and any comparison with data.
 
-### Limits
+### Literal values only, and limits
 
-A source larger than 4 MiB (`MaxInputBytes`) is refused before it is read (the size comes from the
-file's metadata), and one that is not valid UTF-8 is refused before it is parsed. Past those, the
-limits are findings (rule `limit`, exit 1), so that a hostile file cannot crash the process: a stack
-overflow in Go is fatal and cannot be recovered, and the HCL parser is recursive. They bound what
-the parser recurses on, counted from the lexer's tokens (which does not recurse), not from the bytes,
-so a bracket in a string, a comment or a heredoc counts for nothing and a valid file with a
-`pattern = <<EOT … [[[ … EOT` is read normally:
+**What a value can be.** ModelSpec v0 HCL has literal values only: decision 0009 and
+`spec/hcl-authoring.md` ("V0 Grammar Scope") allow singular named blocks, attributes, and strings,
+numbers, booleans and lists (object literals only "where explicitly specified"; the standard specifies none, a search of `spec/` and
+`examples/` finds only the non-canonical `properties = { … }`, so `modelspec` reads one and refuses it with
+the map-style message of decision 0007),
+and "do not use dynamic HCL expressions or functions". A reference to another module is a string
+(`entity = "core.Space"`, decision 0014), so it is allowed. `modelspec` takes that to mean this grammar:
 
-| Limit | Applies to | Value |
-| --- | --- | --- |
-| nesting | brackets, braces, parentheses, quoted strings and heredocs, `${ }` and `%{ }`, and the `%{if}` and `%{for}` directives, in HCL; arrays and objects in JSON | 64 levels (`MaxDepth`) |
-| unary operators | a run of `-` or `!` | 64 (`MaxOperatorRun`) |
-| conditionals | `? :` operators in one file | 64 (`MaxConditionals`) |
-| syntax findings | errors reported for one HCL file | 50, then one line saying that more follow |
+- block types and labels (a label is a quoted string; a bare word is read as a label too);
+- attribute names, `=`, and these values: a quoted string or a heredoc, a number (`-` only as its sign),
+  `true`, `false`, `null` (read, and refused as "not a ModelSpec value"), and a list of those, with
+  commas, newlines and comments between items; a bare word (a reference) is read and refused with the
+  message that it must be a literal.
 
-The HCL parser recurses once per level of nesting, per unary operator and per conditional (a
-conditional's branches are expressions of their own); binary chains, traversals, indexes and splats are
-loops. That is what reading `hclsyntax` (`parser.go`, `parser_template.go`, hcl v2.24.0) found; there is a
-test for each at ten times its limit. ModelSpec allows no expressions (decision 0009), so a valid file
-needs none of the last two. The JSON reader reads token by token with its own depth count, and refuses the document at the limit. Real
-models nest four or five levels in HCL and six to eight in JSON.
+**What is refused before parsing.** The HCL parser is recursive, and a stack overflow in Go is fatal, so
+the source is lexed first (the lexer does not recurse) and refused, without being parsed, if it holds any
+token a literal cannot contain. That closes the whole class instead of the recursive constructs one by one.
+Each is a finding with rule `literal` that names the construct and the line (at most one for each construct
+on a line, and 50 for a file), exit 1:
 
-These limits are the ones found by reading, and not a proof: a parser that is recursive can be
-overflowed by a construct nobody listed. `scripts/fuzz.sh [seconds]` runs Go fuzz targets for the HCL
-and the JSON readers (`scripts/fuzz/`) with three oracles (it must not crash, publish must refuse
-whatever the default profile refuses, and a model that lints clean must export to JSON that parses
-and lints clean). They are skipped in
-`go test` and are not in the coverage gate, so run them when `precheck.go` or the dependency
-on `hcl` changes. A crash would be a bug to report.
+| Refused | Because |
+| --- | --- |
+| `(` `)` | grouping and function calls |
+| `.` `.*` `::` `...` | traversals, attribute splats, namespaced functions, argument expansion |
+| `[` after a value, `[*]` | an index or a full splat on a value |
+| `+` `-` `*` `/` `%`, `-` not before a number | arithmetic (`-` is allowed only as the sign of a number, `-1`) |
+| `==` `!=` `<` `<=` `>` `>=` `&&` `\|\|` `!` | comparison and logic |
+| `?` | conditionals |
+| `[for …` `{for …`, `=>` | `for` expressions |
+| `${` and `%{` in a string or a heredoc | template interpolation and directives (`$${` and `%%{` are the escapes and are allowed) |
+
+Brackets, quotes and operators inside strings, heredocs and comments are text, so a file whose
+`pattern = <<EOT … [[[ … EOT` holds unbalanced brackets is read normally.
+
+**What is bounded.** Nesting is the one recursion left, so it is counted from tokens: more than 64 levels
+(`MaxDepth`) of braces, brackets, strings and heredocs (JSON: arrays and objects) is a `limit` finding.
+A source larger than 4 MiB (`MaxInputBytes`) is refused before it is read (the size comes from the file's
+metadata), and one that is not valid UTF-8 is refused before it is parsed. A heredoc of more than 1,000 lines
+(`MaxHeredocLines`) is refused too, because the HCL parser joins a heredoc's lines in time that grows
+with the square of their number (40,000 lines take a second; 400,000, over a minute). No more than 50 syntax
+errors are shown for a file. Real models nest four or five levels in HCL and six to eight in JSON.
+
+**Time.** After these checks the worst time over about 35 hostile shapes of a 4 MiB file (a list of a million
+numbers, a million strings, blocks, heredocs of 999 lines, 64-deep nesting, a million syntax errors, and so
+on) was about 2 seconds (`modelspec lint` of one file, a loaded laptop). The shapes that were slow
+before the checks (the heredoc and a list of a million numbers) are now refused or linear.
+
+**What is and is not proved.** The checks are a test of the tokens, so nothing recursive in the HCL parser
+is reachable except the nesting of braces and brackets, which is bounded. There is a test that runs
+`ParseHCL` with the process stack limited to 8 MiB on 10,000 repeats of every construct that made the parser
+recurse (it fails by overflowing the stack if the pre-parse refusal is removed), and one input for each
+refused token. A new version of the `hcl` library, which could add tokens or recursion, needs
+`scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
+crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
+lints clean). The fuzz targets are skipped in `go test` and are not in the coverage gate.
 
 ## Export
 
