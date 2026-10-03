@@ -1402,6 +1402,30 @@
     "shop=parts"
    ]
   },
+  "standalone/query-201-wildcards": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/query-334-placeholders": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/query-one-line-500-placeholders": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
   "standalone/stale-twin": {
    "default": {
     "verdict": "accept",

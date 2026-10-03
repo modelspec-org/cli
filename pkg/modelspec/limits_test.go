@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func hclFindings(src string) []Finding { return hclLiterals("f", []byte(src)) }
+func hclFindings(src string) []Finding { return hclLiterals("f", lexHCL("f", []byte(src))) }
 
 // rep repeats s n times.
 func rep(s string, n int) string { return strings.Repeat(s, n) }
@@ -49,8 +49,9 @@ func TestNonLiteralSyntaxIsRefused(t *testing.T) {
 		{"a logical and", "x = true && false", "a logical operator", 1},
 		{"a logical or", "x = true || false", "a logical operator", 1},
 		{"a conditional", "x = a ? b : c", "a conditional", 1},
-		{"a for expression over a list", "x = [for a in b : a]", "a `for` expression", 1},
-		{"a for expression over an object", "x = {for k, v in b : k => v}", "a `for` expression", 1},
+		{"a for expression over a list", "x = [for a in b : a]", "a `for` expression is not literal", 1},
+		{"a for expression over an object", "x = {for k, v in b : k => v}", "a `for` expression is not literal", 1},
+		{"a for expression over an object with one variable", "x = {for v in b : v => v}", "a `for` expression is not literal", 1},
 		{"an expanded argument", "x = [a...]", "`...`", 1},
 		{"a fat arrow", "x = {a => 1}", "`=>`", 1},
 		{"an interpolation", "x = \"${a}\"", "a template interpolation", 1},
@@ -96,6 +97,11 @@ func TestLiteralSyntaxIsAccepted(t *testing.T) {
 		{"unbalanced brackets in a heredoc", "x = <<EOT\n" + rep("[(", 33) + "\nEOT\n"},
 		{"unbalanced brackets in comments", "# " + rep("[", 500) + "\n// " + rep("{", 500) + "\n/* " + rep("(", 500) + " */\nx = 1\n"},
 		{"nesting at the limit", "x = " + rep("[", MaxDepth) + rep("]", MaxDepth)},
+		{"nesting at the limit, from the first token", rep("[", MaxDepth) + rep("]", MaxDepth)},
+		{"nesting at the limit after balanced pairs", "x = []\ny = [[]]\nz = " + rep("[", MaxDepth) + rep("]", MaxDepth)},
+		{"nesting at the limit after blocks", "a {\n}\nb {\n  c {\n  }\n}\nz = " + rep("[", MaxDepth) + rep("]", MaxDepth)},
+		{"a word for in a list", "x = [for]\ny = [for, a]\nz = {for = 1}\n"},
+		{"a block named for, with a label", "entity \"A\" {\n  for \"x\" {\n  }\n}\n"},
 		{"closers alone", rep("]", 1000)},
 		{"empty lists in a row", rep("x = []\n", 1000)},
 		{"many labels", "entity " + rep("\"a\" ", 1000) + "{}"},
@@ -126,6 +132,10 @@ func TestNestingLimit(t *testing.T) {
 		{"objects", "x = " + rep("{a=", ten) + "1" + rep("}", ten), 1},
 		{"one open bracket too many", "x = " + rep("[", MaxDepth+1), 1},
 		{"unclosed brackets", rep("[", 1000), 1},
+		// Closers with nothing open do not count as credit against what follows: the
+		// nesting after them is as deep as it is.
+		{"unmatched closers, then nesting over the limit", rep("]", 500) + "\nx = " + rep("[", MaxDepth+1), 2},
+		{"unmatched closing braces, then blocks over the limit", rep("}\n", 300) + rep("a {\n", MaxDepth+1), 301 + MaxDepth},
 	} {
 		got := hclFindings(tc.src)
 		if len(got) != 1 || got[len(got)-1].Rule != RuleLimit || got[0].Line != tc.line || !strings.Contains(got[0].Message, "deeper than 64 levels") {
@@ -139,12 +149,13 @@ func TestNestingLimit(t *testing.T) {
 	}
 }
 
-// A heredoc of many lines is refused: the HCL parser joins its pieces in
-// quadratic time.
+// A heredoc of very many lines is refused: the HCL parser joins the pieces of a
+// template, one for each line, in quadratic time. What is counted is lines, and
+// the message says so; SQL with placeholders and wildcards, which is what a query
+// holds, is not refused however many `$` and `%` it has.
 func TestHeredocLinesLimit(t *testing.T) {
 	t.Parallel()
 	heredoc := func(lines int) string { return "x = <<EOT\n" + rep("a\n", lines) + "EOT\n" }
-	quoted := func(escapes int) string { return "x = \"" + rep("\\n", escapes) + "\"\n" }
 	for _, tc := range []struct {
 		name string
 		src  string
@@ -152,10 +163,18 @@ func TestHeredocLinesLimit(t *testing.T) {
 	}{
 		{"a heredoc at the limit", heredoc(MaxHeredocLines), 0},
 		{"a heredoc over the limit", heredoc(MaxHeredocLines + 1), MaxHeredocLines + 2},
-		{"a string with many escapes is one piece", quoted(100000), 0},
-		{"many heredocs, each at the limit", rep(heredoc(MaxHeredocLines), 5), 0},
+		{"empty lines count", "x = <<EOT\n" + rep("\n", MaxHeredocLines+1) + "EOT\n", MaxHeredocLines + 2},
+		{"lines of a heredoc split by $ are counted as lines", "x = <<EOT\n" + rep("$a $b $c\n", MaxHeredocLines+1) + "EOT\n", MaxHeredocLines + 2},
+		{"many heredocs, each at the limit", rep(heredoc(MaxHeredocLines), 3), 0},
 		{"a long string with no escapes", "x = \"" + rep("a", 100000) + "\"\n", 0},
 		{"a long heredoc line", "x = <<EOT\n" + rep("a", 100000) + "\nEOT\n", 0},
+		// The review's inputs: valid queries that a count of pieces refused.
+		{"a query of 334 lines with a placeholder on each", "x = <<SQL\n" + rep("  OR a = $1\n", 334) + "SQL\n", 0},
+		{"a query of 201 lines with two wildcards on each", "x = <<SQL\n" + rep("  OR name LIKE '%a%'\n", 201) + "SQL\n", 0},
+		{"one line of 500 placeholders", "x = <<SQL\nSELECT " + rep("$1, ", 500) + "1\nSQL\n", 0},
+		{"a thousand lines with three placeholders on each", "x = <<SQL\n" + rep("  AND a = $1 AND b = $2 AND c = $3\n", 1000) + "SQL\n", 0},
+		{"a string of $a, the form of the review", "x = \"" + rep("$a", 20000) + "\"\n", 0},
+		{"a string of $${ escapes", "x = \"" + rep("$${", 20000) + "\"\n", 0},
 	} {
 		got := hclFindings(tc.src)
 		if tc.line == 0 {
@@ -209,34 +228,36 @@ func TestReadersRefuseHostileInput(t *testing.T) {
 }
 
 // The parser itself must never be reached by input that would overflow its stack.
-// This test lowers the stack limit of the process to 8 MiB (the parser needs
+// This test lowers the stack limit of the process to 4 MiB (the parser needs
 // several KB of stack for each item of these chains, so one that recursed would
 // die within a few thousand items; a Go stack overflow is fatal, and the run
-// would fail) and feeds ParseHCL 10,000 repeats of each construct that makes the
+// would fail) and feeds ParseHCL 5,000 repeats of each construct that makes the
 // parser recurse. It is not parallel, because the limit is process-wide.
 func TestHostileInputDoesNotReachTheParserStack(t *testing.T) {
-	defer debug.SetMaxStack(debug.SetMaxStack(8 << 20))
-	const n = 10000
+	defer debug.SetMaxStack(debug.SetMaxStack(4 << 20))
+	const n = 5000
 	for name, src := range map[string]string{
-		"a full splat":          "entity \"A\" {\n  key = a" + rep("[*]", n) + "\n}\n",
-		"an attribute splat":    "x = a" + rep(".*", n),
-		"heredoc lines":         "x = <<EOT\n" + rep("a\n", n) + "EOT\n",
-		"directives":            "x = <<EOT\n" + rep("%{\nif x}", n) + "EOT\n",
-		"hidden directives":     "x = <<EOT\n" + rep("%{/**/if true}", n) + "EOT\n",
-		"unary minus":           "x = " + rep("-", n) + "1",
-		"unary bangs":           "x = " + rep("!", n) + "true",
-		"conditionals":          "x = " + rep("a ? b : ", n) + "c",
-		"nested conditionals":   "x = " + rep("a ? ", n) + "b" + rep(" : c", n),
-		"a sum":                 "x = 1" + rep(" + 1", n),
-		"a traversal":           "x = a" + rep(".b", n),
-		"indexes":               "x = a" + rep("[0]", n),
-		"namespaces":            "x = " + rep("a::", n) + "b()",
-		"nested calls":          "x = " + rep("f(", n) + "1" + rep(")", n),
-		"nested for expression": "x = " + rep("[for a in b : ", n) + "1" + rep("]", n),
-		"nested templates":      "x = " + rep("\"${", n) + "1" + rep("}\"", n),
-		"nested lists":          "x = " + rep("[", n) + rep("]", n),
-		"nested objects":        "x = " + rep("{a=", n) + "1" + rep("}", n),
-		"nested blocks":         rep("a {\n", n) + rep("}\n", n),
+		"a full splat":                "entity \"A\" {\n  key = a" + rep("[*]", n) + "\n}\n",
+		"an attribute splat":          "x = a" + rep(".*", n),
+		"heredoc lines":               "x = <<EOT\n" + rep("a\n", n) + "EOT\n",
+		"directives":                  "x = <<EOT\n" + rep("%{\nif x}", n) + "EOT\n",
+		"hidden directives":           "x = <<EOT\n" + rep("%{/**/if true}", n) + "EOT\n",
+		"unary minus":                 "x = " + rep("-", n) + "1",
+		"unary bangs":                 "x = " + rep("!", n) + "true",
+		"conditionals":                "x = " + rep("a ? b : ", n) + "c",
+		"nested conditionals":         "x = " + rep("a ? ", n) + "b" + rep(" : c", n),
+		"a sum":                       "x = 1" + rep(" + 1", n),
+		"a traversal":                 "x = a" + rep(".b", n),
+		"indexes":                     "x = a" + rep("[0]", n),
+		"namespaces":                  "x = " + rep("a::", n) + "b()",
+		"nested calls":                "x = " + rep("f(", n) + "1" + rep(")", n),
+		"nested for expression":       "x = " + rep("[for a in b : ", n) + "1" + rep("]", n),
+		"nested templates":            "x = " + rep("\"${", n) + "1" + rep("}\"", n),
+		"nested lists":                "x = " + rep("[", n) + rep("]", n),
+		"closers, then nested lists":  rep("]", n) + "\nx = " + rep("[", n),
+		"closing braces, then blocks": rep("}\n", n) + rep("a {\n", n),
+		"nested objects":              "x = " + rep("{a=", n) + "1" + rep("}", n),
+		"nested blocks":               rep("a {\n", n) + rep("}\n", n),
 	} {
 		if m, fs := ParseHCL("a"+hclExt, []byte(src)); !m.Broken || len(fs) == 0 {
 			t.Errorf("%s: broken %v, findings %v", name, m.Broken, fs)
@@ -317,6 +338,8 @@ func TestPrecheck(t *testing.T) {
 		{"invalid UTF-8 names the line", "{\n\"a\": \"\xff\"}", 2},
 		{"invalid UTF-8 after multibyte text", "# é\n\xc3(\n", 2},
 		{"a truncated rune at the end", "x = 1\xe2\x82", 1},
+		{"invalid UTF-8 after empty lines", "\n\n\xff", 3},
+		{"invalid UTF-8 on the first line", "\xff\n\n", 1},
 	} {
 		f, bad := precheck("f", []byte(tc.src))
 		if !bad || f.Rule != RuleEncoding || f.Line != tc.line || !strings.Contains(f.Message, "not valid UTF-8") {

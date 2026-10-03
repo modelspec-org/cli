@@ -20,12 +20,14 @@ func ParseHCL(file string, src []byte) (*Model, []Finding) {
 		m.Broken = true
 		return m, []Finding{f}
 	}
-	if found := hclLiterals(file, src); len(found) > 0 {
+	tokens := lexHCL(file, src)
+	if found := hclLiterals(file, tokens); len(found) > 0 {
 		m.Broken = true
 		return m, found
 	}
-	p := &hclReader{m: m}
-	parsed, diags := hclsyntax.ParseConfig(src, file, hcl.Pos{Line: 1, Column: 1})
+	input, heredocs := parserInput(src, tokens)
+	p := &hclReader{m: m, heredocs: heredocs}
+	parsed, diags := hclsyntax.ParseConfig(input, file, hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
 		m.Broken = true
 		shown := 0
@@ -63,6 +65,7 @@ func diagLine(d *hcl.Diagnostic) int {
 type hclReader struct {
 	m        *Model
 	findings []Finding
+	heredocs map[int]bool // where, in the parsed source, a heredoc begins: see parserInput
 }
 
 func (p *hclReader) add(line int, rule, msg string) {
@@ -162,7 +165,7 @@ func (p *hclReader) attrs(body *hclsyntax.Body) []Attr {
 	for _, name := range sortedAttrNames(body) {
 		a := body.Attributes[name]
 		line := a.SrcRange.Start.Line
-		n, msg := literalNode(a.Expr, line)
+		n, msg := p.literalNode(a.Expr, line)
 		if msg != "" {
 			p.add(line, RuleLiteral, fmt.Sprintf("attribute %q: %s", name, msg))
 			continue
@@ -176,7 +179,7 @@ func (p *hclReader) attrs(body *hclsyntax.Body) []Attr {
 // strings, numbers, booleans and lists, no expressions, references or
 // functions). Only syntax a literal can contain reaches the parser (hclLiterals),
 // so what is left to refuse is a bare word (a reference) and an object.
-func literalNode(expr hclsyntax.Expression, line int) (*Node, string) {
+func (p *hclReader) literalNode(expr hclsyntax.Expression, line int) (*Node, string) {
 	if _, isObject := expr.(*hclsyntax.ObjectConsExpr); isObject {
 		return nil, "map-style values are not ModelSpec v0 syntax; declare members with named blocks (decision 0007)"
 	}
@@ -185,7 +188,7 @@ func literalNode(expr hclsyntax.Expression, line int) (*Node, string) {
 	}
 	tuple, isList := expr.(*hclsyntax.TupleConsExpr)
 	if !isList {
-		return scalarNode(expr, line)
+		return p.scalarNode(expr, line)
 	}
 	// The items are read from the syntax tree, not through a list value of the
 	// HCL library: that builds a value of the whole list first, which is slow
@@ -195,7 +198,7 @@ func literalNode(expr hclsyntax.Expression, line int) (*Node, string) {
 		if _, nested := item.(*hclsyntax.TupleConsExpr); nested {
 			return nil, "nested lists are not ModelSpec v0"
 		}
-		el, msg := scalarNode(item, line)
+		el, msg := p.scalarNode(item, line)
 		if msg != "" {
 			return nil, msg
 		}
@@ -228,7 +231,7 @@ func isLiteralExpr(expr hclsyntax.Expression) bool {
 
 // scalarNode converts a literal that is not a list. A sign before a number is
 // the only operator that reaches it.
-func scalarNode(expr hclsyntax.Expression, line int) (*Node, string) {
+func (p *hclReader) scalarNode(expr hclsyntax.Expression, line int) (*Node, string) {
 	if neg, ok := expr.(*hclsyntax.UnaryOpExpr); ok {
 		// hclLiterals lets `-` through only before a number.
 		num := neg.Val.(*hclsyntax.LiteralValueExpr).Val
@@ -239,7 +242,11 @@ func scalarNode(expr hclsyntax.Expression, line int) (*Node, string) {
 	case val.IsNull():
 		return nil, "null is not a ModelSpec value"
 	case t == cty.String:
-		return &Node{Type: NodeString, Str: val.AsString(), Line: line}, ""
+		text := val.AsString()
+		if p.heredocs[expr.Range().Start.Byte] {
+			text = unescapeHeredoc(text)
+		}
+		return &Node{Type: NodeString, Str: text, Line: line}, ""
 	case t == cty.Bool:
 		return &Node{Type: NodeBool, Bool: val.True(), Line: line}, ""
 	default:
