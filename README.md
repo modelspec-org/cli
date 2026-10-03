@@ -237,11 +237,20 @@ Brackets, quotes and operators inside strings, heredocs and comments are text, s
 
 | Limit | Value | What happens past it |
 | --- | --- | --- |
-| size of one source file | 4 MiB (`MaxInputBytes`) | refused before it is read (the size is from the file's metadata); not valid UTF-8 is refused before it is parsed |
+| size of one source file, of any file a command reads (the JSON operand of `export --check` too) | 4 MiB (`MaxInputBytes`) | refused before it is read (the size is from the file's metadata, and the length is checked again after the read); not valid UTF-8 is refused before it is parsed. `export` refuses to write a JSON twin over the limit (exit 1, nothing written, and the message says why), since `lint` would refuse it |
 | nesting of braces, brackets, quoted strings and heredocs (JSON: arrays and objects) | 64 levels (`MaxDepth`) | `limit` finding; counted from tokens, so brackets in strings and comments do not count |
 | lines of one heredoc | 1,000 (`MaxHeredocLines`) | `limit` finding naming the number of lines; `$` and `%` in a query do not change the count |
-| syntax errors or non-literal tokens shown for one file | 50 (`MaxSyntaxFindings`) | the rest are not listed; one finding says so |
-| findings kept by one reader, one check and one run | 1,000 (`MaxFindings`) | the rest are counted, not kept: one more finding says how many were left out, with how many were errors and how many warnings. It is an error if any dropped one was, so the exit code is what it would be with no limit. The summary line's counts (`N errors`) are of the findings listed, the last finding's text has the rest. The limit is in the library, so memory is bounded too |
+| one number literal (JSON the same) | 40 characters, not counting a sign (`MaxNumberLength`), and an exponent of at most 100 either way (`MaxNumberExponent`) | `limit` finding that says how many characters or which exponent, and the limit. Stricter than the standard, which sets none: see "Numbers and names" |
+| one name: a block label, an identifier, the value of `type`, `entity`, `component`, `enum` or `kind`, an item of `key` or `use` (JSON: every object key, and the same strings) | 255 bytes as written (`MaxNameLength`) | `limit` finding that says how many bytes and the limit. Stricter than the standard, which states no length |
+| one finding's message | 1,024 bytes (`MaxMessageBytes`); a piece of the user's text in it, 255 (`MaxEchoBytes`) | cut, with a marker that says how long it was |
+| syntax errors, non-literal tokens, or numbers and names over their limits shown for one file | 50 (`MaxSyntaxFindings`) | the rest are not listed; one finding says so |
+| findings kept by one reader, one check and one run | 1,000 (`MaxFindings`) | the rest are counted, not kept: one more finding says how many were left out, with how many were errors and how many warnings. Errors are kept in preference to warnings (an error takes the place of a listed warning), so an error is dropped only when more than 1,000 errors were found, and then the finding is an error, so the exit code is what it would be with no limit. The output stays sorted. The summary line's counts (`N errors`) are of the findings listed, the last finding's text has the rest. The limit is in the library, so memory is bounded too |
+
+**Output is bounded.** One run lists at most 1,001 findings (the 1,000 kept and the one that counts the
+rest), each at most 1,024 bytes of message, plus its path, line number, severity and rule (at most 64 bytes
+besides the path): at most 1,001 x (1,088 + the length of the path) bytes, about 1.1 MB, in the text format; in
+`--format json` a byte can be written as six (`\u003c`), so at most about 6.5 MB. A test builds a model with
+1,500 findings that echo the longest names and values and asserts the bound (it gives 686 KB).
 
 Real models nest four or five levels in HCL and six to eight in JSON, and no query or pattern comes near a
 thousand lines.
@@ -253,40 +262,70 @@ their number; and the lexer starts a new piece at each `$` and `%` (and, in a he
 nearly seven. `modelspec` rewrites the `$` and `%` inside literal text before the parser sees it, so that they
 stay inside their piece (in a quoted string as the escapes `\u0024` and `\u0025`, which the parser reads as the
 same text; in a heredoc, which has no escapes, as two private-use characters that are turned back into `$`
-and `%` in the value), and the pieces left are the lines of a heredoc, which are capped. The values read are
-the ones the HCL library reads from the original text (a test compares them over random strings and heredocs
-full of `$`, `%`, their escapes and the private-use characters themselves). A string of 2 million `$a` (4 MiB)
-now takes about one second.
+and `%` in the value), and the pieces left are the lines of a heredoc, which are capped. A backslash and the
+character after it in a quoted string are one unit that the rewrite does not touch, so `"\$"` reaches the
+library as written and is refused (`Invalid escape sequence`) as it is without the rewrite; and in a heredoc a
+carriage return right after a `$` or `%` stays with it, as the library's lexer takes it. A test compares the
+CLI with the unmodified library in both directions over 3,000 generated strings and heredocs full of `$`, `%`,
+their escapes, a backslash before every kind of character, carriage returns and the private-use characters
+themselves: whatever the library refuses the CLI refuses, and whatever the library reads the CLI reads to the
+same value (1,458 were read by both, with the same value, and 1,542 were refused by both); there is no
+known input on which they differ. Over the corpus and 5.8 million valid files of an earlier review the values
+were identical; that is a measurement, not a proof. A string of 2 million `$a` (4 MiB) takes about 1.3 seconds.
 
 **The checker is linear too.** A reference used to be found by scanning every concept of the module, and an
 entity's properties rebuilt for every `bind` that named it: valid models of 4 MB took minutes (see the table
 below). Concepts are now indexed once for each module and the properties of an entity once for each entity (the
 fields of a component are kept once, not copied into each entity that uses it).
 Tests count the memory allocated at two sizes of each shape, which does not depend on the load of the machine,
-and fail when eight times the model costs more than fourteen times the memory.
+and fail when eight times the model costs more than fourteen times the memory. A scan allocates nothing, so
+other tests count steps: concepts visited to build a module's index (each exactly once, however many lookups
+there are), members listed to build a set (once), and sets and names consulted to answer whether a name is a
+property of an entity (bounded by twice the fields of the components it uses, however many lookups).
 
-**Time, measured.** `modelspec lint` of one file within the 4 MiB limit, valid or not, in HCL or JSON: every input of
-the table below, and about 80 others of the shapes I could think of (long lists, many blocks, labels, strings,
-heredocs, references, duplicate names), took 1.6 seconds or less, on a laptop that was shared with other work (load
-average about 3.5), so the figures are upper bounds. Before and after, in seconds:
+**Numbers and names.** The HCL library reads a number into 512 bits (about 154 digits) and takes time that
+grows with the exponent: `values = [1e10000000]`, 37 bytes, took 12 seconds and lint passed it; an integer of
+4.19 million digits took 12 seconds; two integers that differ after the 154th digit were read as equal; a name of
+2 million characters was repeated in every finding that mentioned it. So `modelspec` bounds the token and
+not the behaviour after it, in `precheck`, from the lexer's tokens, before the parser runs (and in the JSON reader
+as it reads): a number of at most 40 characters and an exponent of at most 100 either way, so every number that is
+accepted is read exactly (40 digits need 133 bits) and two accepted numbers are equal exactly when they are the
+same value, however they are spelled; and a name of at most 255 bytes. The standard sets neither limit, and a
+model that exceeds one is valid by the standard and refused here, with a `limit` finding that says what was
+counted and the limit. Where databases limit an identifier it is between 63 and 128 bytes, so 255 leaves room; no number in a real model comes near
+40 characters or 1e100. The JSON form has the same two limits (every object key and the same name strings are
+names), so a model and its twin are refused alike. Text that is not a name (a `pattern`, a `format`, a `query`, a
+`source`, an enum value) is limited only by the size of the file; whatever of it a message repeats is cut.
 
-| Input (all within the limit) | Before | After |
-| --- | --- | --- |
-| `pattern = "` + `$a` x 200,000 + `"` (400 KB) | 25 | 0.5 |
-| the same with `$${` x 200,000 (600 KB) | 7.9 | 0.1 |
-| `$a` x 524,000 (1 MiB) | 162 | 0.3 |
-| `$${` x 1,390,000 (4 MiB) | 412 | 0.7 |
-| `$a` x 2,090,000 (4 MiB) | not finished in 450 | 1.2 |
-| one entity of 40,000 properties and a collection of 55,000 fields bound to them (4.1 MB, HCL) | 83 | 0.5 |
-| the same in JSON, 60,000 properties and 80,000 binds (4.1 MB) | 206 | 0.1 |
-| 60,000 components and a `use` list of 280,000 names (4.1 MB) | 32 | 0.7 |
-| an enum of 900,000 repeats of one value (3.6 MB) | 1.8, and 76 MB of findings | 1.1, and 1,001 findings |
+**Time and memory, measured.** `modelspec lint` of the inputs below, every one within the 4 MiB limit, on a
+laptop shared with other work (load average 9 to 13, so the figures are upper bounds), at this head. Before and
+after, in seconds (before: measured at the heads where the input was first slow; peak resident memory of the
+run after):
 
-The slowest input I could construct for the code as it is now is a block label of 4 million `$` (1.5 seconds); next,
-4 MiB made of heredocs of the most lines allowed, empty or of one letter (1.3), and `$a` repeated to 4 MiB (1.2).
-A directory of such files takes the sum.
-No time is proved: the HCL library could have other paths that are slower than linear, and a new version of it needs
-the fuzz run below and these inputs again.
+| Input (all within the limit) | Before | After | Peak memory |
+| --- | --- | --- | --- |
+| `pattern = "` + `$a` x 200,000 + `"` (400 KB) | 25 | 0.12 | 136 MiB |
+| the same with `$${` x 200,000 (600 KB) | 7.9 | 0.11 | 91 MiB |
+| `$a` x 524,000 (1 MiB) | 162 | 0.31 | 416 MiB |
+| `$${` x 1,390,000 (4 MiB) | 412 | 0.73 | 568 MiB |
+| `$a` x 2,090,000 (4 MiB) | not finished in 450 | 1.25 | 1,407 MiB |
+| one entity of 40,000 properties and a collection of 55,000 fields bound to them (4.1 MB, HCL) | 83 | 0.54 | 611 MiB |
+| the same in JSON, 60,000 properties and 80,000 binds (4.1 MB) | 206 | 0.14 | 120 MiB |
+| 60,000 components and a `use` list of 280,000 names (4.1 MB) | 32 | 0.70 | 613 MiB |
+| an enum of 225,000 repeats of one value (1.1 MB) | | 0.32 (1,001 findings, 91 KB) | 397 MiB |
+| 2,080 heredocs of 999 lines (2.1 MB) | | 0.96 | 902 MiB |
+| `values = [1e10000000]` (37 bytes) | 12.2, lints clean | refused, 0.00 | 13 MiB |
+| `max_len = 1e4000000` | 2.8, lints clean | refused, 0.00 | 13 MiB |
+| an integer of 4,190,000 digits (4.19 MB) | 12.5, lints clean | refused, 0.12 | 22 MiB |
+| a name of 200,000 bytes and 200 properties of unknown type (208 KB) | 0.20, 40 MB of findings, 96 MiB | refused, 0.01, 131 bytes | 14 MiB |
+| a name of 2,000,000 bytes and 1,000 properties of unknown type (2 MB) | 3.9 GiB at its peak and 1,907 MiB of findings (a reviewer's figures; not re-run, too large to run here) | refused, 0.07, 131 bytes | 22 MiB |
+| a label of 4 million `$` (4 MB) | 1.5 | refused, 0.44 | 1,557 MiB |
+
+The slowest is 1.25 seconds (`$a` repeated to 4 MiB), then 1.0 (the heredocs). The last row shows what is not
+bounded: the lexer holds every token of a file at once, and 4 million tokens take about 1.5 GiB before the
+name limit is applied; the 4 MiB file limit is what bounds that. These are 16 inputs, not every input, and no
+time or memory is proved: the HCL library could have other paths that are slower than linear, and a new version
+of it needs the fuzz run below and these inputs again. A directory of such files takes the sum.
 
 **What is and is not proved.** The checks are a test of the tokens, so nothing recursive in the HCL parser
 is reachable except the nesting of braces and brackets, which is bounded. There is a test that runs
@@ -295,7 +334,12 @@ recurse (it fails by overflowing the stack if the pre-parse refusal is removed),
 refused token. A new version of the `hcl` library, which could add tokens or recursion, needs
 `scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
 crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
-lints clean). The fuzz targets are skipped in `go test` and are not in the coverage gate.
+lints clean, and one input costs a bounded amount of work: at most 4 MiB plus 2,000 bytes allocated for each
+byte of input, counted by the allocator and not by time, and under ten seconds; an input over the budget fails
+the run like a crash. `scripts/fuzz.sh` reads the fuzzer's own progress lines, prints the executions and the
+rate in the first and in the last fifth of each run, and fails when no execution happened in the last fifth or the
+rate there fell below a tenth of the first. The fuzz targets are skipped in `go test` and are not in the coverage
+gate.
 
 ## Export
 
@@ -323,6 +367,11 @@ datatug/chinookdb's `model/chinook.modelspec.hcl` is byte-identical to its commi
 objects and of items in arrays does** (the Directory compares a model with its registered copy
 the same way). The module identity is read from the committed file unless `--module-*` flags are
 given. `--out` cannot be combined with `--check`.
+
+Every file a command reads has the 4 MiB limit, the committed JSON that `--check` reads too (one over it is
+refused without being read, exit 1). `export` refuses to write a JSON twin over the limit, since `lint` would refuse
+it: valid HCL of 3.6 to 4.1 MB can export to 4.9 to 6.9 MB (1.3 to 1.7 times the size). It exits 1, writes nothing,
+and says why.
 
 ### Open points
 
@@ -452,11 +501,14 @@ The tests in `internal/covergate` parse `.github/workflows` and fail if:
   the comment after it;
 - a second workflow is named `CI`, or any file other than `ci.yml` and `release.yml` is under
   `.github/workflows` (a new workflow has to be added to an explicit allow-list with its reason);
-- any Go file has a build constraint, so nothing can hide from the gate.
+- any Go file has a build constraint, so nothing can hide from the gate (a test; the gate refuses one too, below).
 
-The gate itself also refuses a `TestMain` anywhere in the module (it reads the test files of every package): a
-`TestMain` can run the tests and then exit 0, which hides a failing test while every statement still counts as
-covered. If a package needs set-up or tear-down, do it in the tests that need it with `t.Cleanup`, or give the code a
+The gate itself also reads every `.go` file of every package directory of the module, whatever its name or build
+constraint (it does not rely on the file list of the Go tool, which has only the files this platform and these tags
+build), and refuses a `TestMain` in any of them, including one behind `//go:build race` or in `x_linux_test.go`,
+and any build constraint (a `//go:build` or `// +build` line, or a GOOS or GOARCH file-name suffix): a `TestMain`
+can run the tests and then exit 0, which hides a failing test while every statement still counts as
+covered, and a file with a constraint can be left out of a test run and so of the profile. If a package needs set-up or tear-down, do it in the tests that need it with `t.Cleanup`, or give the code a
 seam (a parameter or a variable) that a test sets.
 
 **These tests are a tripwire, not the control.** They run in the pull request that changes the workflows, so
