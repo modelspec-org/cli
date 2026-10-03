@@ -123,10 +123,10 @@ func ParseNode(src []byte) (*Node, error) {
 	dec.UseNumber()
 	lines := newLineIndex(src)
 	var dups []Field
-	n, err := readNode(dec, lines, &dups, 0)
+	n, err := readNode(dec, lines, &dups, 0, "")
 	if err != nil {
-		if le, ok := err.(*depthError); ok {
-			return nil, &syntaxError{line: le.line, limit: true, msg: fmt.Sprintf("nesting is deeper than %d levels", MaxDepth)}
+		if le, ok := err.(*limitError); ok {
+			return nil, &syntaxError{line: le.line, limit: true, msg: le.msg}
 		}
 		return nil, wrapJSONError(err, lines)
 	}
@@ -155,13 +155,20 @@ func wrapJSONError(err error, lines lineIndex) error {
 	return &syntaxError{line: len(lines), msg: "unexpected end of input"}
 }
 
-// depthError reports a document nested deeper than MaxDepth; reading stops there,
-// so the recursion of readNode is bounded.
-type depthError struct{ line int }
+// limitError reports a document that exceeds a limit (nesting deeper than
+// MaxDepth, a number or a name past its limit, limits.go); reading stops there, so
+// the recursion of readNode is bounded and no later stage sees the token.
+type limitError struct {
+	line int
+	msg  string
+}
 
-func (e *depthError) Error() string { return "nesting is too deep" }
+func (e *limitError) Error() string { return e.msg }
 
-func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int) (*Node, error) {
+// readNode reads one value. ctx is the key the value stands under, and the key
+// of its array behind a "[" when it is an item of one: it says whether a string is
+// a name.
+func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int, ctx string) (*Node, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, err
@@ -170,7 +177,7 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int) (*No
 	switch t := tok.(type) {
 	case json.Delim:
 		if depth++; depth > MaxDepth {
-			return nil, &depthError{line}
+			return nil, &limitError{line, fmt.Sprintf("nesting is deeper than %d levels", MaxDepth)}
 		}
 		if t == '{' {
 			n := &Node{Type: NodeObject, Line: line}
@@ -181,11 +188,14 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int) (*No
 					return nil, err
 				}
 				kline := lines.at(dec.InputOffset())
-				v, err := readNode(dec, lines, dups, depth)
+				key := kt.(string)
+				if msg := nameProblem("a key", len(key)); msg != "" {
+					return nil, &limitError{kline, msg}
+				}
+				v, err := readNode(dec, lines, dups, depth, key)
 				if err != nil {
 					return nil, err
 				}
-				key := kt.(string)
 				if seen[key] {
 					*dups = append(*dups, Field{Key: key, Value: v, Line: kline})
 				}
@@ -196,8 +206,9 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int) (*No
 			return n, err
 		}
 		n := &Node{Type: NodeArray, Line: line}
+		itemCtx := "[" + ctx
 		for dec.More() {
-			v, err := readNode(dec, lines, dups, depth)
+			v, err := readNode(dec, lines, dups, depth, itemCtx)
 			if err != nil {
 				return nil, err
 			}
@@ -206,10 +217,18 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int) (*No
 		_, err := dec.Token() // the closing ]
 		return n, err
 	case string:
+		if nameAttrs[ctx] || (len(ctx) > 0 && ctx[0] == '[' && listNameAttrs[ctx[1:]]) {
+			if msg := nameProblem("a name", len(t)); msg != "" {
+				return nil, &limitError{line, msg}
+			}
+		}
 		return &Node{Type: NodeString, Str: t, Line: line}, nil
 	case bool:
 		return &Node{Type: NodeBool, Bool: t, Line: line}, nil
 	case json.Number:
+		if msg := numberProblem(t.String()); msg != "" {
+			return nil, &limitError{line, msg}
+		}
 		return &Node{Type: NodeNumber, Str: t.String(), Line: line}, nil
 	default: // nil
 		return &Node{Type: NodeNull, Line: line}, nil

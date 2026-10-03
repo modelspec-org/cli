@@ -323,8 +323,8 @@ func TestJSONDepth(t *testing.T) {
 	if !m.Broken || len(fs) != 1 || fs[0].Rule != RuleLimit || strings.Contains(fs[0].Message, "not valid JSON") {
 		t.Errorf("through the reader: broken %v, %v", m.Broken, fs)
 	}
-	if (&depthError{}).Error() == "" {
-		t.Error("depthError has no message")
+	if (&limitError{msg: "m"}).Error() != "m" {
+		t.Error("limitError has no message")
 	}
 }
 

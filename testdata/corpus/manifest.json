@@ -1438,6 +1438,48 @@
     "shop=parts"
    ]
   },
+  "standalone/name-over-255-bytes": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
+  "standalone/number-exponent-over-100": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
+  "standalone/number-over-40-characters": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
   "standalone/query-201-wildcards": {
    "default": {
     "verdict": "accept"

@@ -111,7 +111,8 @@ var valueEnd = map[hclsyntax.TokenType]bool{
 // hclLiterals returns findings for what must stop a lexed HCL source being
 // parsed: a token that a literal value cannot contain (rule literal, one finding
 // for each construct on a line, at most MaxSyntaxFindings), or nesting deeper than
-// MaxDepth or a heredoc longer than MaxHeredocLines (rule limit). Only real
+// MaxDepth, a heredoc longer than MaxHeredocLines, a number or a name over its
+// limit (limits.go) (rule limit). Only real
 // tokens count: brackets, quotes and operators inside strings, heredocs and
 // comments are text, and `-` is allowed as the sign of a number.
 func hclLiterals(file string, lexed hclsyntax.Tokens) []Finding {
@@ -127,9 +128,31 @@ func hclLiterals(file string, lexed hclsyntax.Tokens) []Finding {
 	seen := map[string]bool{}
 	depth, lines := 0, 0
 	prev := hclsyntax.TokenNil
+	attr := "" // the name of the attribute whose value is being read
 	for i := range significant {
 		t := tok(i)
 		what := notLiteral[t.Type]
+		problem := ""
+		switch t.Type {
+		case hclsyntax.TokenNumberLit:
+			problem = numberProblem(string(t.Bytes))
+		case hclsyntax.TokenIdent:
+			problem = nameProblem("an identifier", len(t.Bytes))
+		case hclsyntax.TokenEqual:
+			if prev == hclsyntax.TokenIdent {
+				attr = string(tok(i - 1).Bytes)
+			}
+		case hclsyntax.TokenOQuote:
+			// A string is a name when it labels a block (after the block type or
+			// another label), is the value of an attribute that holds a name, or an
+			// item of one that holds a list of them.
+			isName := prev == hclsyntax.TokenIdent || prev == hclsyntax.TokenCQuote ||
+				(nameAttrs[attr] && prev == hclsyntax.TokenEqual) ||
+				(listNameAttrs[attr] && (prev == hclsyntax.TokenOBrack || prev == hclsyntax.TokenComma))
+			if isName {
+				problem = nameProblem("a name", quotedLength(tok, i, len(significant)))
+			}
+		}
 		switch t.Type {
 		case hclsyntax.TokenOHeredoc:
 			lines = 0
@@ -161,7 +184,13 @@ func hclLiterals(file string, lexed hclsyntax.Tokens) []Finding {
 			}
 		}
 		prev = t.Type
-		if what == "" {
+		rule, msg := RuleLiteral, ""
+		switch {
+		case what != "":
+			msg = what + " is not literal syntax (decision 0009: a ModelSpec value is a string, number, boolean or list); the file is refused before it is parsed"
+		case problem != "":
+			rule, what, msg = RuleLimit, problem, problem
+		default:
 			continue
 		}
 		line := t.Range.Start.Line
@@ -171,9 +200,24 @@ func hclLiterals(file string, lexed hclsyntax.Tokens) []Finding {
 		}
 		seen[key] = true
 		if len(out) == MaxSyntaxFindings {
-			return append(out, Finding{File: file, Line: line, Rule: RuleLiteral, Severity: SeverityError, Message: fmt.Sprintf("more non-literal syntax follows; only the first %d are shown", MaxSyntaxFindings)})
+			more := "non-literal syntax"
+			if rule == RuleLimit {
+				more = "numbers and names over their limits"
+			}
+			return append(out, Finding{File: file, Line: line, Rule: rule, Severity: SeverityError, Message: fmt.Sprintf("more %s follows; only the first %d are shown", more, MaxSyntaxFindings)})
 		}
-		out = append(out, Finding{File: file, Line: line, Rule: RuleLiteral, Severity: SeverityError, Message: what + " is not literal syntax (decision 0009: a ModelSpec value is a string, number, boolean or list); the file is refused before it is parsed"})
+		out = append(out, Finding{File: file, Line: line, Rule: rule, Severity: SeverityError, Message: msg})
 	}
 	return out
+}
+
+// quotedLength returns the length in bytes, as written, of the quoted string
+// whose opening quote is the significant token i of n: the text between the
+// quotes (interpolations and directives were refused before, so it is all text).
+func quotedLength(tok func(int) hclsyntax.Token, i, n int) int {
+	length := 0
+	for j := i + 1; j < n && tok(j).Type == hclsyntax.TokenQuotedLit; j++ {
+		length += len(tok(j).Bytes)
+	}
+	return length
 }

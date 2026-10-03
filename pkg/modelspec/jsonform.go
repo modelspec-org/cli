@@ -122,7 +122,7 @@ func (p *jsonReader) version(root *Node) {
 	case !ok || v.Type != NodeString:
 		p.add(root.Line, RuleVersion, `has no "modelspec" version (a string; the only defined value is "`+SpecVersion+`")`)
 	case v.Str != SpecVersion:
-		p.add(v.Line, RuleVersion, fmt.Sprintf(`"modelspec" is %q; the only defined value is %q`, v.Str, SpecVersion))
+		p.add(v.Line, RuleVersion, fmt.Sprintf(`"modelspec" is %s; the only defined value is %q`, quote1(v.Str), SpecVersion))
 	}
 }
 

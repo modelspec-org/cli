@@ -2,6 +2,7 @@ package modelspec
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -110,16 +111,88 @@ func TestFindingsLimitKeepsTheVerdict(t *testing.T) {
 	if HasErrors(res.Findings) {
 		t.Error("only warnings were dropped, and the run has an error")
 	}
-	// The same, with an error after the warnings, which is dropped: the verdict is the same as unlimited.
+	// The same, with an error after the warnings: the error is listed, and a warning is dropped in its place.
 	withError := head + member("dup") + member("dup") + "}\n"
 	res, _ = Lint(newMemFS(map[string]string{"e" + hclExt: withError}), []string{"."}, LintOptions{})
 	last := finalFinding(t, res.Findings)
-	if last.Severity != SeverityError || !HasErrors(res.Findings) || !strings.Contains(last.Message, "(1 errors, 100 warnings)") {
-		t.Fatalf("an error was dropped: %v", last)
+	if last.Severity != SeverityWarning || !HasErrors(res.Findings) || !strings.Contains(last.Message, "(0 errors, 101 warnings)") {
+		t.Fatalf("the error was not kept in place of a warning: %v", last)
 	}
+	listed := 0
 	for _, f := range res.Findings {
 		if f.Severity == SeverityError && f.Rule != RuleLimit {
-			t.Fatalf("the error was meant to be dropped, it is listed: %v", f)
+			listed++
+		}
+	}
+	if listed != 1 || !sort.SliceIsSorted(res.Findings[:MaxFindings], func(i, j int) bool { return res.Findings[i].Line < res.Findings[j].Line }) {
+		t.Fatalf("%d errors listed, or the output is not in order", listed)
+	}
+}
+
+// Errors are kept in preference to warnings, in whichever order they come, and an
+// error is dropped only when more than MaxFindings errors came.
+func TestErrorsAreKeptInPreferenceToWarnings(t *testing.T) {
+	t.Parallel()
+	mk := func(sev Severity, n int) Finding {
+		return Finding{File: "f", Line: n, Rule: "r", Severity: sev, Message: "m"}
+	}
+	for name, order := range map[string]func(l *findingList){
+		"warnings then the error": func(l *findingList) {
+			for i := 1; i <= 1500; i++ {
+				l.put(mk(SeverityWarning, i))
+			}
+			l.put(mk(SeverityError, 2000))
+		},
+		"the error then warnings": func(l *findingList) {
+			l.put(mk(SeverityError, 2000))
+			for i := 1; i <= 1500; i++ {
+				l.put(mk(SeverityWarning, i))
+			}
+		},
+		"errors between warnings": func(l *findingList) {
+			for i := 1; i <= 1500; i++ {
+				l.put(mk(SeverityWarning, i))
+				if i%500 == 0 {
+					l.put(mk(SeverityError, 3000+i))
+				}
+			}
+		},
+	} {
+		var l findingList
+		order(&l)
+		got := l.result()
+		errs := 0
+		for _, f := range got[:MaxFindings] {
+			if f.Severity == SeverityError {
+				errs++
+			}
+		}
+		wantErrs := 1
+		if name == "errors between warnings" {
+			wantErrs = 3
+		}
+		if len(got) != MaxFindings+1 || errs != wantErrs || got[MaxFindings].Severity != SeverityWarning || !strings.Contains(got[MaxFindings].Message, fmt.Sprintf("(0 errors, %d warnings)", 1500+wantErrs-MaxFindings)) {
+			t.Errorf("%s: %d findings, %d errors listed, last %v", name, len(got), errs, got[len(got)-1])
+		}
+		if !sort.SliceIsSorted(got[:MaxFindings], func(i, j int) bool { return got[i].Line < got[j].Line }) {
+			t.Errorf("%s: not sorted", name)
+		}
+	}
+	// More errors than the limit: the extra errors are dropped, as errors.
+	var l findingList
+	for i := 1; i <= 300; i++ {
+		l.put(mk(SeverityWarning, i))
+	}
+	for i := 1; i <= MaxFindings+5; i++ {
+		l.put(mk(SeverityError, 5000+i))
+	}
+	got := l.result()
+	if last := got[len(got)-1]; last.Severity != SeverityError || !strings.Contains(last.Message, fmt.Sprintf("%d more findings (5 errors, 300 warnings)", 305)) {
+		t.Errorf("last = %v", last)
+	}
+	for _, f := range got[:MaxFindings] {
+		if f.Severity != SeverityError {
+			t.Fatalf("a warning is listed beside %d errors: %v", MaxFindings, f)
 		}
 	}
 }

@@ -169,6 +169,11 @@ type checker struct {
 }
 
 func (c *checker) add(line int, rule string, sev Severity, format string, args ...any) {
+	for i, a := range args {
+		if text, ok := a.(string); ok {
+			args[i] = clipText(text, MaxEchoBytes)
+		}
+	}
 	c.put(Finding{File: c.cur.File, Line: line, Rule: rule, Severity: sev, Message: fmt.Sprintf(format, args...)})
 }
 
@@ -185,7 +190,8 @@ func conceptScope(k Kind) string {
 	}
 }
 
-func quote1(s string) string { return fmt.Sprintf("%q", s) }
+// quote1 quotes a piece of the user's text for a message, cut to MaxEchoBytes.
+func quote1(s string) string { return fmt.Sprintf("%q", clipText(s, MaxEchoBytes)) }
 
 func (c *checker) unit(u *unit) {
 	c.duplicates(u)
@@ -349,7 +355,7 @@ func (c *checker) enum(k *Concept) {
 	if !ok {
 		return // reported as an attribute type problem
 	}
-	c.valueList(a.Line, fmt.Sprintf("enum %q", k.Name), vals)
+	c.valueList(a.Line, "enum "+quote1(k.Name), vals)
 }
 
 // valueList checks that a list of enum values is non-empty and has no repeats.
@@ -370,7 +376,7 @@ func (c *checker) valueList(line int, who string, vals []string) {
 
 func (c *checker) entity(u *unit, k *Concept) {
 	c.members(u, k)
-	who := fmt.Sprintf("entity %q", k.Name)
+	who := "entity " + quote1(k.Name)
 	if use, ok := k.Attr("use"); ok {
 		if names, ok := use.Value.stringList(); ok {
 			for _, n := range names {
@@ -495,7 +501,7 @@ func (c *checker) members(u *unit, k *Concept) {
 	seen := map[string]int{}
 	foldedMembers := map[string]string{}
 	for _, mem := range k.Members {
-		who := fmt.Sprintf("%s %q %s %q", k.Kind, k.Name, memberWord(k.Kind), mem.Name)
+		who := fmt.Sprintf("%s %s %s %s", k.Kind, quote1(k.Name), memberWord(k.Kind), quote1(mem.Name))
 		if strings.TrimSpace(mem.Name) == "" {
 			c.errorf(mem.Line, RuleNameForm, "%s name must not be empty or blank in %s %q; it could never be referenced", memberWord(k.Kind), k.Kind, k.Name)
 		}
@@ -571,7 +577,7 @@ func (c *checker) lookup(u *unit, ref string) (target *unit, name, problem strin
 		return u, ref, ""
 	}
 	if strings.Contains(name, ".") || module == "" || name == "" {
-		return nil, "", fmt.Sprintf("%q is not a bare name or a <module>.<Name> reference", ref)
+		return nil, "", quote1(ref) + " is not a bare name or a <module>.<Name> reference"
 	}
 	targets := c.byName[module]
 	switch {
@@ -585,9 +591,9 @@ func (c *checker) lookup(u *unit, ref string) (target *unit, name, problem strin
 		}
 		return targets[0], name, ""
 	case len(targets) > 1:
-		return nil, "", fmt.Sprintf("module %q is ambiguous: %d different sources claim it (%s)", module, len(targets), sourceList(targets))
+		return nil, "", fmt.Sprintf("module %s is ambiguous: %d different sources claim it (%s)", quote1(module), len(targets), sourceList(targets))
 	default:
-		return nil, "", fmt.Sprintf("unknown module %q (lint the files that declare it together with this one, or name it with --module %s=<path>)", module, module)
+		return nil, "", fmt.Sprintf("unknown module %s (lint the files that declare it together with this one, or name it with --module %s=<path>)", quote1(module), clipText(module, MaxEchoBytes))
 	}
 }
 
@@ -658,7 +664,7 @@ func (c *checker) bind(u *unit, a *Attr, who string) {
 
 func (c *checker) collection(u *unit, k *Concept) {
 	c.members(u, k)
-	who := fmt.Sprintf("collection %q", k.Name)
+	who := "collection " + quote1(k.Name)
 	kind, hasKind := k.Attr("kind")
 	if hasKind && kind.Value.Type == NodeString {
 		switch kind.Value.Str {
@@ -681,7 +687,7 @@ func (c *checker) collection(u *unit, k *Concept) {
 func (c *checker) recordset(u *unit, k *Concept) {
 	allowed := memberAttrs(KindRecordset)
 	for _, col := range k.Members {
-		who := fmt.Sprintf("recordset %q column %q", k.Name, col.Name)
+		who := fmt.Sprintf("recordset %s column %s", quote1(k.Name), quote1(col.Name))
 		c.attrs(who, col.Attrs, allowed)
 		if a, ok := col.Attr("type"); ok && a.Value.Type == NodeString {
 			c.typeName(a, who)
@@ -749,7 +755,7 @@ func (c *checker) publishEntity(u *unit, k *Concept) {
 		c.errorf(k.Line, RulePublishProperties, "entity %q has no properties of its own; the catalogue lists an entity by its properties", k.Name)
 	}
 	for _, mem := range k.Members {
-		who := fmt.Sprintf("entity %q property %q", k.Name, mem.Name)
+		who := fmt.Sprintf("entity %s property %s", quote1(k.Name), quote1(mem.Name))
 		if !identifier.MatchString(mem.Name) {
 			c.errorf(mem.Line, RulePublishNameForm, "property name %q of entity %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue turns property names into column names", mem.Name, k.Name)
 		}

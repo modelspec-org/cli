@@ -106,13 +106,28 @@ type findingList struct {
 	droppedFile string // the file of the first finding dropped
 	count       int
 	errors      int
+	evict       int // every finding of list before this one is an error
 }
 
-// put keeps the finding, or counts it when the list is full.
+// put keeps the finding, or counts it when the list is full. Every message is cut
+// to MaxMessageBytes here, the one place all findings pass, so that no finding is
+// larger than that however large the input is. When the list is full an error
+// takes the place of a warning, so that errors are listed first; one is dropped
+// only when MaxFindings errors are already there.
 func (l *findingList) put(f Finding) {
+	f.Message = clipText(f.Message, MaxMessageBytes)
 	if len(l.list) < MaxFindings {
 		l.list = append(l.list, f)
 		return
+	}
+	if f.Severity == SeverityError {
+		for ; l.evict < len(l.list); l.evict++ {
+			if l.list[l.evict].Severity != SeverityError {
+				f, l.list[l.evict] = l.list[l.evict], f
+				l.evict++
+				break
+			}
+		}
 	}
 	if l.count == 0 {
 		l.droppedFile = f.File
