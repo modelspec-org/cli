@@ -14,7 +14,11 @@ import (
 // the real HCL parser; a syntax error yields a Broken model.
 func ParseHCL(file string, src []byte) (*Model, []Finding) {
 	m := &Model{File: file, Form: FormHCL, Name: moduleNameFromFile(file), Group: file}
-	if f, bad := precheck(file, FormHCL, src); bad {
+	if f, bad := precheck(file, src); bad {
+		m.Broken = true
+		return m, []Finding{f}
+	}
+	if f, bad := hclLimits(file, src); bad {
 		m.Broken = true
 		return m, []Finding{f}
 	}
@@ -22,10 +26,14 @@ func ParseHCL(file string, src []byte) (*Model, []Finding) {
 	parsed, diags := hclsyntax.ParseConfig(src, file, hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
 		m.Broken = true
+		shown := 0
 		for _, d := range diags {
-			if d.Severity == hcl.DiagError {
-				p.add(diagLine(d), RuleSyntax, d.Summary)
+			// The syntax parser reports errors only.
+			if shown++; shown > MaxSyntaxFindings {
+				p.add(diagLine(d), RuleSyntax, fmt.Sprintf("more syntax errors follow; only the first %d are shown", MaxSyntaxFindings))
+				break
 			}
+			p.add(diagLine(d), RuleSyntax, d.Summary)
 		}
 		SortFindings(p.findings)
 		return m, p.findings

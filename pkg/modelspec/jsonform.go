@@ -44,7 +44,7 @@ func (p *jsonReader) warn(line int, rule, msg string) {
 // may have no properties.
 func ParseJSON(file string, src []byte) (*Model, []Finding) {
 	m := &Model{File: file, Form: FormJSON, Name: moduleNameFromFile(file), Group: file}
-	if f, bad := precheck(file, FormJSON, src); bad {
+	if f, bad := precheck(file, src); bad {
 		m.Broken = true
 		return m, []Finding{f}
 	}
@@ -54,7 +54,11 @@ func ParseJSON(file string, src []byte) (*Model, []Finding) {
 		m.Broken = true
 		// ParseNode only returns *syntaxError.
 		se := err.(*syntaxError)
-		p.add(se.line, RuleSyntax, "not valid JSON: "+se.msg)
+		if se.limit {
+			p.add(se.line, RuleLimit, se.msg)
+		} else {
+			p.add(se.line, RuleSyntax, "not valid JSON: "+se.msg)
+		}
 		return m, p.findings
 	}
 	if root.Type != NodeObject {
@@ -62,6 +66,7 @@ func ParseJSON(file string, src []byte) (*Model, []Finding) {
 		p.add(root.Line, RuleShape, fmt.Sprintf("a ModelSpec JSON document must be an object, not %s", root.typeName()))
 		return m, p.findings
 	}
+	m.Root = root
 	for _, d := range root.Dups {
 		p.add(d.Line, RuleDuplicate, fmt.Sprintf("duplicate key %q in one object; names are unique, and JSON readers disagree on which of two equal keys wins", d.Key))
 	}

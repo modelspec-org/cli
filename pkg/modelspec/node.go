@@ -123,8 +123,11 @@ func ParseNode(src []byte) (*Node, error) {
 	dec.UseNumber()
 	lines := newLineIndex(src)
 	var dups []Field
-	n, err := readNode(dec, lines, &dups)
+	n, err := readNode(dec, lines, &dups, 0)
 	if err != nil {
+		if le, ok := err.(*depthError); ok {
+			return nil, &syntaxError{line: le.line, limit: true, msg: fmt.Sprintf("nesting is deeper than %d levels", MaxDepth)}
+		}
 		return nil, wrapJSONError(err, lines)
 	}
 	n.Dups = dups
@@ -135,8 +138,9 @@ func ParseNode(src []byte) (*Node, error) {
 }
 
 type syntaxError struct {
-	line int
-	msg  string
+	line  int
+	msg   string
+	limit bool // the document exceeds MaxDepth; it is not a syntax error
 }
 
 func (e *syntaxError) Error() string { return e.msg }
@@ -151,7 +155,13 @@ func wrapJSONError(err error, lines lineIndex) error {
 	return &syntaxError{line: len(lines), msg: "unexpected end of input"}
 }
 
-func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field) (*Node, error) {
+// depthError reports a document nested deeper than MaxDepth; reading stops there,
+// so the recursion of readNode is bounded.
+type depthError struct{ line int }
+
+func (e *depthError) Error() string { return "nesting is too deep" }
+
+func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int) (*Node, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, err
@@ -159,6 +169,9 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field) (*Node, error) 
 	line := lines.at(dec.InputOffset())
 	switch t := tok.(type) {
 	case json.Delim:
+		if depth++; depth > MaxDepth {
+			return nil, &depthError{line}
+		}
 		if t == '{' {
 			n := &Node{Type: NodeObject, Line: line}
 			seen := map[string]bool{}
@@ -168,7 +181,7 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field) (*Node, error) 
 					return nil, err
 				}
 				kline := lines.at(dec.InputOffset())
-				v, err := readNode(dec, lines, dups)
+				v, err := readNode(dec, lines, dups, depth)
 				if err != nil {
 					return nil, err
 				}
@@ -184,7 +197,7 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field) (*Node, error) 
 		}
 		n := &Node{Type: NodeArray, Line: line}
 		for dec.More() {
-			v, err := readNode(dec, lines, dups)
+			v, err := readNode(dec, lines, dups, depth)
 			if err != nil {
 				return nil, err
 			}

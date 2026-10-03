@@ -114,6 +114,11 @@ type Model struct {
 	// name: it is the interchange copy of that module, not a second module, and
 	// references into the module resolve to the HCL.
 	Twin bool
+	// TwinOf is the HCL model whose export a Twin is the copy of, when that is one
+	// HCL file; Check compares the two.
+	TwinOf *Model
+	// Root is the parsed document of a JSON file (nil for HCL).
+	Root *Node
 	// Module is the identity from a JSON file; nil for HCL.
 	Module *ModuleIdentity
 	// ModuleLine is the line of the JSON module object (0 for HCL).
