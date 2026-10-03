@@ -8,6 +8,11 @@
 // module-qualified references among them, and Model.JSON writes the JSON
 // interchange form.
 //
+// Check applies one of two profiles. The default implements the standard and
+// nothing else; ProfilePublish adds what public catalogues require. A module is a
+// set of files: Load assigns files to modules (SpecScore layout, file name, or an
+// explicit Assignment), and Check resolves names across a module's files.
+//
 // The package never exits the process, never touches the network and reads
 // files only through the FS interface it is given.
 //
