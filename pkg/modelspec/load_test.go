@@ -74,25 +74,27 @@ func TestDiscoverErrors(t *testing.T) {
 	if _, _, err := Discover(fsys, []string{"d/y.modelspec.hcl"}); !errors.Is(err, boom) {
 		t.Errorf("Abs error for a named file: %v", err)
 	}
+	delete(fsys.absErr, "d/y.modelspec.hcl")
 	// A file a search finds but cannot read is a warning, not the end of the run.
-	for name, inject := range map[string]func(){
-		"abs":  func() { fsys.absErr["d/y.modelspec.hcl"] = boom },
-		"stat": func() { delete(fsys.absErr, "d/y.modelspec.hcl"); fsys.statErr["d/y.modelspec.hcl"] = boom },
+	// Each case has its own file system and its own error, and asserts that its
+	// error is the one in the warning: a case whose injected call is not reached
+	// fails instead of passing on another path's warning.
+	for _, tc := range []struct {
+		name   string
+		inject func(*memFS, error)
+	}{
+		{"abs", func(m *memFS, err error) { m.absErr["d/y.modelspec.hcl"] = err }},
+		{"stat", func(m *memFS, err error) { m.statErr["d/y.modelspec.hcl"] = err }},
 	} {
-		inject()
-		got, warnings, err := Discover(fsys, []string{"d"})
-		if name == "stat" {
-			if err != nil || len(got) != 0 || len(warnings) != 1 || warnings[0].Rule != RuleIO || warnings[0].Severity != SeverityWarning || !strings.Contains(warnings[0].Message, "boom") {
-				t.Errorf("%s: unreadable found file: %v %v %v", name, got, warnings, err)
-			}
-			continue
-		}
-		if err != nil || len(got) != 0 || len(warnings) != 1 || warnings[0].Rule != RuleIO {
-			t.Errorf("%s: unreadable found file: %v %v %v", name, got, warnings, err)
+		cause := errors.New(tc.name + "-failure")
+		each := newMemFS(map[string]string{"d/y.modelspec.hcl": okEntity})
+		tc.inject(each, cause)
+		got, warnings, err := Discover(each, []string{"d"})
+		if err != nil || len(got) != 0 || len(warnings) != 1 || warnings[0].Rule != RuleIO || warnings[0].Severity != SeverityWarning || !strings.Contains(warnings[0].Message, cause.Error()) {
+			t.Errorf("%s: unreadable found file: %v %v %v", tc.name, got, warnings, err)
 		}
 	}
 	fsys.absErr["."] = boom
-	delete(fsys.statErr, "d/y.modelspec.hcl")
 	if _, _, err := Discover(fsys, []string{"."}); !errors.Is(err, boom) {
 		t.Errorf("Abs error for a named directory: %v", err)
 	}
