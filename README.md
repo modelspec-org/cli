@@ -250,7 +250,7 @@ Brackets, quotes and operators inside strings, heredocs and comments are text, s
 rest), each at most 1,024 bytes of message, plus its path, line number, severity and rule (at most 64 bytes
 besides the path): at most 1,001 x (1,088 + the length of the path) bytes, about 1.1 MB, in the text format; in
 `--format json` a byte can be written as six (`\u003c`), so at most about 6.5 MB. A test builds a model with
-1,500 findings that echo the longest names and values and asserts the bound (it gives 686 KB).
+1,001 findings that echo the longest names and values and asserts the bound (it gives 395 KB).
 
 Real models nest four or five levels in HCL and six to eight in JSON, and no query or pattern comes near a
 thousand lines.
@@ -266,10 +266,10 @@ and `%` in the value), and the pieces left are the lines of a heredoc, which are
 character after it in a quoted string are one unit that the rewrite does not touch, so `"\$"` reaches the
 library as written and is refused (`Invalid escape sequence`) as it is without the rewrite; and in a heredoc a
 carriage return right after a `$` or `%` stays with it, as the library's lexer takes it. A test compares the
-CLI with the unmodified library in both directions over 3,000 generated strings and heredocs full of `$`, `%`,
+CLI with the unmodified library in both directions over 800 generated strings and heredocs full of `$`, `%`,
 their escapes, a backslash before every kind of character, carriage returns and the private-use characters
 themselves: whatever the library refuses the CLI refuses, and whatever the library reads the CLI reads to the
-same value (1,458 were read by both, with the same value, and 1,542 were refused by both); there is no
+same value (374 were read by both, with the same value, and 426 were refused by both); there is no
 known input on which they differ. Over the corpus and 5.8 million valid files of an earlier review the values
 were identical; that is a measurement, not a proof. A string of 2 million `$a` (4 MiB) takes about 1.3 seconds.
 

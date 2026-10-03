@@ -38,6 +38,9 @@ type Env struct {
 	// Interactive reports whether stdin is a terminal; nil means the
 	// self-update library's own check.
 	Interactive func() bool
+	// MaxTwinBytes is the largest JSON twin export writes; zero means
+	// modelspec.MaxInputBytes, the largest file lint reads. A seam for tests.
+	MaxTwinBytes int
 }
 
 // OSEnv is the environment of the real process.

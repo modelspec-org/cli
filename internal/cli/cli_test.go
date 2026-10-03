@@ -816,25 +816,41 @@ func TestOSEnv(t *testing.T) {
 	}
 }
 
-// A model within the size limit can export to a twin over it, which lint would
-// then refuse: export refuses to write it (to a file or to standard output), and
-// says so.
+// A model within the size limit can export to a twin over it (valid HCL of 3.6 to
+// 4.1 MB exports to 4.9 to 6.9 MB), which lint would then refuse: export refuses to
+// write it, to a file or to standard output, and says so. The limit is the
+// environment's seam, set small so that the test does not build 4 MiB.
 func TestExportRefusesATwinOverTheLimit(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
 	b.WriteString("entity \"E\" {\n  key = [\"p0\"]\n")
-	for i := 0; i < 85000; i++ {
+	for i := 0; i < 200; i++ {
 		fmt.Fprintf(&b, "  property \"p%d\" { type = \"int\" }\n", i)
 	}
 	b.WriteString("}\n")
-	if b.Len() >= modelspec.MaxInputBytes {
-		t.Fatalf("the model is %d bytes, over the limit itself", b.Len())
+	for _, args := range [][]string{{"export", "a.modelspec.hcl"}, {"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}} {
+		h := newHarness(map[string]string{"a.modelspec.hcl": b.String()})
+		h.env.MaxTwinBytes = b.Len() // the HCL itself is within it; its twin is larger
+		code := h.run(append(args, exportID...)...)
+		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), "the JSON form of a.modelspec.hcl is") || !strings.Contains(h.errb.String(), fmt.Sprintf("over the %d-byte limit", b.Len())) || !strings.Contains(h.errb.String(), "nothing was written") {
+			t.Fatalf("%v: exit %d, stdout %d bytes, written %d, stderr %.300s", args, code, h.out.Len(), len(h.fsys.written), h.errb)
+		}
 	}
-	// The refusal comes before the choice of where to write, so one run stands for both.
-	h := newHarness(map[string]string{"a.modelspec.hcl": b.String()})
-	code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}, exportID...)...)
-	if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), "the JSON form of a.modelspec.hcl is") || !strings.Contains(h.errb.String(), "over the 4194304-byte limit") || !strings.Contains(h.errb.String(), "nothing was written") {
-		t.Fatalf("exit %d, stdout %d bytes, written %d, stderr %.300s", code, h.out.Len(), len(h.fsys.written), h.errb)
+	// A twin of exactly the limit is written.
+	h := newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
+	h.env.MaxTwinBytes = 1 << 20
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb)
+	}
+	h.env.MaxTwinBytes = h.out.Len()
+	h.out.Reset()
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 || h.out.Len() != h.env.MaxTwinBytes {
+		t.Fatalf("at the limit: exit %d, %d bytes: %s", code, h.out.Len(), h.errb)
+	}
+	h.env.MaxTwinBytes--
+	h.out.Reset()
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 1 || h.out.Len() != 0 {
+		t.Fatalf("one byte over: exit %d, %d bytes", code, h.out.Len())
 	}
 }
 

@@ -87,8 +87,12 @@ their JSON form.`,
 				return &exitError{code: ExitFindings, err: err}
 			}
 			twin := node.Encode()
-			if len(twin) > modelspec.MaxInputBytes {
-				return &exitError{code: ExitFindings, err: fmt.Errorf("the JSON form of %s is %d bytes, over the %d-byte limit on every file this tool reads, so lint and export --check would refuse it; nothing was written", args[0], len(twin), modelspec.MaxInputBytes)}
+			limit := env.MaxTwinBytes
+			if limit == 0 {
+				limit = modelspec.MaxInputBytes
+			}
+			if len(twin) > limit {
+				return &exitError{code: ExitFindings, err: fmt.Errorf("the JSON form of %s is %d bytes, over the %d-byte limit on every file this tool reads, so lint and export --check would refuse it; nothing was written", args[0], len(twin), limit)}
 			}
 			if out == "" {
 				_, err = env.Stdout.Write(twin)

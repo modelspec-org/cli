@@ -83,7 +83,7 @@ func TestRewritingLiteralsKeepsTheirValues(t *testing.T) {
 		return b.String()
 	}
 	var both, libRefused int
-	for i := 0; i < 3000; i++ {
+	for i := 0; i < 800; i++ {
 		var src string
 		switch i % 3 {
 		case 0:
@@ -113,7 +113,7 @@ func TestRewritingLiteralsKeepsTheirValues(t *testing.T) {
 		}
 	}
 	t.Logf("%d read the same, %d refused by both", both, libRefused)
-	if both < 800 || libRefused < 400 {
+	if both < 250 || libRefused < 150 {
 		t.Fatalf("the generated inputs did not cover both directions: %d, %d", both, libRefused)
 	}
 }

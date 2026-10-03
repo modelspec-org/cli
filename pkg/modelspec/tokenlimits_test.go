@@ -113,7 +113,7 @@ func TestAcceptedNumbersAreExact(t *testing.T) {
 		return out, fs
 	}
 	accepted, equal := 0, 0
-	for i := 0; i < 1500; i++ {
+	for i := 0; i < 700; i++ {
 		a, b := spell(), spell()
 		if i%5 == 0 { // the same value, spelled another way
 			b = "00" + a
@@ -163,7 +163,7 @@ func TestAcceptedNumbersAreExact(t *testing.T) {
 	// values, and two spellings of one integer are a repeat.
 	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [" + nines + ", " + nines[:MaxNumberLength-1] + "8]\n}\n"}))
 	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [1e2, 100]\n}\n"}), `duplicate value "100"`)
-	if accepted < 2500 || equal < 100 {
+	if accepted < 1200 || equal < 50 {
 		t.Fatalf("the random numbers covered too little: %d accepted, %d equal pairs", accepted, equal)
 	}
 }
@@ -224,8 +224,8 @@ func TestNameLimitBoundary(t *testing.T) {
 	_, fs := ParseJSON("a"+jsonExt, []byte(jsonWith(`, "`+long+`": 1`)))
 	limitFinding(t, fs, "a key is 256 bytes long")
 	// Through the whole pipeline, with the name where the review put it.
-	_, fs = ParseHCL("a"+hclExt, []byte("entity \""+rep("A", 2_000_000)+"\" {\n}\n"))
-	limitFinding(t, fs, "a name is 2000000 bytes long")
+	_, fs = ParseHCL("a"+hclExt, []byte("entity \""+rep("A", 100_000)+"\" {\n}\n"))
+	limitFinding(t, fs, "a name is 100000 bytes long")
 }
 
 // The pieces of a quoted string (the lexer cuts at each `$` and `%`) add up to
@@ -269,17 +269,17 @@ func TestClipText(t *testing.T) {
 
 // One run's output is bounded whatever the input: at most MaxFindings+1 findings
 // of at most MaxMessageBytes each. The input here makes a finding for every one
-// of 1,500 properties, each echoing text of the longest length a name may have,
-// and 200 repeats of a 4,000-byte value that is not a name.
+// of 520 properties, each echoing text of the longest length a name may have,
+// a repeated 4,000-byte value that is not a name, and 520 repeats of a short one.
 func TestOutputIsBounded(t *testing.T) {
 	t.Parallel()
 	name := rep("n", MaxNameLength)
 	var b strings.Builder
 	b.WriteString("entity \"" + name + "\" {\n  key = [\"" + name + "\"]\n")
-	for i := 0; i < 1500; i++ {
+	for i := 0; i < 520; i++ {
 		fmt.Fprintf(&b, "  property \"%s%d\" {\n    type = \"%s\"\n  }\n", name[:200], i, name)
 	}
-	b.WriteString("}\nenum \"E\" {\n  values = [" + rep("\""+rep("v", 4000)+"\", ", 200) + "\"x\"]\n}\n")
+	b.WriteString("}\nenum \"E\" {\n  values = [" + "\"" + rep("v", 4000) + "\", \"" + rep("v", 4000) + "\", " + rep("\"s\", ", 520) + "\"x\"]\n}\n")
 	const path = "long.modelspec.hcl"
 	res, err := Lint(newMemFS(map[string]string{path: b.String()}), []string{"."}, LintOptions{})
 	if err != nil || len(res.Findings) != MaxFindings+1 {

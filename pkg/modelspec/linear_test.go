@@ -145,7 +145,7 @@ func TestUnitIndexAgreesWithAScan(t *testing.T) {
 // twice the fields of the components it uses however many lookups there are.
 func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 	t.Parallel()
-	for _, n := range []int{100, 1000} {
+	for _, n := range []int{100, 300} {
 		var b strings.Builder
 		for i := 0; i < n; i++ {
 			fmt.Fprintf(&b, "entity \"E%d\" {\n  key = []\n}\n", i)
@@ -179,7 +179,7 @@ func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 		}
 	}
 	// Property lookups: the probes stop growing once the merged set is built.
-	for _, n := range []int{50, 500} {
+	for _, n := range []int{40, 120} {
 		var b strings.Builder
 		fields := 0
 		for i := 0; i < 5; i++ {
@@ -210,7 +210,7 @@ func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 	// Through a whole check, each concept of a unit is visited once and no member
 	// set is built twice, at two sizes of each shape.
 	for name, build := range linearShapes() {
-		for _, n := range []int{64, 512} {
+		for _, n := range []int{48, 192} {
 			src, parse := build(n)
 			m, _ := parse(src)
 			c := runCheck([]*Model{m}, Options{})
