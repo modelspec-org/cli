@@ -96,16 +96,28 @@ type ModuleIdentity struct {
 	Version string
 }
 
-// Model is one parsed ModelSpec module: the contents of one file.
+// Model is one parsed ModelSpec file. A module is one or more Models: the HCL
+// files of a module share a Group (see Load); a JSON file is a whole module.
 type Model struct {
-	File string
+	File string // as given or found, used in findings
 	Form Form
 	// Name is the module short name used to resolve module-qualified
-	// references: the file name without .modelspec.hcl for HCL, module.name
-	// for JSON ("" when the JSON has none).
+	// references. ParseHCL sets the file name without .modelspec.hcl; ParseJSON
+	// sets module.name, or that same file-name stem when the JSON has none; Load
+	// then applies the module rules (SpecScore layout, --module).
 	Name string
+	// Group identifies the module the file belongs to: files with the same Group
+	// are one module. ParseHCL and ParseJSON set it to File (one file, one
+	// module); Load groups the files of a module.
+	Group string
+	// Twin is set by Load on a JSON file that sits beside the HCL file of the same
+	// name: it is the interchange copy of that module, not a second module, and
+	// references into the module resolve to the HCL.
+	Twin bool
 	// Module is the identity from a JSON file; nil for HCL.
 	Module *ModuleIdentity
+	// ModuleLine is the line of the JSON module object (0 for HCL).
+	ModuleLine int
 	// Concepts are in source order.
 	Concepts []*Concept
 	// Unmapped lists HCL constructs the JSON form does not define.

@@ -1,395 +1,1215 @@
 {
- "about": "Expected verdict of `modelspec lint` for every corpus file. `differs` names the reader whose recorded verdict (testdata/golden) is different and says why; a file without it must have the same verdict.",
+ "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why: specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item without `differs` must have the same verdict as the reader recorded for it.",
  "items": {
   "hcl/chinook.modelspec.hcl": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
   },
   "hcl/collection-bind-unresolved.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "reference"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
    "differs": {
-    "specscore": "specscore does not resolve collection bind values; the JSON format requires references, including bind, to resolve (spec/json-format.md, Validation Requirements)"
+    "specscore": "specscore does not resolve collection bind values; spec/json-format.md requires references, including bind, to resolve"
    }
   },
   "hcl/duplicate-entity.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "duplicate-name"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "hcl/empty.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
+  },
+  "hcl/entity-no-own-properties.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-properties"
+    ]
+   }
   },
   "hcl/entity-ref-to-enum.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "reference"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
    "differs": {
-    "specscore": "specscore resolves a bare entity reference anywhere in the entity/component/enum scope without checking the kind; lint requires the name to be an entity"
+    "specscore": "specscore resolves a bare entity reference to anything in the entity/component/enum scope without checking the kind; the property's `entity` attribute must name an entity"
+   }
+  },
+  "hcl/entity-reference-to-component.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore resolves a bare entity reference to anything in the entity/component/enum scope without checking the kind; the property's `entity` attribute must name an entity"
    }
   },
   "hcl/enum-duplicate-values.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "enum-values"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values",
+     "publish-entities"
+    ]
+   }
+  },
+  "hcl/enum-integer-values.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   },
+   "differs": {
+    "specscore": "lint accepts integer enum values and specscore refuses them; decision 0013 says an enum constrains a string or an int property, so the standard allows them"
+   }
   },
   "hcl/enum-no-values.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "enum-values"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values",
+     "publish-entities"
+    ]
+   }
   },
   "hcl/expression-value.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "literal"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "literal"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "literal"
+    ]
+   },
    "differs": {
     "specscore": "specscore ignores attributes whose value is not a plain literal; lint refuses expressions (decision 0009)"
    }
   },
   "hcl/map-style-properties.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "key",
-    "literal"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "literal"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "literal",
+     "publish-properties"
+    ]
+   },
    "differs": {
     "specscore": "specscore ignores attributes it does not know; lint refuses map-style containers (decisions 0007, 0009), and the entity keeps a key naming a property that was never declared"
    }
   },
   "hcl/missing-key.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "key"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
    "differs": {
     "specscore": "specscore does not require an entity key; spec/core-model.md lists missing keys among the validation errors"
    }
   },
+  "hcl/names-not-identifiers.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
+  },
   "hcl/non-identifier-name.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "name-form"
-   ],
-   "differs": {
-    "specscore": "specscore accepts any block label; lint requires identifiers, so that the exported JSON is readable by the Directory's reader, which requires them"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
+  },
+  "hcl/qualified-entity-self.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
    }
   },
   "hcl/reserved-entity-name.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "reserved-name"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   }
   },
   "hcl/reserved-recordset-name.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "reserved-name"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   }
+  },
+  "hcl/shared-components-and-enums.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
   },
   "hcl/shop.modelspec.hcl": {
-   "lint": "accept",
-   "warnings": [
-    "unsupported-by-consumers"
-   ]
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-property",
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "hcl/standard-invoice.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-property"
+    ]
+   }
   },
   "hcl/syntax-error.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "syntax"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
   },
   "hcl/todo-aligned.modelspec.hcl": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
   },
   "hcl/todo.modelspec.hcl": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
   },
   "hcl/trio-name-clash.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "duplicate-name"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
   },
   "hcl/unknown-attribute.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "attribute"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
    "differs": {
     "specscore": "specscore ignores attributes it does not know; the JSON format requires constraints to use supported keys"
    }
   },
   "hcl/unknown-module.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "reference"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
   },
   "hcl/unknown-type.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "unknown-type"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
    "differs": {
     "specscore": "specscore does not check types; the JSON format requires the type to be in the supported set"
    }
   },
   "hcl/unmapped-index.modelspec.hcl": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/unmapped-migration.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/unmapped-projection.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
   },
   "hcl/unresolved-entity.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "reference"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
   },
   "hcl/unresolved-enum.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "reference"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
   },
   "hcl/unresolved-use.modelspec.hcl": {
-   "lint": "refuse",
-   "rules": [
-    "reference"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
   },
   "json/chinook.modelspec.json": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
   },
   "json/component-property.modelspec.json": {
-   "lint": "accept",
-   "warnings": [
-    "unsupported-by-consumers"
-   ],
-   "differs": {
-    "directory": "the Directory's reader accepts only scalar and entity-reference properties; a component property is valid ModelSpec (core-model.md), so lint reports a warning, not an error"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-property"
+    ]
    }
   },
   "json/duplicate-entity-key.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "duplicate-name"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
    "differs": {
-    "directory": "JSON.parse in the Directory's reader keeps the last of two equal keys; the format requires names to be unique within their maps"
+    "directory": "the Directory's reader keeps the last of two equal keys; names are unique, and readers disagree on which repeat wins"
+   }
+  },
+  "json/duplicate-key-in-property.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader takes the last of two equal keys, so it sees a valid `type`; lint refuses the repeat, which other readers resolve the other way"
    }
   },
   "json/entities-array.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "shape"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities",
+     "shape"
+    ]
+   }
   },
   "json/entities-empty.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "entities"
-   ]
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
   },
   "json/entity-empty-properties.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "entities",
-    "key"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "publish-properties"
+    ]
+   }
   },
   "json/entity-name-not-identifier.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "name-form",
-    "reference"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form",
+     "reference"
+    ]
+   }
   },
   "json/entity-no-key.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "key"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader does not use keys; core-model.md lists missing keys among the validation errors"
    }
   },
   "json/entity-no-properties.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "entities",
-    "key"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "publish-properties"
+    ]
+   }
   },
   "json/enum-duplicate-values.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "enum-values"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader does not read enums; the format requires enum values to be unique"
    }
   },
   "json/full-shape.modelspec.json": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/integer-enum-values.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/invalid-utf8.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "encoding"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "encoding"
+    ]
+   }
   },
   "json/key-not-a-property.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "key"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader does not use keys; a key must name a property"
    }
   },
   "json/modelspec-not-string.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "modelspec-version"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   }
   },
   "json/module-id-missing.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "module"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader reads only module.name; the format requires module.id and module.version"
    }
   },
   "json/module-name-missing.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "module"
-   ]
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name"
+    ]
+   }
   },
   "json/module-name-not-identifier.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "module"
-   ]
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name"
+    ]
+   }
   },
   "json/module-version-missing.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "module"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader reads only module.name; the format requires module.id and module.version"
    }
   },
   "json/named-enum.modelspec.json": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/names-not-identifiers.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name",
+     "publish-name-form"
+    ]
+   }
   },
   "json/no-entities.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "entities"
-   ]
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
   },
   "json/no-modelspec.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "modelspec-version"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   }
   },
   "json/no-module.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "module"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   }
   },
   "json/not-an-object.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "shape"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   }
   },
   "json/not-json.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "syntax"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
   },
   "json/notes.modelspec.json": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/property-array-type.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader accepts any type spelled like a type name, `string[]` included; the standard's type vocabulary has no array types"
+   }
   },
   "json/property-bad-type-name.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "unknown-type"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   }
   },
   "json/property-name-not-identifier.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "name-form"
-   ]
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
   },
   "json/property-neither-type-nor-entity.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "member-kind"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "member-kind"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "member-kind"
+    ]
+   }
   },
   "json/property-unknown-entity.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "reference"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
   },
   "json/property-unknown-type.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "unknown-type"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader checks only that a type is spelled like a type name; the format requires one of the supported types"
    }
   },
+  "json/qualified-entity-reference.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "json/schema-field.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
   "json/shape-wrong-types.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "shape"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader reads only entities; the format requires every group to have the shape it defines"
    }
   },
+  "json/shared-module.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities",
+     "publish-module-name"
+    ]
+   }
+  },
   "json/todo.modelspec.json": {
-   "lint": "accept"
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
   },
   "json/trailing-garbage.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "syntax"
-   ]
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
   },
   "json/unknown-top-level-field.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "shape"
-   ],
-   "differs": {
-    "directory": "the Directory's reader ignores fields it does not know; the format defines the top-level fields"
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "unknown-field"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "unknown-field"
+    ]
    }
   },
   "json/wrong-attribute-type.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "attribute"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader ignores constraints; the format requires them to have valid value types"
    }
   },
   "json/wrong-version.modelspec.json": {
-   "lint": "refuse",
-   "rules": [
-    "modelspec-version"
-   ],
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
    "differs": {
     "directory": "the Directory's reader accepts any string as the modelspec version; the format defines 1.0-draft"
+   }
+  },
+  "modules/layout-cross-file-duplicate": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name",
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "modules/layout-key-through-component": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-properties"
+    ]
+   }
+  },
+  "modules/layout-missing-sibling-concept": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "modules/layout-parts-of-one-module": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-property"
+    ]
+   }
+  },
+  "modules/layout-same-name-in-two-modules": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
+  },
+  "modules/layout-undeclared-dependency": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   },
+   "differs": {
+    "specscore": "lint accepts and specscore refuses a qualified reference to a module missing from the referencing module's dependsOn (graph-dependency-direction); that rule is about SpecScore's own module metadata and is not part of ModelSpec, so lint does not apply it"
+   }
+  },
+  "modules/layout-unknown-module": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "modules/layout-valid": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "standalone/chinook-pair": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/cross-module-missing": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "standalone/explicit-module": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   },
+   "modules": [
+    "shop=parts"
+   ]
+  },
+  "standalone/explicit-module-unassigned": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "standalone/twin-and-reference": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "standalone/twin-and-two-modules": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "standalone/twin-in-another-directory": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
    }
   }
  }

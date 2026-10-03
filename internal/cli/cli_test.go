@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -19,15 +20,33 @@ import (
 type memFS struct {
 	fstest.MapFS
 	written  map[string][]byte
+	perms    map[string]fs.FileMode
 	writeErr error
+	listErr  error // makes ReadDir of a directory that has models in it fail
 }
 
-func (m *memFS) WriteFile(name string, data []byte, _ fs.FileMode) error {
+func (m *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if m.listErr != nil && strings.HasSuffix(filepath.ToSlash(name), "/models") {
+		return nil, m.listErr
+	}
+	return m.MapFS.ReadDir(name)
+}
+
+func (m *memFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	if m.writeErr != nil {
 		return m.writeErr
 	}
 	m.written[name] = data
+	m.perms[name] = perm
 	return nil
+}
+
+func (m *memFS) Canonical(name string) (string, error) {
+	name = filepath.Clean(name)
+	if _, err := m.MapFS.Stat(name); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // roundTripper answers GitHub release requests from a canned body.
@@ -48,7 +67,7 @@ type harness struct {
 }
 
 func newHarness(files map[string]string) *harness {
-	h := &harness{out: &bytes.Buffer{}, errb: &bytes.Buffer{}, fsys: &memFS{MapFS: fstest.MapFS{}, written: map[string][]byte{}}}
+	h := &harness{out: &bytes.Buffer{}, errb: &bytes.Buffer{}, fsys: &memFS{MapFS: fstest.MapFS{}, written: map[string][]byte{}, perms: map[string]fs.FileMode{}}}
 	for n, s := range files {
 		h.fsys.MapFS[n] = &fstest.MapFile{Data: []byte(s)}
 	}
@@ -85,7 +104,7 @@ const badHCL = `entity "A" {
 }
 `
 
-const warnHCL = `component "C" {
+const componentHCL = `component "C" {
   field "f" {
     type = "int"
   }
@@ -101,6 +120,34 @@ entity "A" {
 }
 `
 
+const warnHCL = `collection "c" {
+  kind = "computed"
+}
+`
+
+const coreHCL = `entity "Space" {
+  key = ["id"]
+  property "id" {
+    type = "int"
+  }
+}
+`
+
+const bookingHCL = `entity "Booking" {
+  key = ["id"]
+  property "id" {
+    type = "int"
+  }
+  property "space" {
+    entity = "core.Space"
+  }
+}
+`
+
+func layoutPath(module, file string) string {
+	return "spec/graph/modules/" + module + "/models/" + file
+}
+
 func TestLintText(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -108,16 +155,25 @@ func TestLintText(t *testing.T) {
 		files    map[string]string
 		args     []string
 		wantCode int
-		wantOut  string
-		wantErr  string
+		wantOut  string // the whole of standard output
+		wantErr  string // a substring of standard error
 	}{
 		{"clean default path", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
 		{"findings", map[string]string{"a.modelspec.hcl": badHCL, "b.modelspec.hcl": goodHCL}, []string{"lint", "."}, 1, "a.modelspec.hcl:1: error: entity \"A\" has no key (a list of the properties that identify a record) [key]\nfailed: 2 files checked, 1 error, 0 warnings\n", ""},
-		{"warnings only", map[string]string{"a.modelspec.hcl": warnHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "warning: entity \"A\" property \"c\" uses a component", ""},
-		{"explicit files", map[string]string{"a.modelspec.hcl": goodHCL, "b.modelspec.hcl": badHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "ok: 1 file checked", ""},
+		{"warnings only", map[string]string{"a.modelspec.hcl": warnHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "a.modelspec.hcl:2: warning: collection \"c\" is computed but carries no query (computed collections should) [collection]\nok: 1 file checked, 0 errors, 1 warning\n", ""},
+		{"explicit files", map[string]string{"a.modelspec.hcl": goodHCL, "b.modelspec.hcl": badHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
+		{"a component property is fine by default", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
+		{"the publish profile refuses it", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint", "--profile", "publish"}, 1, "a.modelspec.hcl:12: error: entity \"A\" property \"c\" has a component value; the catalogue lists only scalar and entity-reference properties [publish-component-property]\nfailed: 1 file checked, 1 error, 0 warnings\n", ""},
+		{"the default profile can be named", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint", "--profile", "default"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
 		{"missing path", nil, []string{"lint", "nope"}, 2, "", "modelspec: "},
 		{"no model files", map[string]string{"x.txt": ""}, []string{"lint"}, 2, "", "no ModelSpec files"},
 		{"bad format", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--format", "xml"}, 2, "", `invalid --format "xml"`},
+		{"bad profile", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--profile", "strict"}, 2, "", `unknown profile "strict"`},
+		{"bad module flag", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--module", "core"}, 2, "", `invalid --module "core": expected <name>=<path>`},
+		{"module flag without a name", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--module", "=x"}, 2, "", `invalid --module "=x"`},
+		{"module flag without a path", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--module", "x="}, 2, "", `invalid --module "x="`},
+		{"module name with a dot", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--module", "a.b=x"}, 2, "", `invalid --module "a.b=x"`},
+		{"module flag for a missing path", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--module", "x=nope"}, 2, "", "modelspec: "},
 		{"unknown flag", nil, []string{"lint", "--nope"}, 2, "", "unknown flag: --nope"},
 	}
 	for _, tc := range tests {
@@ -127,13 +183,49 @@ func TestLintText(t *testing.T) {
 			if code := h.run(tc.args...); code != tc.wantCode {
 				t.Fatalf("exit %d, want %d\nstdout: %s\nstderr: %s", code, tc.wantCode, h.out, h.errb)
 			}
-			if !strings.Contains(h.out.String(), tc.wantOut) {
-				t.Errorf("stdout = %q, want containing %q", h.out, tc.wantOut)
+			if h.out.String() != tc.wantOut {
+				t.Errorf("stdout = %q, want exactly %q", h.out, tc.wantOut)
 			}
 			if !strings.Contains(h.errb.String(), tc.wantErr) {
 				t.Errorf("stderr = %q, want containing %q", h.errb, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestLintModules(t *testing.T) {
+	t.Parallel()
+	sales := map[string]string{
+		layoutPath("sales", "entities.modelspec.hcl"): "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    type = \"string\"\n    enum = \"Status\"\n  }\n  property \"c\" {\n    entity = \"core.Space\"\n  }\n}\n",
+		layoutPath("sales", "enums.modelspec.hcl"):    "enum \"Status\" {\n  values = [\"open\"]\n}\n",
+		layoutPath("core", "model.hcl"):               coreHCL,
+	}
+	h := newHarness(sales)
+	if code := h.run("lint", "spec"); code != 0 || h.out.String() != "ok: 3 files checked, 0 errors, 0 warnings\n" {
+		t.Fatalf("layout tree: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	dup := map[string]string{}
+	for k, v := range sales {
+		dup[k] = v
+	}
+	dup[layoutPath("sales", "extra.hcl")] = "enum \"Status\" {\n  values = [\"x\"]\n}\n"
+	h = newHarness(dup)
+	if code := h.run("lint", "spec"); code != 1 || !strings.Contains(h.out.String(), "extra.hcl:1: error: duplicate concept name \"Status\"") {
+		t.Fatalf("cross-file duplicate: exit %d, stdout %q", code, h.out)
+	}
+
+	files := map[string]string{"sales.modelspec.hcl": bookingHCL, "shared/core.hcl": coreHCL}
+	h = newHarness(files)
+	if code := h.run("lint", "sales.modelspec.hcl"); code != 1 || !strings.Contains(h.out.String(), `unknown module "core" (lint the files that declare it together with this one, or name it with --module core=<path>)`) {
+		t.Fatalf("unsupplied module: exit %d, stdout %q", code, h.out)
+	}
+	h = newHarness(files)
+	if code := h.run("lint", "sales.modelspec.hcl", "--module", "core=shared/core.hcl"); code != 0 || h.out.String() != "ok: 2 files checked, 0 errors, 0 warnings\n" {
+		t.Fatalf("assigned module: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	h = newHarness(files)
+	if code := h.run("lint", "--module", "core=shared"); code != 0 || h.out.String() != "ok: 1 file checked, 0 errors, 0 warnings\n" {
+		t.Fatalf("only an assignment: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
 	}
 }
 
@@ -168,6 +260,59 @@ func TestLintJSON(t *testing.T) {
 	}
 }
 
+// With --format json, every exit-2 path writes one JSON object on standard
+// output, {"error": ..., "exit": 2}, and nothing a script could read as a lint
+// report; the message is still on standard error.
+func TestJSONOnEveryExit2Path(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a.modelspec.hcl": goodHCL}
+	tests := []struct {
+		name string
+		args []string
+		want string // a substring of the error
+	}{
+		{"missing path", []string{"lint", "--format", "json", "nope"}, "nope"},
+		{"missing path, flag after", []string{"lint", "nope", "--format=json"}, "nope"},
+		{"no model files", []string{"lint", "--format", "json", "x"}, "no ModelSpec files"},
+		{"bad profile", []string{"lint", "--format", "json", "--profile", "strict"}, `unknown profile "strict"`},
+		{"bad module", []string{"lint", "--format=json", "--module", "core"}, `invalid --module "core"`},
+		{"unknown flag", []string{"lint", "--format", "json", "--nope"}, "unknown flag: --nope"},
+		{"unknown command", []string{"nonsense", "--format", "json"}, "unknown command"},
+		{"self-update failure", []string{"self-update", "--check", "--format", "json"}, "github releases request failed"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(files)
+			h.fsys.MapFS["x/readme.txt"] = &fstest.MapFile{}
+			h.env.Update.HTTPClient = releases("rate limited", http.StatusForbidden)
+			if code := h.run(tc.args...); code != 2 {
+				t.Fatalf("exit %d", code)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(h.out.Bytes(), &got); err != nil {
+				t.Fatalf("stdout is not JSON: %q (%v)", h.out, err)
+			}
+			if len(got) != 2 || got["exit"] != float64(2) || !strings.Contains(got["error"].(string), tc.want) {
+				t.Fatalf("stdout = %s", h.out)
+			}
+			if !strings.Contains(h.errb.String(), tc.want) {
+				t.Errorf("stderr = %q", h.errb)
+			}
+		})
+	}
+	// Without --format json there is nothing on standard output; a bad --format value is not json.
+	for _, args := range [][]string{{"lint", "nope"}, {"lint", "--format", "xml"}, {"lint", "--format"}} {
+		h := newHarness(files)
+		if code := h.run(args...); code != 2 || h.out.Len() != 0 {
+			t.Errorf("%v: exit %d, stdout %q", args, code, h.out)
+		}
+	}
+	if wantsJSON([]string{"--format"}) || wantsJSON(nil) || !wantsJSON([]string{"x", "--format=json"}) {
+		t.Error("wantsJSON wrong")
+	}
+}
+
 // failWriter fails after n bytes.
 type failWriter struct{ left int }
 
@@ -185,16 +330,15 @@ func TestLintWriteFailures(t *testing.T) {
 		name  string
 		files map[string]string
 		args  []string
-		left  int
 	}{
-		{"finding line", map[string]string{"a.modelspec.hcl": badHCL}, []string{"lint"}, 0},
-		{"summary line", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint"}, 0},
-		{"json", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--format", "json"}, 0},
+		{"finding line", map[string]string{"a.modelspec.hcl": badHCL}, []string{"lint"}},
+		{"summary line", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint"}},
+		{"json", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint", "--format", "json"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(tc.files)
-			h.env.Stdout = &failWriter{left: tc.left}
+			h.env.Stdout = &failWriter{}
 			if code := h.run(tc.args...); code != 2 || !strings.Contains(h.errb.String(), "write failed") {
 				t.Fatalf("exit %d, stderr %q", code, h.errb)
 			}
@@ -202,11 +346,12 @@ func TestLintWriteFailures(t *testing.T) {
 	}
 }
 
+var exportID = []string{"--module-id", "x/y", "--module-name", "y", "--module-version", "1"}
+
 func TestExport(t *testing.T) {
 	t.Parallel()
-	id := []string{"--module-id", "x/y", "--module-name", "y", "--module-version", "1"}
 	h := newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
-	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, id...)...); code != 0 {
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb)
 	}
 	if !strings.Contains(h.out.String(), "\"modelspec\": \"1.0-draft\"") || !strings.HasSuffix(h.out.String(), "}\n") {
@@ -215,23 +360,102 @@ func TestExport(t *testing.T) {
 	stdoutJSON := h.out.String()
 
 	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
-	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}, id...)...); code != 0 {
+	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}, exportID...)...); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb)
 	}
 	if string(h.fsys.written["a.modelspec.json"]) != stdoutJSON || h.out.Len() != 0 {
 		t.Fatalf("--out wrote %q, stdout %q", h.fsys.written["a.modelspec.json"], h.out)
 	}
+	if h.fsys.perms["a.modelspec.json"] != 0o644 {
+		t.Fatalf("--out file mode = %o, want 644", h.fsys.perms["a.modelspec.json"])
+	}
+
+	// Without a name the module object has none.
+	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
+	if code := h.run("export", "a.modelspec.hcl", "--module-id", "x/y", "--module-version", "1"); code != 0 || strings.Contains(h.out.String(), `"name"`) {
+		t.Fatalf("export without a name: exit %d, stdout %s, stderr %s", code, h.out, h.errb)
+	}
 
 	// The file just written is what the check wants.
 	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": stdoutJSON})
-	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 0 || !strings.Contains(h.out.String(), "ok: a.modelspec.json is what a.modelspec.hcl exports to") {
+	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 0 || h.out.String() != "ok: a.modelspec.json is what a.modelspec.hcl exports to\n" {
 		t.Fatalf("check: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+}
+
+func TestExportLintsFirst(t *testing.T) {
+	t.Parallel()
+	// A file with errors is refused, with its findings shown, and nothing is written.
+	h := newHarness(map[string]string{"a.modelspec.hcl": badHCL})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "o.json"}, exportID...)...); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(h.errb.String(), `a.modelspec.hcl:1: error: entity "A" has no key`) || !strings.Contains(h.errb.String(), "has errors; fix them") || h.out.Len() != 0 || len(h.fsys.written) != 0 {
+		t.Fatalf("stderr %q stdout %q written %v", h.errb, h.out, h.fsys.written)
+	}
+	// --check refuses an invalid model as well: a check must not pass on one.
+	good, _ := exportString(t, goodHCL)
+	h = newHarness(map[string]string{"a.modelspec.hcl": badHCL, "a.modelspec.json": good})
+	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 1 || h.out.Len() != 0 || !strings.Contains(h.errb.String(), "has errors; fix them") {
+		t.Fatalf("check of an invalid model: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// A syntax error is a finding too.
+	h = newHarness(map[string]string{"a.modelspec.hcl": "entity {"})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 1 || !strings.Contains(h.errb.String(), "[syntax]") {
+		t.Fatalf("syntax error: exit %d, stderr %q", code, h.errb)
+	}
+	// Warnings are shown and do not stop the export.
+	h = newHarness(map[string]string{"a.modelspec.hcl": warnHCL})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.errb.String(), "warning: collection") {
+		t.Fatalf("warning: exit %d, stderr %q", code, h.errb)
+	}
+	// Findings of other files do not stop it: the context module is broken here.
+	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "ctx/b.hcl": "entity {"})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--module", "b=ctx/b.hcl"}, exportID...)...); code != 0 || strings.Contains(h.errb.String(), "ctx/b.hcl") {
+		t.Fatalf("context findings: exit %d, stderr %q", code, h.errb)
+	}
+}
+
+func exportString(t *testing.T, src string) (string, int) {
+	t.Helper()
+	h := newHarness(map[string]string{"a.modelspec.hcl": src})
+	code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...)
+	return h.out.String(), code
+}
+
+func TestExportModules(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"booking.modelspec.hcl": bookingHCL, "shared/core.hcl": coreHCL}
+	// A reference to another module needs it supplied.
+	h := newHarness(files)
+	if code := h.run(append([]string{"export", "booking.modelspec.hcl"}, exportID...)...); code != 1 || !strings.Contains(h.errb.String(), `unknown module "core"`) {
+		t.Fatalf("unsupplied: exit %d, stderr %q", code, h.errb)
+	}
+	h = newHarness(files)
+	if code := h.run(append([]string{"export", "booking.modelspec.hcl", "--module", "core=shared/core.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"entity": "core.Space"`) || strings.Contains(h.out.String(), `"Space": {`) {
+		t.Fatalf("supplied: exit %d, stdout %s, stderr %s", code, h.out, h.errb)
+	}
+	// One file of several in a SpecScore layout module is not exported.
+	multi := map[string]string{
+		layoutPath("sales", "a.modelspec.hcl"):   goodHCL,
+		layoutPath("sales", "b.hcl"):             "enum \"E\" {\n  values = [\"x\"]\n}\n",
+		layoutPath("solo", "only.modelspec.hcl"): goodHCL,
+	}
+	h = newHarness(multi)
+	code := h.run(append([]string{"export", layoutPath("sales", "a.modelspec.hcl")}, exportID...)...)
+	if code != 1 || !strings.Contains(h.errb.String(), "is one of 2 files of module sales in the SpecScore layout") || h.out.Len() != 0 {
+		t.Fatalf("multi-file module: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// A module of one file in the layout is exported.
+	h = newHarness(multi)
+	if code := h.run(append([]string{"export", layoutPath("solo", "only.modelspec.hcl")}, exportID...)...); code != 0 {
+		t.Fatalf("single-file layout module: exit %d, stderr %q", code, h.errb)
 	}
 }
 
 func TestExportFailures(t *testing.T) {
 	t.Parallel()
-	id := []string{"--module-id", "x/y", "--module-name", "y", "--module-version", "1"}
+	good, _ := exportString(t, goodHCL)
 	tests := []struct {
 		name     string
 		files    map[string]string
@@ -242,11 +466,13 @@ func TestExportFailures(t *testing.T) {
 		{"no argument", nil, []string{"export"}, 2, "export takes one HCL file"},
 		{"two arguments", nil, []string{"export", "a", "b"}, 2, "export takes one HCL file"},
 		{"check with one argument", nil, []string{"export", "--check", "a.modelspec.hcl"}, 2, "export --check takes the HCL file and the committed JSON file"},
-		{"not an hcl file", map[string]string{"a.json": "{}"}, append([]string{"export", "a.json"}, id...), 2, "export reads .modelspec.hcl files"},
-		{"missing file", nil, append([]string{"export", "a.modelspec.hcl"}, id...), 2, "modelspec: "},
-		{"does not parse", map[string]string{"a.modelspec.hcl": "entity {"}, append([]string{"export", "a.modelspec.hcl"}, id...), 1, "does not parse as ModelSpec HCL"},
-		{"no identity", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"export", "a.modelspec.hcl"}, 1, "supply all three"},
-		{"unmapped construct", map[string]string{"a.modelspec.hcl": "projection \"p\" {\n}\n"}, append([]string{"export", "a.modelspec.hcl"}, id...), 1, "no JSON form is defined"},
+		{"out with check", map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": good}, []string{"export", "--check", "--out", "x.json", "a.modelspec.hcl", "a.modelspec.json"}, 2, "--out cannot be combined with --check"},
+		{"not an hcl file", map[string]string{"a.json": "{}"}, append([]string{"export", "a.json"}, exportID...), 2, "export reads .modelspec.hcl files"},
+		{"missing file", nil, append([]string{"export", "a.modelspec.hcl"}, exportID...), 2, "modelspec: "},
+		{"bad module flag", map[string]string{"a.modelspec.hcl": goodHCL}, append([]string{"export", "a.modelspec.hcl", "--module", "x"}, exportID...), 2, `invalid --module "x"`},
+		{"module flag for a missing path", map[string]string{"a.modelspec.hcl": goodHCL}, append([]string{"export", "a.modelspec.hcl", "--module", "x=nope"}, exportID...), 2, "modelspec: "},
+		{"no identity", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"export", "a.modelspec.hcl"}, 1, "supply both"},
+		{"unmapped construct", map[string]string{"a.modelspec.hcl": "projection \"p\" {\n}\n"}, append([]string{"export", "a.modelspec.hcl"}, exportID...), 1, "no JSON form is defined"},
 		{"check: missing json", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"export", "--check", "a.modelspec.hcl", "a.modelspec.json"}, 2, "modelspec: "},
 		{"check: drift", map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": `{"modelspec":"1.0-draft","module":{"id":"x","name":"y","version":"1"},"entities":{}}`}, []string{"export", "--check", "a.modelspec.hcl", "a.modelspec.json"}, 1, "not what a.modelspec.hcl exports to"},
 	}
@@ -257,6 +483,9 @@ func TestExportFailures(t *testing.T) {
 			if code := h.run(tc.args...); code != tc.wantCode {
 				t.Fatalf("exit %d, want %d\nstdout: %s\nstderr: %s", code, tc.wantCode, h.out, h.errb)
 			}
+			if h.out.Len() != 0 {
+				t.Errorf("stdout = %q, want nothing", h.out)
+			}
 			if !strings.Contains(h.errb.String(), tc.wantErr) {
 				t.Errorf("stderr = %q, want containing %q", h.errb, tc.wantErr)
 			}
@@ -266,26 +495,28 @@ func TestExportFailures(t *testing.T) {
 
 func TestExportIOFailures(t *testing.T) {
 	t.Parallel()
-	id := []string{"--module-id", "x/y", "--module-name", "y", "--module-version", "1"}
 	h := newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
 	h.fsys.writeErr = errors.New("disk full")
-	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "o.json"}, id...)...); code != 2 || !strings.Contains(h.errb.String(), "disk full") {
+	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "o.json"}, exportID...)...); code != 2 || !strings.Contains(h.errb.String(), "disk full") {
 		t.Errorf("--out failure: exit %d, stderr %q", code, h.errb)
 	}
 	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
 	h.env.Stdout = &failWriter{}
-	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, id...)...); code != 2 || !strings.Contains(h.errb.String(), "write failed") {
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 2 || !strings.Contains(h.errb.String(), "write failed") {
 		t.Errorf("stdout failure: exit %d, stderr %q", code, h.errb)
 	}
 	// A check whose ok message cannot be written.
-	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
-	var buf bytes.Buffer
-	h.env.Stdout = &buf
-	h.run(append([]string{"export", "a.modelspec.hcl"}, id...)...)
-	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": buf.String()})
+	good, _ := exportString(t, goodHCL)
+	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": good})
 	h.env.Stdout = &failWriter{}
 	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 2 {
 		t.Errorf("check message failure: exit %d", code)
+	}
+	// A layout module whose directory cannot be listed.
+	h = newHarness(map[string]string{layoutPath("sales", "a.modelspec.hcl"): goodHCL})
+	h.fsys.listErr = errors.New("cannot list")
+	if code := h.run(append([]string{"export", layoutPath("sales", "a.modelspec.hcl")}, exportID...)...); code != 2 || !strings.Contains(h.errb.String(), "cannot list") {
+		t.Errorf("layout listing failure: exit %d, stderr %q", code, h.errb)
 	}
 }
 

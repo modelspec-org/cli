@@ -182,3 +182,23 @@ func TestTypeNamesAndStringList(t *testing.T) {
 		t.Error("stringList accepted a string")
 	}
 }
+
+func TestParseNodeReportsRepeatedKeys(t *testing.T) {
+	t.Parallel()
+	n, err := ParseNode([]byte("{\n \"a\": 1,\n \"b\": {\"x\": 1,\n \"x\": 2},\n \"a\": 3,\n \"c\": [{\"k\": 1, \"k\": 1}]\n}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, d := range n.Dups {
+		got = append(got, d.Key+":"+string(rune('0'+d.Line)))
+	}
+	if strings.Join(got, " ") != "x:4 a:5 k:6" {
+		t.Fatalf("Dups = %v", got)
+	}
+	// The same key in different objects is not a repeat.
+	n, _ = ParseNode([]byte(`{"a": {"a": 1}, "b": {"a": 2}}`))
+	if len(n.Dups) != 0 {
+		t.Fatalf("Dups = %v", n.Dups)
+	}
+}

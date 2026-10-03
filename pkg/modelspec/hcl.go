@@ -13,7 +13,11 @@ import (
 // its .modelspec.hcl suffix, as the module short name. The source is parsed with
 // the real HCL parser; a syntax error yields a Broken model.
 func ParseHCL(file string, src []byte) (*Model, []Finding) {
-	m := &Model{File: file, Form: FormHCL, Name: moduleNameFromFile(file)}
+	m := &Model{File: file, Form: FormHCL, Name: moduleNameFromFile(file), Group: file}
+	if f, bad := precheck(file, FormHCL, src); bad {
+		m.Broken = true
+		return m, []Finding{f}
+	}
 	p := &hclReader{m: m}
 	parsed, diags := hclsyntax.ParseConfig(src, file, hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
@@ -86,16 +90,17 @@ func (p *hclReader) topBlock(blk *hclsyntax.Block) {
 			return
 		}
 		p.concept(Kind(blk.Type), name, line, blk.Body)
-	case "projection":
+	case "projection", "migration":
 		name, ok := p.label(blk, line)
 		if !ok {
 			return
 		}
-		// Decision 0009 lists `projection` blocks, but no document defines their
-		// HCL attributes or how they map to the JSON "projections" object.
-		p.m.Unmapped = append(p.m.Unmapped, Unmapped{What: fmt.Sprintf("projection %q", name), Line: line})
+		// Decision 0009 lists `projection` blocks and spec/migration-metadata.md
+		// shows `migration` blocks, but no document defines their HCL attributes
+		// or how they map to the JSON "projections" and "migrations" objects.
+		p.m.Unmapped = append(p.m.Unmapped, Unmapped{What: fmt.Sprintf("%s %q", blk.Type, name), Line: line})
 	default:
-		p.add(line, RuleShape, fmt.Sprintf("unknown block type %q; ModelSpec declares entity, component, enum, collection, recordset and projection blocks", blk.Type))
+		p.add(line, RuleShape, fmt.Sprintf("unknown block type %q; ModelSpec declares entity, component, enum, collection, recordset, projection and migration blocks", blk.Type))
 	}
 }
 

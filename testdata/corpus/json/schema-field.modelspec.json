@@ -1,0 +1,39 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "github.com/acme/notes",
+    "name": "notes",
+    "version": "0.1.0"
+  },
+  "entities": {
+    "Note": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "uuid",
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "max_len": 120
+        },
+        "author": {
+          "entity": "Author"
+        }
+      }
+    },
+    "Author": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "uuid"
+        }
+      }
+    }
+  },
+  "$schema": "https://modelspec.org/schema/modelspec-ast-1.0-draft.schema.json"
+}

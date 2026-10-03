@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -17,38 +18,83 @@ type lintReport struct {
 	Findings []modelspec.Finding `json:"findings"`
 }
 
+// parseAssignments reads repeated --module name=path flags.
+func parseAssignments(values []string) ([]modelspec.Assignment, error) {
+	out := make([]modelspec.Assignment, 0, len(values))
+	for _, v := range values {
+		name, path, ok := strings.Cut(v, "=")
+		if !ok || name == "" || path == "" || strings.Contains(name, ".") {
+			return nil, fmt.Errorf("invalid --module %q: expected <name>=<path>, a module name without a dot and a file or directory", v)
+		}
+		out = append(out, modelspec.Assignment{Module: name, Path: path})
+	}
+	return out, nil
+}
+
 func lintCommand(env *Env) *cobra.Command {
-	var format string
+	var format, profile string
+	var modules []string
 	cmd := &cobra.Command{
 		Use:   "lint [path...]",
 		Short: "Check ModelSpec models",
 		Long: `Check ModelSpec models in HCL (*.modelspec.hcl) and JSON (*.modelspec.json).
 
 Each path is a file or a directory; a directory is searched recursively
-(hidden directories and node_modules are skipped). With no path, lint checks
-the current directory. Files given together are checked together, so a
-module-qualified reference such as core.Space resolves against the other
-files by module name: the file name without .modelspec.hcl, or module.name
-in JSON.
+(hidden directories and node_modules are skipped; symbolic links to files are
+followed, links to directories are not). With no path, lint checks the current
+directory. A file reached by two names is read once.
 
-Output is text by default, or one JSON object with --format json. Findings
-are sorted by file, line and rule.`,
+Modules. A module is a set of files, and concept names are unique per module
+and references resolve across all its files:
+  - in the SpecScore layout, every .hcl file directly inside
+    .../modules/<id>/models/ belongs to module <id>, whatever it is called;
+  - otherwise <name>.modelspec.hcl is module <name>, and a JSON file is
+    module.name (or its file name without .modelspec.json when it has none);
+  - --module <name>=<path> (repeatable; a file or a directory) assigns files to
+    a module explicitly and wins over both rules. Assigned files are linted too.
+  - X.modelspec.json beside X.modelspec.hcl is the interchange copy of the same
+    module, not a second module. Two different sources claiming one module name
+    are an error where the module is referenced.
+A module-qualified reference such as core.Space resolves against the modules in
+the files linted together.
+
+Profiles. The default profile checks the standard (spec/core-model.md,
+spec/hcl-authoring.md, spec/json-format.md and the decisions) and nothing else.
+--profile publish adds what a model needs to be listed in public catalogues
+(the requirements of the Directory's JSON reader): a module.name that is an
+identifier, at least one entity, properties on every entity, identifier names
+for entities and properties, no component-valued properties, and entity
+references only within the module.
+
+Output is text by default, or one JSON object with --format json; with
+--format json an I/O or usage error (exit 2) is also JSON on standard output:
+{"error": "...", "exit": 2}. Findings are sorted by file, line and rule.`,
 		Example: `  modelspec lint
   modelspec lint model/chinook.modelspec.hcl model/chinook.modelspec.json
-  modelspec lint --format json models/`,
+  modelspec lint spec/                                  # a SpecScore tree
+  modelspec lint sales.modelspec.hcl --module core=shared/core/
+  modelspec lint --profile publish --format json models/`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if format != "text" && format != "json" {
 				return usageErrorf("invalid --format %q: expected text or json", format)
 			}
-			if len(args) == 0 {
+			prof, err := modelspec.ParseProfile(profile)
+			if err != nil {
+				return &exitError{code: ExitUsage, err: err}
+			}
+			assign, err := parseAssignments(modules)
+			if err != nil {
+				return &exitError{code: ExitUsage, err: err}
+			}
+			if len(args) == 0 && len(assign) == 0 {
 				args = []string{"."}
 			}
-			findings, files, err := modelspec.Lint(env.FS, args)
+			res, err := modelspec.Lint(env.FS, args, modelspec.LintOptions{Profile: prof, Modules: assign})
 			if err != nil {
 				return ioError(err)
 			}
-			rep := lintReport{Files: files, Findings: findings}
-			for _, f := range findings {
+			rep := lintReport{Files: res.Files, Findings: res.Findings}
+			for _, f := range res.Findings {
 				if f.Severity == modelspec.SeverityError {
 					rep.Errors++
 				} else {
@@ -65,6 +111,8 @@ are sorted by file, line and rule.`,
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	cmd.Flags().StringVar(&profile, "profile", string(modelspec.ProfileDefault), "rules to apply: default (the standard) or publish (the standard plus what public catalogues require)")
+	cmd.Flags().StringArrayVar(&modules, "module", nil, "assign files to a module: <name>=<path> (repeatable)")
 	return cmd
 }
 

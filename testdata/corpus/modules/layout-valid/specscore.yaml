@@ -1,0 +1,7 @@
+# SpecScore project of one corpus item: only what `specscore graph lint` needs.
+
+project:
+    title: corpus
+    host: github.com
+    org: modelspec-org
+    repo: corpus

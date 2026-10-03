@@ -124,7 +124,7 @@ func TestExportCarriesProjectionsAndMigrations(t *testing.T) {
 
 func TestExportRefusals(t *testing.T) {
 	t.Parallel()
-	if _, err := mustHCL(t, exportSrc).JSON(ModuleIdentity{ID: "x/y", Name: "y"}); err == nil || !strings.Contains(err.Error(), "module.id, module.name and module.version") {
+	if _, err := mustHCL(t, exportSrc).JSON(ModuleIdentity{ID: "x/y", Name: "y"}); err == nil || !strings.Contains(err.Error(), "module.id and module.version") {
 		t.Errorf("incomplete identity: %v", err)
 	}
 	if _, err := mustHCL(t, exportSrc).JSON(ModuleIdentity{}); err == nil {
@@ -168,8 +168,31 @@ func TestExportDrift(t *testing.T) {
 		t.Errorf("invalid JSON: %q", d)
 	}
 	for _, committed := range []string{`{}`, `{"module": 1}`, `{"module": {"id": 1}}`} {
-		if d := m.ExportDrift([]byte(committed), ModuleIdentity{}); !strings.Contains(d, "module.id, module.name and module.version") {
+		if d := m.ExportDrift([]byte(committed), ModuleIdentity{}); !strings.Contains(d, "module.id and module.version") {
 			t.Errorf("committed %s without identity: %q", committed, d)
 		}
+	}
+}
+
+func TestExportModuleName(t *testing.T) {
+	t.Parallel()
+	m := mustHCL(t, okEntity)
+	without, err := m.JSON(ModuleIdentity{ID: "x/y", Version: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(without.Encode()); !strings.Contains(got, "\"module\": {\n    \"id\": \"x/y\",\n    \"version\": \"1\"\n  }") {
+		t.Errorf("module without a name:\n%s", got)
+	}
+	with, err := m.JSON(testID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(with.Encode()); !strings.Contains(got, "\"module\": {\n    \"id\": \"x/y\",\n    \"name\": \"y\",\n    \"version\": \"1\"\n  }") {
+		t.Errorf("module with a name:\n%s", got)
+	}
+	// A committed file without a name is compared without one.
+	if d := m.ExportDrift(without.Encode(), ModuleIdentity{}); d != "" {
+		t.Errorf("drift: %s", d)
 	}
 }

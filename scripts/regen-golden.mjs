@@ -6,18 +6,23 @@
 // neither Node, `specscore`, `git` nor the network.
 //
 //   node scripts/regen-golden.mjs specscore
-//       Runs `specscore graph lint` on every corpus/hcl/*.modelspec.hcl, one
-//       throwaway SpecScore project per file, built the way
-//       datatug/chinookdb's scripts/lint-modelspec.sh builds it (module id =
-//       the file name without .modelspec.hcl). Needs `specscore` and `git` on
-//       PATH, or SPECSCORE=/path/to/specscore. Writes testdata/golden/specscore.json
-//       with the specscore version in it.
+//       Runs `specscore graph lint` on
+//         - every corpus/hcl/*.modelspec.hcl, one throwaway SpecScore project per
+//           file, built the way datatug/chinookdb's scripts/lint-modelspec.sh
+//           builds it (module id = the file name without .modelspec.hcl), and
+//         - every corpus/modules/<case>/, a complete SpecScore project in the
+//           SpecScore layout (spec/graph/modules/<id>/models/*.hcl), copied to a
+//           throwaway directory unchanged.
+//       Needs `specscore` and `git` on PATH, or SPECSCORE=/path/to/specscore.
+//       Writes testdata/golden/specscore.json with the specscore version in it.
 //
 //   DIRECTORY_DIR=/path/to/clone node scripts/regen-golden.mjs directory
 //       Runs parseModelSpec from scripts/lib/modelspec.mjs of a clone of
-//       https://github.com/openvaultdb/directory (use refs/pull/8/head) over
-//       every corpus/json/*.modelspec.json. Writes testdata/golden/directory.json
-//       with the clone's commit in it.
+//       https://github.com/openvaultdb/directory over every
+//       corpus/json/*.modelspec.json. The clone must be at a commit on its default
+//       branch, main (the script refuses a commit that origin/main does not
+//       contain, such as the head of an open pull request). Writes
+//       testdata/golden/directory.json with the commit in it.
 //
 // Both files are deterministic for a given tool version and corpus.
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -57,10 +62,23 @@ function specscore() {
       rmSync(work, { recursive: true, force: true });
     }
   }
+  // A module case is a whole SpecScore project: copied, not generated.
+  for (const name of readdirSync(join(corpus, 'modules')).sort()) {
+    const work = mkdtempSync(join(tmpdir(), 'modelspec-golden-'));
+    try {
+      cpSync(join(corpus, 'modules', name), work, { recursive: true });
+      execFileSync('git', ['init', '-q'], { cwd: work });
+      const lint = run(work, 'graph', 'lint', '--severity', 'info');
+      const findings = (lint.stdout || '').split('\n').filter((line) => /\[(error|warning|info)\] /.test(line));
+      verdicts[`modules/${name}`] = { verdict: lint.status === 0 ? 'accept' : 'refuse', exit: lint.status, findings };
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }
   write('specscore.json', {
     tool: 'specscore graph lint --severity info',
     specscore_version: version,
-    wrapper: 'one throwaway project per file: specscore init, specscore graph new module --id <file stem> --bare, file copied to models/ (as datatug/chinookdb scripts/lint-modelspec.sh does)',
+    wrapper: 'hcl/: one throwaway project per file (specscore init, specscore graph new module --id <file stem> --bare, file copied to models/, as datatug/chinookdb scripts/lint-modelspec.sh does); modules/: the case directory is a complete SpecScore project, copied unchanged',
     verdicts,
   });
 }
@@ -69,6 +87,8 @@ async function directory() {
   const dir = process.env.DIRECTORY_DIR;
   if (!dir) throw new Error('set DIRECTORY_DIR to a clone of openvaultdb/directory at refs/pull/8/head');
   const commit = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const onMain = spawnSync('git', ['-C', dir, 'merge-base', '--is-ancestor', commit, 'origin/main']);
+  if (onMain.status !== 0) throw new Error(`${commit} is not on origin/main of ${dir}; use a clone at a commit on the default branch (git fetch origin main)`);
   const { parseModelSpec } = await import(pathToFileURL(join(dir, 'scripts', 'lib', 'modelspec.mjs')).href);
   const verdicts = {};
   for (const file of files('json', '.modelspec.json')) {
@@ -77,6 +97,7 @@ async function directory() {
   }
   write('directory.json', {
     tool: 'parseModelSpec in scripts/lib/modelspec.mjs of openvaultdb/directory',
+    directory_branch: 'main',
     directory_commit: commit,
     node_version: process.version,
     verdicts,

@@ -10,15 +10,22 @@ import (
 )
 
 // The corpus under testdata/corpus holds accepting and refusing models in both
-// forms, and testdata/golden holds what `specscore graph lint` and the
-// Directory's JSON reader said about them (scripts/regen-golden.mjs wrote those
-// files; this test only reads them). Nothing here starts a process.
+// forms, multi-file modules in the SpecScore layout, and standalone module sets.
+// testdata/golden holds what `specscore graph lint` and the Directory's JSON
+// reader said about them (scripts/regen-golden.mjs wrote those files; this test
+// only reads them). Nothing here starts a process.
+
+type verdict struct {
+	Verdict  string   `json:"verdict"`
+	Rules    []string `json:"rules"`
+	Warnings []string `json:"warnings"`
+}
 
 type manifestItem struct {
-	Lint     string            `json:"lint"`
-	Rules    []string          `json:"rules"`
-	Warnings []string          `json:"warnings"`
-	Differs  map[string]string `json:"differs"`
+	Default verdict           `json:"default"`
+	Publish verdict           `json:"publish"`
+	Modules []string          `json:"modules"`
+	Differs map[string]string `json:"differs"`
 }
 
 type manifest struct {
@@ -27,11 +34,14 @@ type manifest struct {
 
 type golden struct {
 	SpecscoreVersion string `json:"specscore_version"`
+	DirectoryBranch  string `json:"directory_branch"`
 	DirectoryCommit  string `json:"directory_commit"`
 	Verdicts         map[string]struct {
 		Verdict string `json:"verdict"`
 	} `json:"verdicts"`
 }
+
+var corpusDir = filepath.Join("..", "..", "testdata", "corpus")
 
 func readJSON(t *testing.T, path string, v any) {
 	t.Helper()
@@ -44,59 +54,31 @@ func readJSON(t *testing.T, path string, v any) {
 	}
 }
 
-func corpusFiles(t *testing.T) []string {
+// corpusItems lists the corpus: every file under hcl/ and json/, every directory
+// under modules/ and standalone/.
+func corpusItems(t *testing.T) []string {
 	t.Helper()
-	var files []string
-	for _, form := range []string{"hcl", "json"} {
-		entries, err := os.ReadDir(filepath.Join("..", "..", "testdata", "corpus", form))
+	var items []string
+	for _, kind := range []string{"hcl", "json", "modules", "standalone"} {
+		entries, err := os.ReadDir(filepath.Join(corpusDir, kind))
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, e := range entries {
-			files = append(files, form+"/"+e.Name())
+			items = append(items, kind+"/"+e.Name())
 		}
 	}
-	sort.Strings(files)
-	return files
+	sort.Strings(items)
+	return items
 }
 
-func TestCorpusMatchesManifest(t *testing.T) {
-	t.Parallel()
-	var m manifest
-	readJSON(t, filepath.Join("..", "..", "testdata", "corpus", "manifest.json"), &m)
-	files := corpusFiles(t)
-	if len(files) != len(m.Items) {
-		t.Errorf("corpus has %d files, manifest %d items", len(files), len(m.Items))
+func summarise(findings []Finding) verdict {
+	errs, warns := ruleSets(findings)
+	v := verdict{Verdict: "accept", Rules: errs, Warnings: warns}
+	if HasErrors(findings) {
+		v.Verdict = "refuse"
 	}
-	for _, rel := range files {
-		item, ok := m.Items[rel]
-		if !ok {
-			t.Errorf("%s is not in the manifest", rel)
-			continue
-		}
-		t.Run(rel, func(t *testing.T) {
-			t.Parallel()
-			path := filepath.Join("..", "..", "testdata", "corpus", filepath.FromSlash(rel))
-			findings, n, err := Lint(OSFS{}, []string{path})
-			if err != nil || n != 1 {
-				t.Fatalf("Lint: %d files, %v", n, err)
-			}
-			errRules, warnRules := ruleSets(findings)
-			verdict := "accept"
-			if HasErrors(findings) {
-				verdict = "refuse"
-			}
-			if verdict != item.Lint {
-				t.Errorf("verdict %s, manifest says %s:\n%s", verdict, item.Lint, joinFindings(findings))
-			}
-			if strings.Join(errRules, ",") != strings.Join(item.Rules, ",") {
-				t.Errorf("error rules %v, manifest says %v:\n%s", errRules, item.Rules, joinFindings(findings))
-			}
-			if strings.Join(warnRules, ",") != strings.Join(item.Warnings, ",") {
-				t.Errorf("warning rules %v, manifest says %v", warnRules, item.Warnings)
-			}
-		})
-	}
+	return v
 }
 
 func ruleSets(fs []Finding) (errs, warns []string) {
@@ -124,58 +106,210 @@ func joinFindings(fs []Finding) string {
 	return b.String()
 }
 
+func lintItem(t *testing.T, item string, entry manifestItem, profile Profile) []Finding {
+	t.Helper()
+	path := filepath.Join(corpusDir, filepath.FromSlash(item))
+	var assign []Assignment
+	for _, m := range entry.Modules {
+		name, rel, _ := strings.Cut(m, "=")
+		assign = append(assign, Assignment{Module: name, Path: filepath.Join(path, rel)})
+	}
+	res, err := Lint(OSFS{}, []string{path}, LintOptions{Profile: profile, Modules: assign})
+	if err != nil {
+		t.Fatalf("%s: %v", item, err)
+	}
+	return res.Findings
+}
+
+func same(a, b []string) bool { return strings.Join(a, ",") == strings.Join(b, ",") }
+
+func TestCorpusMatchesManifest(t *testing.T) {
+	t.Parallel()
+	var m manifest
+	readJSON(t, filepath.Join(corpusDir, "manifest.json"), &m)
+	items := corpusItems(t)
+	if len(items) != len(m.Items) {
+		t.Errorf("corpus has %d items, manifest %d", len(items), len(m.Items))
+	}
+	for _, item := range items {
+		entry, ok := m.Items[item]
+		if !ok {
+			t.Errorf("%s is not in the manifest", item)
+			continue
+		}
+		t.Run(item, func(t *testing.T) {
+			t.Parallel()
+			for _, c := range []struct {
+				profile Profile
+				want    verdict
+			}{{ProfileDefault, entry.Default}, {ProfilePublish, entry.Publish}} {
+				findings := lintItem(t, item, entry, c.profile)
+				got := summarise(findings)
+				if got.Verdict != c.want.Verdict || !same(got.Rules, c.want.Rules) || !same(got.Warnings, c.want.Warnings) {
+					t.Errorf("%s profile: got %+v, manifest says %+v:\n%s", c.profile, got, c.want, joinFindings(findings))
+				}
+			}
+		})
+	}
+}
+
 // TestParityWithTheOtherReaders asserts that `modelspec lint` refuses everything
 // the recorded readers refused, except where the manifest names the difference
-// and gives its reason, and that every recorded difference is real.
+// and gives its reason, and that every recorded difference is real. The default
+// profile is compared with `specscore graph lint`, and the publish profile with
+// the Directory's JSON reader, which publish is meant to match.
 func TestParityWithTheOtherReaders(t *testing.T) {
 	t.Parallel()
 	var m manifest
-	readJSON(t, filepath.Join("..", "..", "testdata", "corpus", "manifest.json"), &m)
+	readJSON(t, filepath.Join(corpusDir, "manifest.json"), &m)
 	for _, tool := range []struct {
-		golden, form, key string
-	}{{"specscore.json", "hcl/", "specscore"}, {"directory.json", "json/", "directory"}} {
+		file     string
+		prefixes []string
+		profile  Profile
+		key      string
+	}{
+		{"specscore.json", []string{"hcl/", "modules/"}, ProfileDefault, "specscore"},
+		{"directory.json", []string{"json/"}, ProfilePublish, "directory"},
+	} {
 		var g golden
-		readJSON(t, filepath.Join("..", "..", "testdata", "golden", tool.golden), &g)
-		if g.SpecscoreVersion == "" && g.DirectoryCommit == "" {
-			t.Errorf("%s records neither a tool version nor a commit", tool.golden)
+		readJSON(t, filepath.Join("..", "..", "testdata", "golden", tool.file), &g)
+		switch tool.key {
+		case "specscore":
+			if g.SpecscoreVersion == "" {
+				t.Errorf("%s records no specscore version", tool.file)
+			}
+		default:
+			if g.DirectoryCommit == "" || g.DirectoryBranch != "main" {
+				t.Errorf("%s must record a commit of the reader's main branch, has branch %q commit %q", tool.file, g.DirectoryBranch, g.DirectoryCommit)
+			}
 		}
 		compared := 0
-		for rel, item := range m.Items {
-			if !strings.HasPrefix(rel, tool.form) {
+		for item, entry := range m.Items {
+			if !hasAnyPrefix(item, tool.prefixes) {
 				continue
 			}
 			compared++
-			v, ok := g.Verdicts[rel]
+			v, ok := g.Verdicts[item]
 			if !ok {
-				t.Errorf("%s has no recorded verdict for %s", tool.golden, rel)
+				t.Errorf("%s has no recorded verdict for %s", tool.file, item)
 				continue
 			}
-			reason, differs := item.Differs[tool.key]
-			if (v.Verdict != item.Lint) != differs {
-				t.Errorf("%s: %s recorded %q, lint says %q, differs entry present: %v", rel, tool.key, v.Verdict, item.Lint, differs)
+			ours := entry.Default.Verdict
+			if tool.profile == ProfilePublish {
+				ours = entry.Publish.Verdict
+			}
+			reason, differs := entry.Differs[tool.key]
+			if (v.Verdict != ours) != differs {
+				t.Errorf("%s: %s recorded %q, lint (%s profile) says %q, differs entry present: %v", item, tool.key, v.Verdict, tool.profile, ours, differs)
 			}
 			if differs && reason == "" {
-				t.Errorf("%s: a difference needs a reason", rel)
+				t.Errorf("%s: a difference needs a reason", item)
 			}
-			if v.Verdict == "refuse" && item.Lint == "accept" && !strings.Contains(strings.ToLower(reason), "lint") {
-				t.Errorf("%s: %s refuses and lint accepts; the reason must say why lint accepts", rel, tool.key)
+			if v.Verdict == "refuse" && ours == "accept" && !strings.HasPrefix(reason, "lint accepts") {
+				t.Errorf("%s: %s refuses and lint accepts; the reason must start with \"lint accepts\" and say why", item, tool.key)
+			}
+			if v.Verdict == "accept" && ours == "refuse" && strings.HasPrefix(reason, "lint accepts") {
+				t.Errorf("%s: lint refuses and %s accepts; the reason must not say lint accepts", item, tool.key)
 			}
 		}
 		if compared != len(g.Verdicts) {
-			t.Errorf("%s records %d verdicts, the manifest has %d items of that form", tool.golden, len(g.Verdicts), compared)
+			t.Errorf("%s records %d verdicts, the manifest has %d items of those kinds", tool.file, len(g.Verdicts), compared)
 		}
+	}
+	for item, entry := range m.Items {
+		for key := range entry.Differs {
+			if key != "specscore" && key != "directory" {
+				t.Errorf("%s: unknown reader %q in differs", item, key)
+			}
+		}
+	}
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// The publish profile only adds to the default profile: whatever the default
+// profile refuses, publish refuses.
+func TestPublishRefusesWhateverTheDefaultRefuses(t *testing.T) {
+	t.Parallel()
+	var m manifest
+	readJSON(t, filepath.Join(corpusDir, "manifest.json"), &m)
+	for item, entry := range m.Items {
+		if entry.Default.Verdict == "refuse" && entry.Publish.Verdict != "refuse" {
+			t.Errorf("%s: refused by default, accepted by publish", item)
+		}
+	}
+}
+
+// JSON that `export` writes from HCL that lints clean must itself lint clean. The
+// exception is HCL with constructs the standard gives no JSON form (index,
+// projection and migration blocks), which export refuses.
+func TestExportOfCleanHCLLintsClean(t *testing.T) {
+	t.Parallel()
+	var m manifest
+	readJSON(t, filepath.Join(corpusDir, "manifest.json"), &m)
+	var refused, exported []string
+	for item, entry := range m.Items {
+		if !strings.HasPrefix(item, "hcl/") || entry.Default.Verdict != "accept" {
+			continue
+		}
+		stem := strings.TrimSuffix(strings.TrimPrefix(item, "hcl/"), HCLSuffix)
+		path := filepath.Join(corpusDir, filepath.FromSlash(item))
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		model, findings := ParseHCL(path, src)
+		if HasErrors(findings) {
+			t.Fatalf("%s: %v", item, findings)
+		}
+		node, err := model.JSON(ModuleIdentity{ID: "github.com/acme/" + stem, Name: stem, Version: "0.1.0"})
+		if len(model.Unmapped) > 0 {
+			if err == nil {
+				t.Errorf("%s: export of a file with unmapped constructs succeeded", item)
+			}
+			refused = append(refused, stem)
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", item, err)
+			continue
+		}
+		exported = append(exported, stem)
+		back, parse := ParseJSON(stem+JSONSuffix, node.Encode())
+		if len(parse) != 0 {
+			t.Errorf("%s: the export does not parse clean:\n%s", item, joinFindings(parse))
+			continue
+		}
+		if findings := Check([]*Model{back}, Options{}); len(findings) != 0 {
+			t.Errorf("%s: the export does not lint clean:\n%s", item, joinFindings(findings))
+		}
+	}
+	sort.Strings(refused)
+	if got := strings.Join(refused, " "); got != "unmapped-index unmapped-migration unmapped-projection" {
+		t.Errorf("exports refused for: %s", got)
+	}
+	if len(exported) < 12 {
+		t.Errorf("only %d accepting HCL items were exported: %v", len(exported), exported)
 	}
 }
 
 func TestChinookAndTodoLintCleanAndExportCheck(t *testing.T) {
 	t.Parallel()
-	dir := filepath.Join("..", "..", "testdata", "corpus")
 	for _, c := range []struct{ hcl, json string }{{"chinook", "chinook"}, {"todo-aligned", "todo"}} {
-		hclPath := filepath.Join(dir, "hcl", c.hcl+HCLSuffix)
-		jsonPath := filepath.Join(dir, "json", c.json+JSONSuffix)
-		findings, n, err := Lint(OSFS{}, []string{hclPath, jsonPath})
-		if err != nil || n != 2 || len(findings) != 0 {
-			t.Errorf("%s: lint = %v, %d files, %v", c.hcl, findings, n, err)
+		hclPath := filepath.Join(corpusDir, "hcl", c.hcl+HCLSuffix)
+		jsonPath := filepath.Join(corpusDir, "json", c.json+JSONSuffix)
+		for _, profile := range Profiles {
+			res, err := Lint(OSFS{}, []string{hclPath, jsonPath}, LintOptions{Profile: profile})
+			if err != nil || res.Files != 2 || len(res.Findings) != 0 {
+				t.Errorf("%s (%s profile): lint = %v, %d files, %v", c.hcl, profile, res.Findings, res.Files, err)
+			}
 		}
 		src, _ := os.ReadFile(hclPath)
 		committed, _ := os.ReadFile(jsonPath)
@@ -199,9 +333,8 @@ func TestChinookAndTodoLintCleanAndExportCheck(t *testing.T) {
 // renaming. The export does not invent one, so the check reports exactly that.
 func TestTodoExampleDriftIsTheRecordsetName(t *testing.T) {
 	t.Parallel()
-	dir := filepath.Join("..", "..", "testdata", "corpus")
-	src, _ := os.ReadFile(filepath.Join(dir, "hcl", "todo.modelspec.hcl"))
-	committed, _ := os.ReadFile(filepath.Join(dir, "json", "todo.modelspec.json"))
+	src, _ := os.ReadFile(filepath.Join(corpusDir, "hcl", "todo.modelspec.hcl"))
+	committed, _ := os.ReadFile(filepath.Join(corpusDir, "json", "todo.modelspec.json"))
 	m, _ := ParseHCL("todo.modelspec.hcl", src)
 	d := m.ExportDrift(committed, ModuleIdentity{})
 	if !strings.Contains(d, `recordsets has key "task_summary" in the first but not in the second`) {

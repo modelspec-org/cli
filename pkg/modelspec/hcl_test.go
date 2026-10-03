@@ -20,6 +20,7 @@ func TestParseHCLShapeAndLiterals(t *testing.T) {
 		{"block without label", "entity {\n}\n", []string{":1: error: entity block needs exactly one name label"}},
 		{"block with two labels", "enum \"a\" \"b\" {\n}\n", []string{"found 2 labels"}},
 		{"projection without label", "projection {\n}\n", []string{"projection block needs exactly one"}},
+		{"migration without label", "migration {\n}\n", []string{"migration block needs exactly one"}},
 		{"unknown block", "table \"t\" {\n}\n", []string{`unknown block type "table"`}},
 		{"member with two labels", "entity \"A\" {\n  property \"a\" \"b\" {\n  }\n}\n", []string{"property block needs exactly one name label"}},
 		{"member containing a block", "entity \"A\" {\n  property \"a\" {\n    type = \"int\"\n    x \"y\" {\n    }\n  }\n}\n", []string{`property "a" cannot contain a "x" block`}},
@@ -76,6 +77,15 @@ EOT
 
 projection "sqlite" {
 }
+
+migration "2026-07-08-user-display-name" {
+  from = "1.2.0"
+  to   = "1.3.0"
+
+  rename "User.fullName" {
+    to = "User.displayName"
+  }
+}
 `
 	m, fs := ParseHCL("dir/shop.modelspec.hcl", []byte(src))
 	if len(fs) != 0 {
@@ -84,7 +94,7 @@ projection "sqlite" {
 	if m.Name != "shop" || m.Form != FormHCL || m.Module != nil {
 		t.Fatalf("model = %+v", m)
 	}
-	if len(m.Unmapped) != 2 || m.Unmapped[0].What != `entity "A" index "i"` || m.Unmapped[0].Line != 17 || m.Unmapped[1].What != `projection "sqlite"` {
+	if len(m.Unmapped) != 3 || m.Unmapped[0].What != `entity "A" index "i"` || m.Unmapped[0].Line != 17 || m.Unmapped[1].What != `projection "sqlite"` || m.Unmapped[2].What != `migration "2026-07-08-user-display-name"` {
 		t.Fatalf("unmapped = %+v", m.Unmapped)
 	}
 	a := m.Concepts[0]

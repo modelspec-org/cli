@@ -22,9 +22,11 @@ const (
 	NodeObject
 )
 
-// Node is a JSON value that keeps object key order and source lines. ModelSpec
-// compares and writes JSON with order significant ("the order of entities,
-// properties and other keys counts"), which encoding/json's maps cannot do.
+// Node is a JSON value that keeps object key order and source lines.
+// encoding/json's maps cannot do that, and ModelSpec's own tooling compares a
+// model with its registered copy with the order of keys and arrays significant
+// (the Directory's check says "the order of entities, properties and other keys
+// counts"), so export --check does too.
 type Node struct {
 	Type   NodeType
 	Str    string  // NodeString: the value; NodeNumber: the number's text
@@ -32,6 +34,11 @@ type Node struct {
 	Fields []Field // NodeObject, in order
 	Items  []*Node // NodeArray
 	Line   int     // 1-based source line; 0 when built in memory
+	// Dups, set on the root returned by ParseNode only, lists every object key
+	// that appears twice in the same object, anywhere in the document, at the
+	// line of the repeat. Most JSON readers keep the last of the two, a few the
+	// first, so a repeat is never harmless.
+	Dups []Field
 }
 
 // Field is one member of an object Node.
@@ -115,10 +122,12 @@ func ParseNode(src []byte) (*Node, error) {
 	dec := json.NewDecoder(bytes.NewReader(src))
 	dec.UseNumber()
 	lines := newLineIndex(src)
-	n, err := readNode(dec, lines)
+	var dups []Field
+	n, err := readNode(dec, lines, &dups)
 	if err != nil {
 		return nil, wrapJSONError(err, lines)
 	}
+	n.Dups = dups
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, &syntaxError{line: lines.at(dec.InputOffset()), msg: "unexpected data after the top-level value"}
 	}
@@ -142,7 +151,7 @@ func wrapJSONError(err error, lines lineIndex) error {
 	return &syntaxError{line: len(lines), msg: "unexpected end of input"}
 }
 
-func readNode(dec *json.Decoder, lines lineIndex) (*Node, error) {
+func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field) (*Node, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, err
@@ -152,24 +161,30 @@ func readNode(dec *json.Decoder, lines lineIndex) (*Node, error) {
 	case json.Delim:
 		if t == '{' {
 			n := &Node{Type: NodeObject, Line: line}
+			seen := map[string]bool{}
 			for dec.More() {
 				kt, err := dec.Token()
 				if err != nil {
 					return nil, err
 				}
 				kline := lines.at(dec.InputOffset())
-				v, err := readNode(dec, lines)
+				v, err := readNode(dec, lines, dups)
 				if err != nil {
 					return nil, err
 				}
-				n.Fields = append(n.Fields, Field{Key: kt.(string), Value: v, Line: kline})
+				key := kt.(string)
+				if seen[key] {
+					*dups = append(*dups, Field{Key: key, Value: v, Line: kline})
+				}
+				seen[key] = true
+				n.Fields = append(n.Fields, Field{Key: key, Value: v, Line: kline})
 			}
 			_, err := dec.Token() // the closing }
 			return n, err
 		}
 		n := &Node{Type: NodeArray, Line: line}
 		for dec.More() {
-			v, err := readNode(dec, lines)
+			v, err := readNode(dec, lines, dups)
 			if err != nil {
 				return nil, err
 			}

@@ -5,8 +5,8 @@ import (
 	"regexp"
 )
 
-// identifier is the form of names the JSON readers in the ModelSpec ecosystem
-// accept: letters, digits and underscore, not starting with a digit.
+// identifier is the form of names the publish profile requires: letters, digits
+// and underscore, not starting with a digit.
 var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // jsonGroups maps the JSON top-level group of named concepts to its kind and
@@ -32,13 +32,22 @@ func (p *jsonReader) add(line int, rule, msg string) {
 	p.findings = append(p.findings, Finding{File: p.m.File, Line: line, Rule: rule, Severity: SeverityError, Message: msg})
 }
 
-// ParseJSON reads the JSON interchange form of a model (spec/json-format.md).
-// Besides the structure the specification defines, it refuses what the
-// Directory's reader refuses: a missing modelspec version, a missing or
-// non-identifier module.name, no entities, an entity without properties, and
-// names that are not identifiers.
+func (p *jsonReader) warn(line int, rule, msg string) {
+	p.findings = append(p.findings, Finding{File: p.m.File, Line: line, Rule: rule, Severity: SeverityWarning, Message: msg})
+}
+
+// ParseJSON reads the JSON interchange form of a model (spec/json-format.md):
+// the structure the specification defines and the validation it lists (a
+// supported "modelspec" version, module.id and module.version, and well-formed
+// groups). Constraints a single consumer adds are the publish profile's, not
+// this reader's: entities are optional, module.name is optional, and an entity
+// may have no properties.
 func ParseJSON(file string, src []byte) (*Model, []Finding) {
-	m := &Model{File: file, Form: FormJSON}
+	m := &Model{File: file, Form: FormJSON, Name: moduleNameFromFile(file), Group: file}
+	if f, bad := precheck(file, FormJSON, src); bad {
+		m.Broken = true
+		return m, []Finding{f}
+	}
 	p := &jsonReader{m: m}
 	root, err := ParseNode(src)
 	if err != nil {
@@ -53,6 +62,9 @@ func ParseJSON(file string, src []byte) (*Model, []Finding) {
 		p.add(root.Line, RuleShape, fmt.Sprintf("a ModelSpec JSON document must be an object, not %s", root.typeName()))
 		return m, p.findings
 	}
+	for _, d := range root.Dups {
+		p.add(d.Line, RuleDuplicate, fmt.Sprintf("duplicate key %q in one object; names are unique, and JSON readers disagree on which of two equal keys wins", d.Key))
+	}
 	p.top(root)
 	SortFindings(p.findings)
 	return m, p.findings
@@ -62,13 +74,12 @@ func (p *jsonReader) top(root *Node) {
 	seen := map[string]bool{}
 	for _, f := range root.Fields {
 		if seen[f.Key] {
-			p.add(f.Line, RuleDuplicate, fmt.Sprintf("duplicate top-level field %q", f.Key))
-			continue
+			continue // reported as a duplicate key
 		}
 		seen[f.Key] = true
 		switch f.Key {
-		case "modelspec", "module":
-			// read below
+		case "modelspec", "module", "$schema":
+			// "$schema" may point at a published JSON Schema (decision 0010).
 		case "projections", "migrations":
 			if f.Value.Type != NodeObject {
 				p.add(f.Line, RuleShape, fmt.Sprintf("%q must be an object, not %s", f.Key, f.Value.typeName()))
@@ -81,7 +92,7 @@ func (p *jsonReader) top(root *Node) {
 			}
 		default:
 			if !isGroup(f.Key) {
-				p.add(f.Line, RuleShape, fmt.Sprintf("unknown top-level field %q; ModelSpec defines modelspec, module, components, enums, entities, collections, recordsets, projections and migrations", f.Key))
+				p.warn(f.Line, RuleUnknown, fmt.Sprintf("unknown top-level field %q; ModelSpec defines modelspec, module, components, enums, entities, collections, recordsets, projections and migrations (the format does not say whether other fields are allowed, so this is accepted)", f.Key))
 			}
 		}
 	}
@@ -89,9 +100,6 @@ func (p *jsonReader) top(root *Node) {
 	p.module(root)
 	for _, g := range jsonGroups {
 		p.group(root, g.key, g.kind, g.members)
-	}
-	if es, ok := root.Get("entities"); !ok || (es.Type == NodeObject && len(es.Fields) == 0) {
-		p.add(root.Line, RuleEntities, "has no entities")
 	}
 }
 
@@ -121,26 +129,28 @@ func (p *jsonReader) module(root *Node) {
 		if ok {
 			line = mod.Line
 		}
-		p.add(line, RuleModule, "has no module object (module.id, module.name and module.version are required)")
+		p.add(line, RuleModule, "has no module object (module.id and module.version are required)")
 		return
 	}
+	p.m.ModuleLine = mod.Line
 	id := &ModuleIdentity{}
 	p.m.Module = id
 	for _, f := range []struct {
-		key string
-		dst *string
-	}{{"id", &id.ID}, {"name", &id.Name}, {"version", &id.Version}} {
+		key      string
+		dst      *string
+		required bool
+	}{{"id", &id.ID, true}, {"name", &id.Name, false}, {"version", &id.Version, true}} {
 		v, ok := mod.Get(f.key)
-		if !ok || v.Type != NodeString || v.Str == "" {
+		switch {
+		case ok && v.Type == NodeString && v.Str != "":
+			*f.dst = v.Str
+		case ok || f.required:
 			p.add(mod.Line, RuleModule, fmt.Sprintf("has no module.%s (a non-empty string)", f.key))
-			continue
 		}
-		*f.dst = v.Str
 	}
-	if id.Name != "" && !identifier.MatchString(id.Name) {
-		p.add(mod.Line, RuleModule, fmt.Sprintf("has no module.name that is an identifier: %q (letters, digits and _, not starting with a digit)", id.Name))
+	if id.Name != "" {
+		p.m.Name = id.Name
 	}
-	p.m.Name = id.Name
 }
 
 // group reads one top-level object of named concepts.
@@ -156,8 +166,7 @@ func (p *jsonReader) group(root *Node, key string, kind Kind, membersKey string)
 	seen := map[string]bool{}
 	for _, f := range g.Fields {
 		if seen[f.Key] {
-			p.add(f.Line, RuleDuplicate, fmt.Sprintf("duplicate %s %q in %q", kind, f.Key, key))
-			continue
+			continue // reported as a duplicate key
 		}
 		seen[f.Key] = true
 		if f.Value.Type != NodeObject {
@@ -182,9 +191,7 @@ func (p *jsonReader) concept(kind Kind, f Field, membersKey string) {
 	case membersKey == "":
 		// enums have no members
 	case members == nil:
-		if kind == KindEntity {
-			p.add(f.Line, RuleEntities, fmt.Sprintf("entity %s has no properties", f.Key))
-		}
+		// An entity without properties is allowed by the standard.
 	case kind == KindRecordset:
 		p.columns(c, members)
 	default:
@@ -199,10 +206,12 @@ func (p *jsonReader) named(c *Concept, members *Node, key string) {
 		p.add(members.Line, RuleShape, fmt.Sprintf("%s %q: %s must be an object keyed by name, not %s", c.Kind, c.Name, key, members.typeName()))
 		return
 	}
-	if len(members.Fields) == 0 && c.Kind == KindEntity {
-		p.add(members.Line, RuleEntities, fmt.Sprintf("entity %s has no properties", c.Name))
-	}
+	seen := map[string]bool{}
 	for _, mf := range members.Fields {
+		if seen[mf.Key] {
+			continue // reported as a duplicate key
+		}
+		seen[mf.Key] = true
 		if mf.Value.Type != NodeObject {
 			p.add(mf.Line, RuleShape, fmt.Sprintf("%s %q %s %q must be an object, not %s", c.Kind, c.Name, memberWord(c.Kind), mf.Key, mf.Value.typeName()))
 			continue

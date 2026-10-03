@@ -13,11 +13,12 @@ import (
 // recordset columns are an ordered array with "name" first (decision 0007).
 //
 // The mapping is exactly the one spec/json-format.md defines. Two things it
-// leaves open are refused rather than invented: HCL `index` and `projection`
-// blocks (no document says how they map to JSON), and module identity for HCL,
-// which the grammar has no place for, so the caller must supply id, name and
-// version. A model read from JSON already has its identity, which id overrides
-// when non-zero.
+// leaves open are refused rather than invented: HCL `index`, `projection` and
+// `migration` blocks (no document says how they map to JSON), and module
+// identity for HCL, which the grammar has no place for, so the caller must
+// supply id and version (the format requires those two; name is written only
+// when given). A model read from JSON already has its identity, which id
+// overrides when non-zero.
 func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
 	if len(m.Unmapped) > 0 {
 		parts := make([]string, len(m.Unmapped))
@@ -29,13 +30,15 @@ func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
 	if id == (ModuleIdentity{}) && m.Module != nil {
 		id = *m.Module
 	}
-	if id.ID == "" || id.Name == "" || id.Version == "" {
-		return nil, errors.New("cannot export: the JSON form needs module.id, module.name and module.version, and HCL has no place to carry them; supply all three")
+	if id.ID == "" || id.Version == "" {
+		return nil, errors.New("cannot export: the JSON form needs module.id and module.version, and HCL has no place to carry them; supply both (and module.name if you want one written)")
 	}
-	root := obj(
-		field("modelspec", str(SpecVersion)),
-		field("module", obj(field("id", str(id.ID)), field("name", str(id.Name)), field("version", str(id.Version)))),
-	)
+	module := obj(field("id", str(id.ID)))
+	if id.Name != "" {
+		module.Fields = append(module.Fields, field("name", str(id.Name)))
+	}
+	module.Fields = append(module.Fields, field("version", str(id.Version)))
+	root := obj(field("modelspec", str(SpecVersion)), field("module", module))
 	for _, g := range jsonGroups {
 		var fields []Field
 		for _, k := range m.Concepts {

@@ -13,25 +13,35 @@ const (
 	SeverityWarning Severity = "warning"
 )
 
-// Rule ids. They are stable: scripts may match on them.
+// Rule ids. They are stable: scripts may match on them. Rules whose id starts
+// with "publish-" are enforced only under the publish profile.
 const (
-	RuleSyntax      = "syntax"        // the source is not valid HCL or JSON
-	RuleShape       = "shape"         // valid syntax, but not the structure ModelSpec defines
-	RuleLiteral     = "literal"       // an HCL value that is not a literal (decision 0009)
-	RuleReference   = "reference"     // a name that does not resolve (decisions 0014, 0013)
-	RuleReserved    = "reserved-name" // a reserved kind token used as a concept name (decision 0015)
-	RuleDuplicate   = "duplicate-name"
-	RuleNameForm    = "name-form"
-	RuleEnumValues  = "enum-values"
-	RuleType        = "unknown-type"
-	RuleAttribute   = "attribute"
-	RuleKey         = "key"
-	RuleMemberKind  = "member-kind"
-	RuleVersion     = "modelspec-version"
-	RuleModule      = "module"
-	RuleEntities    = "entities"
-	RuleCollection  = "collection"
-	RuleConsumerGap = "unsupported-by-consumers"
+	RuleSyntax     = "syntax"        // the source is not valid HCL or JSON
+	RuleEncoding   = "encoding"      // the source is not valid UTF-8
+	RuleLimit      = "limit"         // the source exceeds a size or nesting limit
+	RuleShape      = "shape"         // valid syntax, but not the structure ModelSpec defines
+	RuleLiteral    = "literal"       // an HCL value that is not a literal (decision 0009)
+	RuleReference  = "reference"     // a name that does not resolve (decisions 0014, 0013)
+	RuleReserved   = "reserved-name" // a reserved kind token used as a concept name (decision 0015)
+	RuleDuplicate  = "duplicate-name"
+	RuleNameForm   = "name-form" // a dot in a concept name (decision 0014)
+	RuleEnumValues = "enum-values"
+	RuleType       = "unknown-type"
+	RuleAttribute  = "attribute"
+	RuleKey        = "key"
+	RuleMemberKind = "member-kind"
+	RuleVersion    = "modelspec-version"
+	RuleModule     = "module"
+	RuleCollection = "collection"
+	RuleUnknown    = "unknown-field" // a top-level JSON field the format does not define
+	RuleIO         = "unreadable"    // a file found by a directory search that cannot be read
+
+	RulePublishModuleName = "publish-module-name"
+	RulePublishEntities   = "publish-entities"
+	RulePublishProperties = "publish-properties"
+	RulePublishNameForm   = "publish-name-form"
+	RulePublishComponent  = "publish-component-property"
+	RulePublishQualified  = "publish-qualified-entity"
 )
 
 // Finding is one located problem in one file.

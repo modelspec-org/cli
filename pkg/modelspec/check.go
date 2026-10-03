@@ -20,7 +20,9 @@ var PrimitiveTypes = map[string]bool{
 
 var nonNegativeInt = regexp.MustCompile(`^[0-9]+$`)
 
-// attribute kinds a value must have
+var integerText = regexp.MustCompile(`^-?[0-9]+$`)
+
+// valueKind is the kind of value an attribute must have.
 type valueKind int
 
 const (
@@ -28,9 +30,12 @@ const (
 	vBool
 	vCount
 	vStringList
-	vEnum // a name or a list of values
+	vEnum       // an enum name, or a list of enum values
+	vEnumValues // a list of enum values
 )
 
+// constraintAttrs are the constraints of spec/core-model.md ("Constraints") that
+// take a value of their own; `enum` is handled with the reference attributes.
 var constraintAttrs = map[string]valueKind{
 	"required": vBool, "unique": vBool, "min_len": vCount, "max_len": vCount,
 	"pattern": vString, "format": vString,
@@ -39,54 +44,99 @@ var constraintAttrs = map[string]valueKind{
 var conceptAttrs = map[Kind]map[string]valueKind{
 	KindEntity:     {"key": vStringList, "use": vStringList},
 	KindComponent:  {},
-	KindEnum:       {"values": vStringList},
+	KindEnum:       {"values": vEnumValues},
 	KindCollection: {"kind": vString, "source": vString, "query": vString},
 	KindRecordset:  {"key": vStringList, "query": vString},
 }
 
-// memberAttrs lists the attributes a member of the kind may carry.
+// memberAttrs lists the attributes a member of the kind may carry: a type or a
+// reference, the constraints, and for collection fields and recordset columns
+// the `bind` and `source` mappings.
 func memberAttrs(k Kind) map[string]valueKind {
 	attrs := map[string]valueKind{"type": vString, "enum": vEnum}
+	for n, v := range constraintAttrs {
+		attrs[n] = v
+	}
 	switch k {
 	case KindRecordset:
 		attrs["bind"], attrs["source"] = vString, vString
-		return attrs
 	case KindCollection:
 		attrs["bind"] = vString
-	}
-	attrs["entity"], attrs["component"] = vString, vString
-	for n, v := range constraintAttrs {
-		attrs[n] = v
+		attrs["entity"], attrs["component"] = vString, vString
+	default:
+		attrs["entity"], attrs["component"] = vString, vString
 	}
 	return attrs
 }
 
-// Check applies the semantic rules to a set of models and returns the sorted
-// findings. Models are checked together because a module-qualified reference
-// (decision 0014) names another module, which is resolved among the models given
-// by the module short name (Model.Name). Broken models are skipped, and
-// references into their modules are not reported.
-func Check(models []*Model) []Finding {
-	c := &checker{byName: map[string][]*Model{}, broken: map[string]bool{}}
-	for _, m := range models {
-		if m.Broken {
-			c.broken[m.Name] = true
-			continue
+// unit is one module as Check sees it: the models of one Group.
+type unit struct {
+	name   string
+	models []*Model
+	broken bool // some file of the module could not be read
+}
+
+func (u *unit) find(kind Kind, name string) *Concept {
+	for _, m := range u.models {
+		for _, c := range m.Concepts {
+			if c.Kind == kind && c.Name == name {
+				return c
+			}
 		}
-		c.byName[m.Name] = append(c.byName[m.Name], m)
 	}
-	for _, m := range models {
-		if !m.Broken {
-			c.model(m)
+	return nil
+}
+
+// trioKind returns the kind of the entity, component or enum with the name.
+func (u *unit) trioKind(name string) (Kind, bool) {
+	for _, m := range u.models {
+		for _, c := range m.Concepts {
+			if c.Name == name && (c.Kind == KindEntity || c.Kind == KindComponent || c.Kind == KindEnum) {
+				return c.Kind, true
+			}
 		}
+	}
+	return "", false
+}
+
+// Check applies the semantic rules of the profile in opts to the models and
+// returns the sorted findings.
+//
+// Models are grouped into modules by Model.Group (Load sets it from the module
+// rules): concept names are unique per module across all its files, and a
+// reference resolves against the whole module. A module-qualified reference
+// (decision 0014) names another module and resolves among the models given, by
+// Model.Name. A Twin (the JSON copy of an HCL module) is checked as a module of
+// its own but is not a second source for the name. Broken models are skipped, and
+// references into their modules are not reported.
+func Check(models []*Model, opts Options) []Finding {
+	c := &checker{opts: opts, byName: map[string][]*unit{}}
+	groups := map[string]*unit{}
+	var order []*unit
+	for _, m := range models {
+		var u *unit
+		if m.Twin {
+			u = &unit{name: m.Name}
+			order = append(order, u)
+		} else if u = groups[m.Group]; u == nil {
+			u = &unit{name: m.Name}
+			groups[m.Group] = u
+			order = append(order, u)
+			c.byName[m.Name] = append(c.byName[m.Name], u)
+		}
+		u.models = append(u.models, m)
+		u.broken = u.broken || m.Broken
+	}
+	for _, u := range order {
+		c.unit(u)
 	}
 	SortFindings(c.findings)
 	return c.findings
 }
 
 type checker struct {
-	byName   map[string][]*Model
-	broken   map[string]bool
+	opts     Options
+	byName   map[string][]*unit
 	findings []Finding
 	cur      *Model
 }
@@ -108,58 +158,74 @@ func conceptScope(k Kind) string {
 	}
 }
 
-func (c *checker) model(m *Model) {
-	c.cur = m
-	seen := map[string]*Concept{}
-	for _, k := range m.Concepts {
-		c.names(k)
-		scope := conceptScope(k.Kind) + "\x00" + k.Name
-		if prev, dup := seen[scope]; dup {
-			c.errorf(k.Line, RuleDuplicate, "duplicate concept name %q in the %s scope (also declared at line %d)", k.Name, conceptScope(k.Kind), prev.Line)
-			continue
-		}
-		seen[scope] = k
-	}
-	for _, k := range m.Concepts {
-		c.attrs(string(k.Kind)+" "+quote1(k.Name), k.Attrs, conceptAttrs[k.Kind])
-		switch k.Kind {
-		case KindEntity:
-			c.entity(m, k)
-		case KindComponent:
-			c.members(m, k)
-		case KindEnum:
-			c.enum(k)
-		case KindCollection:
-			c.collection(m, k)
-		default:
-			c.recordset(m, k)
-		}
-	}
-}
-
 func quote1(s string) string { return fmt.Sprintf("%q", s) }
 
-// names checks the form of a concept's name and its members' names.
-func (c *checker) names(k *Concept) {
-	if ReservedNames[k.Name] {
-		c.errorf(k.Line, RuleReserved, "%s name %q is a reserved kind token (entities, components, enums, collections, recordsets) and cannot name a concept", k.Kind, k.Name)
-	} else {
-		c.nameForm(k.Line, string(k.Kind), k.Name)
+func (c *checker) unit(u *unit) {
+	c.duplicates(u)
+	for _, m := range u.models {
+		if m.Broken {
+			continue
+		}
+		c.cur = m
+		for _, k := range m.Concepts {
+			c.names(k)
+			c.attrs(string(k.Kind)+" "+quote1(k.Name), k.Attrs, conceptAttrs[k.Kind])
+			switch k.Kind {
+			case KindEntity:
+				c.entity(u, k)
+			case KindComponent:
+				c.members(u, k)
+			case KindEnum:
+				c.enum(k)
+			case KindCollection:
+				c.collection(u, k)
+			default:
+				c.recordset(u, k)
+			}
+		}
 	}
-	if k.Kind == KindRecordset {
-		return // column names are display names: any text, repeats allowed (decision 0007)
-	}
-	for _, mem := range k.Members {
-		c.nameForm(mem.Line, memberWord(k.Kind), mem.Name)
+	if c.opts.publish() {
+		c.publishUnit(u)
 	}
 }
 
-func (c *checker) nameForm(line int, what, name string) {
+// duplicates reports a concept name declared twice in one name scope of the
+// module, wherever the two declarations are (decision 0015).
+func (c *checker) duplicates(u *unit) {
+	type decl struct {
+		model *Model
+		line  int
+	}
+	seen := map[string]decl{}
+	for _, m := range u.models {
+		if m.Broken {
+			continue
+		}
+		c.cur = m
+		for _, k := range m.Concepts {
+			key := conceptScope(k.Kind) + "\x00" + k.Name
+			prev, dup := seen[key]
+			if !dup {
+				seen[key] = decl{m, k.Line}
+				continue
+			}
+			where := fmt.Sprintf("line %d", prev.line)
+			if prev.model != m {
+				where = fmt.Sprintf("%s:%d", prev.model.File, prev.line)
+			}
+			c.errorf(k.Line, RuleDuplicate, "duplicate concept name %q in the %s scope (also declared at %s)", k.Name, conceptScope(k.Kind), where)
+		}
+	}
+}
+
+// names checks a concept's name: the standard forbids a dot (decision 0014)
+// and the five reserved tokens (decision 0015), and nothing else.
+func (c *checker) names(k *Concept) {
 	switch {
-	case strings.Contains(name, "."):
-		c.errorf(line, RuleNameForm, "%s name %q must not contain a dot (decision 0014: a dot marks a module-qualified reference)", what, name)
-	case !identifier.MatchString(name):
-		c.errorf(line, RuleNameForm, "%s name %q must be an identifier (letters, digits and _, not starting with a digit)", what, name)
+	case ReservedNames[k.Name]:
+		c.errorf(k.Line, RuleReserved, "%s name %q is a reserved kind token (entities, components, enums, collections, recordsets) and cannot name a concept", k.Kind, k.Name)
+	case strings.Contains(k.Name, "."):
+		c.errorf(k.Line, RuleNameForm, "%s name %q must not contain a dot (decision 0014: a dot marks a module-qualified reference)", k.Kind, k.Name)
 	}
 }
 
@@ -176,6 +242,26 @@ func (c *checker) attrs(who string, attrs []Attr, allowed map[string]valueKind) 
 			c.errorf(a.Line, RuleAttribute, "%s: %q %s", who, a.Name, msg)
 		}
 	}
+}
+
+// enumValues returns the values of an enum list as comparable keys, or false
+// when an item is not a string or an integer.
+func enumValues(n *Node) ([]string, bool) {
+	if n.Type != NodeArray {
+		return nil, false
+	}
+	keys := make([]string, 0, len(n.Items))
+	for _, it := range n.Items {
+		switch {
+		case it.Type == NodeString:
+			keys = append(keys, "s:"+it.Str)
+		case it.Type == NodeNumber && integerText.MatchString(it.Str):
+			keys = append(keys, "n:"+it.Str)
+		default:
+			return nil, false
+		}
+	}
+	return keys, true
 }
 
 func valueProblem(kind valueKind, v *Node) string {
@@ -196,10 +282,14 @@ func valueProblem(kind valueKind, v *Node) string {
 		if _, ok := v.stringList(); !ok {
 			return "must be a list of strings"
 		}
+	case vEnumValues:
+		if _, ok := enumValues(v); !ok {
+			return "must be a list of strings or integers"
+		}
 	default: // vEnum
 		if v.Type != NodeString {
-			if _, ok := v.stringList(); !ok {
-				return "must be the name of an enum or a list of string values"
+			if _, ok := enumValues(v); !ok {
+				return "must be the name of an enum or a list of string or integer values"
 			}
 		}
 	}
@@ -214,7 +304,7 @@ func (c *checker) enum(k *Concept) {
 		c.errorf(k.Line, RuleEnumValues, "enum %q must declare at least one value", k.Name)
 		return
 	}
-	vals, ok := a.Value.stringList()
+	vals, ok := enumValues(a.Value)
 	if !ok {
 		return // reported as an attribute type problem
 	}
@@ -229,7 +319,7 @@ func (c *checker) valueList(line int, who string, vals []string) {
 	seen := map[string]bool{}
 	for _, v := range vals {
 		if seen[v] {
-			c.errorf(line, RuleEnumValues, "%s has duplicate value %q", who, v)
+			c.errorf(line, RuleEnumValues, "%s has duplicate value %q", who, v[2:])
 		}
 		seen[v] = true
 	}
@@ -237,13 +327,13 @@ func (c *checker) valueList(line int, who string, vals []string) {
 
 // ---- entities, components and their members
 
-func (c *checker) entity(m *Model, k *Concept) {
-	c.members(m, k)
+func (c *checker) entity(u *unit, k *Concept) {
+	c.members(u, k)
 	who := fmt.Sprintf("entity %q", k.Name)
 	if use, ok := k.Attr("use"); ok {
 		if names, ok := use.Value.stringList(); ok {
 			for _, n := range names {
-				c.ref(m, use.Line, who+" use", n, KindComponent)
+				c.ref(u, use.Line, who+" use", n, KindComponent)
 			}
 		}
 	}
@@ -259,39 +349,53 @@ func (c *checker) entity(m *Model, k *Concept) {
 	if len(names) == 0 {
 		c.errorf(key.Line, RuleKey, "%s has an empty key", who)
 	}
-	known := c.propertyNames(m, k)
+	known, complete := c.propertyNames(u, k)
 	for _, n := range names {
-		if !known[n] {
-			c.errorf(key.Line, RuleKey, "%s key %q is not a property of the entity", who, n)
+		if !known[n] && complete {
+			c.errorf(key.Line, RuleKey, "%s key %q is not a property of the entity (or of a component it uses)", who, n)
 		}
 	}
 }
 
 // propertyNames are the entity's own properties plus the fields of the
-// same-module components it uses.
-func (c *checker) propertyNames(m *Model, k *Concept) map[string]bool {
-	known := map[string]bool{}
+// components it uses, which may be in the module's other files or in another
+// module (decision 0014). complete is false when some used component could not
+// be read, so a name's absence proves nothing.
+func (c *checker) propertyNames(u *unit, k *Concept) (names map[string]bool, complete bool) {
+	names = map[string]bool{}
 	for _, mem := range k.Members {
-		known[mem.Name] = true
+		names[mem.Name] = true
 	}
-	if use, ok := k.Attr("use"); ok {
-		if names, ok := use.Value.stringList(); ok {
-			for _, n := range names {
-				for _, comp := range m.Concepts {
-					if comp.Kind == KindComponent && comp.Name == n {
-						for _, f := range comp.Members {
-							known[f.Name] = true
-						}
-					}
-				}
-			}
+	use, ok := k.Attr("use")
+	if !ok {
+		return names, true
+	}
+	used, ok := use.Value.stringList()
+	if !ok {
+		return names, false
+	}
+	complete = true
+	for _, n := range used {
+		target, name, problem := c.lookup(u, n)
+		if problem != "" || target == nil {
+			complete = false
+			continue
+		}
+		comp := target.find(KindComponent, name)
+		if comp == nil {
+			complete = false
+			continue
+		}
+		for _, f := range comp.Members {
+			names[f.Name] = true
 		}
 	}
-	return known
+	return names, complete
 }
 
-// members checks the properties of an entity or the fields of a component.
-func (c *checker) members(m *Model, k *Concept) {
+// members checks the properties of an entity or the fields of a component or
+// collection.
+func (c *checker) members(u *unit, k *Concept) {
 	allowed := memberAttrs(k.Kind)
 	seen := map[string]int{}
 	for _, mem := range k.Members {
@@ -302,18 +406,18 @@ func (c *checker) members(m *Model, k *Concept) {
 			seen[mem.Name] = mem.Line
 		}
 		c.attrs(who, mem.Attrs, allowed)
-		if _, ok := mem.Attr("component"); ok && k.Kind == KindEntity {
-			c.add(mem.Line, RuleConsumerGap, SeverityWarning, "%s uses a component; readers that accept only scalar and entity-reference properties (the Directory's reader, for one) refuse this model", who)
+		if k.Kind == KindEntity || k.Kind == KindComponent {
+			c.memberKind(who, mem)
 		}
-		c.memberKind(who, mem)
-		c.memberRefs(m, who, mem)
+		c.memberRefs(u, who, mem)
 		if a, ok := mem.Attr("bind"); ok && k.Kind == KindCollection && a.Value.Type == NodeString {
-			c.bind(m, a, who)
+			c.bind(u, a, who)
 		}
 	}
 }
 
-// memberKind requires exactly one of type, entity and component.
+// memberKind requires exactly one of type, entity and component
+// (spec/json-format.md: "Property objects MAY use one of").
 func (c *checker) memberKind(who string, mem Member) {
 	n := 0
 	for _, name := range []string{"type", "entity", "component"} {
@@ -327,7 +431,7 @@ func (c *checker) memberKind(who string, mem Member) {
 }
 
 // memberRefs checks a member's type, references and enum constraint.
-func (c *checker) memberRefs(m *Model, who string, mem Member) {
+func (c *checker) memberRefs(u *unit, who string, mem Member) {
 	if a, ok := mem.Attr("type"); ok && a.Value.Type == NodeString {
 		c.typeName(a, who)
 	}
@@ -336,13 +440,13 @@ func (c *checker) memberRefs(m *Model, who string, mem Member) {
 		kind Kind
 	}{{"entity", KindEntity}, {"component", KindComponent}} {
 		if a, ok := mem.Attr(r.attr); ok && a.Value.Type == NodeString {
-			c.ref(m, a.Line, who+" "+r.attr, a.Value.Str, r.kind)
+			c.ref(u, a.Line, who+" "+r.attr, a.Value.Str, r.kind)
 		}
 	}
 	if a, ok := mem.Attr("enum"); ok {
 		if a.Value.Type == NodeString {
-			c.ref(m, a.Line, who+" enum", a.Value.Str, KindEnum)
-		} else if vals, ok := a.Value.stringList(); ok {
+			c.ref(u, a.Line, who+" enum", a.Value.Str, KindEnum)
+		} else if vals, ok := enumValues(a.Value); ok {
 			c.valueList(a.Line, who+" enum", vals)
 		}
 	}
@@ -356,38 +460,37 @@ func (c *checker) typeName(a *Attr, who string) {
 
 // ---- references
 
-// lookup resolves a reference to the model that holds it. found is the model
-// the name points into, nil when the problem is non-empty or the module is
-// broken.
-func (c *checker) lookup(m *Model, ref string) (target *Model, name, problem string) {
+// lookup resolves a reference to the module that holds it. target is nil when
+// the problem is non-empty or the module could not be read.
+func (c *checker) lookup(u *unit, ref string) (target *unit, name, problem string) {
 	module, name, qualified := strings.Cut(ref, ".")
 	if !qualified {
-		return m, ref, ""
+		return u, ref, ""
 	}
 	if strings.Contains(name, ".") || module == "" || name == "" {
 		return nil, "", fmt.Sprintf("%q is not a bare name or a <module>.<Name> reference", ref)
 	}
 	targets := c.byName[module]
 	switch {
-	case module == m.Name:
-		// A model always resolves its own module name to itself, even when a
-		// twin file (the same model in the other form) shares the name.
-		return m, name, ""
+	case module == u.name:
+		// A module always resolves its own name to itself.
+		return u, name, ""
 	case len(targets) == 1:
+		if targets[0].broken {
+			return nil, "", "" // reported as a syntax problem in that module's file
+		}
 		return targets[0], name, ""
 	case len(targets) > 1:
-		return nil, "", fmt.Sprintf("module %q is ambiguous (declared by %s)", module, fileList(targets))
-	case c.broken[module]:
-		return nil, "", "" // reported as a syntax problem in that module's file
+		return nil, "", fmt.Sprintf("module %q is ambiguous: %d different sources claim it (%s)", module, len(targets), sourceList(targets))
 	default:
-		return nil, "", fmt.Sprintf("unknown module %q (modules are matched by the file name without %s, or module.name in JSON, among the files checked together)", module, HCLSuffix)
+		return nil, "", fmt.Sprintf("unknown module %q (lint the files that declare it together with this one, or name it with --module %s=<path>)", module, module)
 	}
 }
 
-func fileList(ms []*Model) string {
-	files := make([]string, len(ms))
-	for i, m := range ms {
-		files[i] = m.File
+func sourceList(us []*unit) string {
+	var files []string
+	for _, u := range us {
+		files = append(files, u.models[0].File)
 	}
 	return strings.Join(files, ", ")
 }
@@ -400,38 +503,28 @@ func withArticle(kind Kind) string {
 }
 
 // ref reports a reference that does not resolve to a concept of the kind.
-func (c *checker) ref(m *Model, line int, what, ref string, kind Kind) {
-	target, name, problem := c.lookup(m, ref)
+func (c *checker) ref(u *unit, line int, what, ref string, kind Kind) {
+	target, name, problem := c.lookup(u, ref)
 	if problem != "" {
 		c.errorf(line, RuleReference, "%s reference %q: %s", what, ref, problem)
 		return
 	}
-	if target == nil || target.HasConcept(kind, name) {
+	if target == nil || target.broken || target.find(kind, name) != nil {
 		return
 	}
-	if actual, ok := trioKind(target, name); ok {
+	if actual, ok := target.trioKind(name); ok {
 		c.errorf(line, RuleReference, "%s reference %q: %q is %s, not %s", what, ref, name, withArticle(actual), withArticle(kind))
 		return
 	}
-	if qualified := strings.Contains(ref, "."); qualified {
-		c.errorf(line, RuleReference, "%s reference %q: unknown %s %q in module %q", what, ref, kind, name, target.Name)
+	if strings.Contains(ref, ".") {
+		c.errorf(line, RuleReference, "%s reference %q: unknown %s %q in module %q", what, ref, kind, name, target.name)
 		return
 	}
-	c.errorf(line, RuleReference, "%s reference %q does not resolve to %s in module %q", what, ref, withArticle(kind), target.Name)
-}
-
-// trioKind returns the kind of the entity, component or enum with the name.
-func trioKind(m *Model, name string) (Kind, bool) {
-	for _, k := range m.Concepts {
-		if k.Name == name && (k.Kind == KindEntity || k.Kind == KindComponent || k.Kind == KindEnum) {
-			return k.Kind, true
-		}
-	}
-	return "", false
+	c.errorf(line, RuleReference, "%s reference %q does not resolve to %s in module %q", what, ref, withArticle(kind), target.name)
 }
 
 // bind checks a bind value, <Entity>.<property> or <module>.<Entity>.<property>.
-func (c *checker) bind(m *Model, a *Attr, who string) {
+func (c *checker) bind(u *unit, a *Attr, who string) {
 	parts := strings.Split(a.Value.Str, ".")
 	if len(parts) != 2 && len(parts) != 3 {
 		c.errorf(a.Line, RuleReference, "%s bind %q must be <Entity>.<property> or <module>.<Entity>.<property>", who, a.Value.Str)
@@ -439,29 +532,28 @@ func (c *checker) bind(m *Model, a *Attr, who string) {
 	}
 	prop := parts[len(parts)-1]
 	entityRef := strings.Join(parts[:len(parts)-1], ".")
-	target, name, problem := c.lookup(m, entityRef)
+	target, name, problem := c.lookup(u, entityRef)
 	if problem != "" {
 		c.errorf(a.Line, RuleReference, "%s bind %q: %s", who, a.Value.Str, problem)
 		return
 	}
-	if target == nil {
+	if target == nil || target.broken {
 		return
 	}
-	for _, k := range target.Concepts {
-		if k.Kind == KindEntity && k.Name == name {
-			if !c.propertyNames(target, k)[prop] {
-				c.errorf(a.Line, RuleReference, "%s bind %q: entity %q has no property %q", who, a.Value.Str, name, prop)
-			}
-			return
-		}
+	ent := target.find(KindEntity, name)
+	if ent == nil {
+		c.errorf(a.Line, RuleReference, "%s bind %q: no entity %q in module %q", who, a.Value.Str, name, target.name)
+		return
 	}
-	c.errorf(a.Line, RuleReference, "%s bind %q: no entity %q in module %q", who, a.Value.Str, name, target.Name)
+	if known, complete := c.propertyNames(target, ent); complete && !known[prop] {
+		c.errorf(a.Line, RuleReference, "%s bind %q: entity %q has no property %q (or component field of that name)", who, a.Value.Str, name, prop)
+	}
 }
 
 // ---- collections and recordsets
 
-func (c *checker) collection(m *Model, k *Concept) {
-	c.members(m, k)
+func (c *checker) collection(u *unit, k *Concept) {
+	c.members(u, k)
 	who := fmt.Sprintf("collection %q", k.Name)
 	kind, hasKind := k.Attr("kind")
 	if hasKind && kind.Value.Type == NodeString {
@@ -478,11 +570,11 @@ func (c *checker) collection(m *Model, k *Concept) {
 		c.errorf(k.Line, RuleCollection, "%s has no kind; it must be editable or computed", who)
 	}
 	if src, ok := k.Attr("source"); ok && src.Value.Type == NodeString {
-		c.ref(m, src.Line, who+" source", src.Value.Str, KindEntity)
+		c.ref(u, src.Line, who+" source", src.Value.Str, KindEntity)
 	}
 }
 
-func (c *checker) recordset(m *Model, k *Concept) {
+func (c *checker) recordset(u *unit, k *Concept) {
 	allowed := memberAttrs(KindRecordset)
 	for _, col := range k.Members {
 		who := fmt.Sprintf("recordset %q column %q", k.Name, col.Name)
@@ -491,7 +583,7 @@ func (c *checker) recordset(m *Model, k *Concept) {
 			c.typeName(a, who)
 		}
 		if a, ok := col.Attr("bind"); ok && a.Value.Type == NodeString {
-			c.bind(m, a, who)
+			c.bind(u, a, who)
 		}
 	}
 	if key, ok := k.Attr("key"); ok {
@@ -512,4 +604,64 @@ func hasMember(k *Concept, name string) bool {
 		}
 	}
 	return false
+}
+
+// ---- the publish profile
+
+// publishUnit applies the rules of the publish profile that concern the module
+// as a whole. Each rule exists because the Directory's JSON reader
+// (parseModelSpec in openvaultdb/directory) refuses a model without it; the
+// standard does not require it.
+func (c *checker) publishUnit(u *unit) {
+	entities := 0
+	for _, m := range u.models {
+		if m.Broken {
+			continue
+		}
+		c.cur = m
+		for _, k := range m.Concepts {
+			if k.Kind == KindEntity {
+				entities++
+				c.publishEntity(u, k)
+			}
+		}
+		if m.Form == FormJSON && m.Module != nil {
+			c.publishModuleName(m)
+		}
+	}
+	if entities == 0 && !u.broken {
+		c.cur = u.models[0]
+		c.errorf(1, RulePublishEntities, "has no entities; a published model declares at least one entity (the catalogue lists a model by its entities)")
+	}
+}
+
+func (c *checker) publishModuleName(m *Model) {
+	name := m.Module.Name
+	switch {
+	case name == "":
+		c.errorf(m.ModuleLine, RulePublishModuleName, "has no module.name; a published model names its module, as an identifier (the catalogue refers to a model by it)")
+	case !identifier.MatchString(name):
+		c.errorf(m.ModuleLine, RulePublishModuleName, "module.name %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue refers to a model by it", name)
+	}
+}
+
+func (c *checker) publishEntity(u *unit, k *Concept) {
+	if !identifier.MatchString(k.Name) {
+		c.errorf(k.Line, RulePublishNameForm, "entity name %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue turns entity names into record-set names", k.Name)
+	}
+	if len(k.Members) == 0 {
+		c.errorf(k.Line, RulePublishProperties, "entity %q has no properties of its own; the catalogue lists an entity by its properties", k.Name)
+	}
+	for _, mem := range k.Members {
+		who := fmt.Sprintf("entity %q property %q", k.Name, mem.Name)
+		if !identifier.MatchString(mem.Name) {
+			c.errorf(mem.Line, RulePublishNameForm, "property name %q of entity %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue turns property names into column names", mem.Name, k.Name)
+		}
+		if a, ok := mem.Attr("component"); ok {
+			c.errorf(a.Line, RulePublishComponent, "%s has a component value; the catalogue lists only scalar and entity-reference properties", who)
+		}
+		if a, ok := mem.Attr("entity"); ok && a.Value.Type == NodeString && strings.Contains(a.Value.Str, ".") {
+			c.errorf(a.Line, RulePublishQualified, "%s refers to %q in another module; the catalogue resolves entity references inside the one model only", who, a.Value.Str)
+		}
+	}
 }

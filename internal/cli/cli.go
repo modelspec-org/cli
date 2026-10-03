@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -94,7 +95,26 @@ func Run(args []string, env *Env) int {
 	if ee.err != nil {
 		fmt.Fprintf(env.Stderr, "modelspec: %v\n", ee.err)
 	}
+	// A script that asked for JSON gets JSON on every exit-2 path, never an
+	// empty or a success-looking standard output.
+	if ee.code == ExitUsage && wantsJSON(args) {
+		enc := json.NewEncoder(env.Stdout)
+		_ = enc.Encode(struct {
+			Error string `json:"error"`
+			Exit  int    `json:"exit"`
+		}{ee.Error(), ExitUsage})
+	}
 	return ee.code
+}
+
+// wantsJSON reports whether the command line asks for --format json.
+func wantsJSON(args []string) bool {
+	for i, a := range args {
+		if a == "--format=json" || (a == "--format" && i+1 < len(args) && args[i+1] == "json") {
+			return true
+		}
+	}
+	return false
 }
 
 func newRoot(env *Env) *cobra.Command {

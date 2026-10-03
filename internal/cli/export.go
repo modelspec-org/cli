@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -11,9 +12,10 @@ import (
 
 func exportCommand(env *Env) *cobra.Command {
 	var (
-		out   string
-		check bool
-		id    modelspec.ModuleIdentity
+		out     string
+		check   bool
+		id      modelspec.ModuleIdentity
+		modules []string
 	)
 	cmd := &cobra.Command{
 		Use:   "export <file.modelspec.hcl> [--out <file>]",
@@ -21,22 +23,30 @@ func exportCommand(env *Env) *cobra.Command {
 		Long: `Write the JSON interchange form (spec/json-format.md) of an HCL model to
 standard output, or to --out.
 
-The JSON form carries a module identity (id, name, version) that the HCL has
-no place for, so export needs --module-id, --module-name and --module-version.
+The JSON form carries a module identity that the HCL has no place for, so
+export needs --module-id and --module-version (the format requires those two);
+--module-name is written only when given.
 
-With --check, export compares a committed JSON file with what the HCL exports
-to and exits 1 when they differ, so CI can catch a stale copy:
+export lints the file first, as lint does under the default profile, and refuses
+a file with errors (exit 1, the findings on standard error). A file that refers to
+other modules needs them supplied with --module <name>=<path> (repeatable), as
+for lint; those files are used to resolve references and are not exported.
+
+With --check, export compares a committed JSON file with what the HCL exports to
+and exits 1 when they differ, so CI can catch a stale copy:
 
   modelspec export --check model.modelspec.hcl model.modelspec.json
 
-The comparison is of the JSON document, with key and array order significant
-and whitespace not. The module identity is read from the committed file unless
-the --module-* flags are given, so a check covers everything except an
-identity nobody states.
+The comparison is of the JSON document: whitespace does not count, but the order
+of keys in objects and of items in arrays does (the Directory compares a model with
+its registered copy the same way). The module identity is read from the committed
+file unless the --module-* flags are given. --check refuses an HCL file with
+errors too, and cannot be combined with --out.
 
-export does not run the semantic checks of lint; it refuses only a model that
-does not parse, or one that contains an index or projection block, which the
-JSON form does not define.`,
+The JSON form is one document per module, and the standard does not say how the
+files of a module are merged, so a file that is one of several files of a module
+in the SpecScore layout is refused. A file with an index, projection or
+migration block is refused too: the standard does not define their JSON form.`,
 		Example: `  modelspec export model/chinook.modelspec.hcl --out model/chinook.modelspec.json \
     --module-id github.com/acme/chinook/model/chinook --module-name chinook --module-version 0.1.0
   modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json`,
@@ -47,10 +57,17 @@ JSON form does not define.`,
 			if !check && len(args) != 1 {
 				return usageErrorf("export takes one HCL file")
 			}
+			if check && out != "" {
+				return usageErrorf("--out cannot be combined with --check, which writes nothing")
+			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, err := readHCL(env, args[0])
+			assign, err := parseAssignments(modules)
+			if err != nil {
+				return &exitError{code: ExitUsage, err: err}
+			}
+			m, err := lintForExport(env, args[0], assign)
 			if err != nil {
 				return err
 			}
@@ -71,8 +88,9 @@ JSON form does not define.`,
 	cmd.Flags().StringVar(&out, "out", "", "write the JSON to this file instead of standard output")
 	cmd.Flags().BoolVar(&check, "check", false, "compare a committed JSON file with the export instead of writing")
 	cmd.Flags().StringVar(&id.ID, "module-id", "", "module.id of the JSON form")
-	cmd.Flags().StringVar(&id.Name, "module-name", "", "module.name of the JSON form")
+	cmd.Flags().StringVar(&id.Name, "module-name", "", "module.name of the JSON form (optional)")
 	cmd.Flags().StringVar(&id.Version, "module-version", "", "module.version of the JSON form")
+	cmd.Flags().StringArrayVar(&modules, "module", nil, "assign files to a module, to resolve references: <name>=<path> (repeatable)")
 	return cmd
 }
 
@@ -83,23 +101,40 @@ func ioErrorOrNil(err error) error {
 	return nil
 }
 
-// readHCL reads and parses an HCL file for export, printing parse findings.
-func readHCL(env *Env, file string) (*modelspec.Model, error) {
+// lintForExport lints the file (with the modules it needs) and returns its model
+// when it has no error. The findings for the file go to standard error.
+func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*modelspec.Model, error) {
 	if !strings.HasSuffix(file, modelspec.HCLSuffix) {
 		return nil, usageErrorf("%s: export reads %s files", file, modelspec.HCLSuffix)
 	}
-	src, err := env.FS.ReadFile(file)
+	module, files, err := modelspec.LayoutModule(env.FS, file)
 	if err != nil {
 		return nil, ioError(err)
 	}
-	m, findings := modelspec.ParseHCL(file, src)
-	for _, f := range findings {
-		fmt.Fprintln(env.Stderr, f)
+	if len(files) > 1 {
+		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s is one of %d files of module %s in the SpecScore layout; the JSON form is one document per module and the standard does not say how a module's files are merged, so there is nothing to export", file, len(files), module)}
 	}
-	if modelspec.HasErrors(findings) {
-		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s does not parse as ModelSpec HCL; fix it (modelspec lint shows the findings) before exporting", file)}
+	res, err := modelspec.Lint(env.FS, []string{file}, modelspec.LintOptions{Modules: assign})
+	if err != nil {
+		return nil, ioError(err)
 	}
-	return m, nil
+	var model *modelspec.Model
+	for _, m := range res.Models {
+		if m.File == filepath.Clean(file) {
+			model = m
+		}
+	}
+	var mine []modelspec.Finding
+	for _, f := range res.Findings {
+		if f.File == filepath.Clean(file) {
+			mine = append(mine, f)
+			fmt.Fprintln(env.Stderr, f)
+		}
+	}
+	if modelspec.HasErrors(mine) {
+		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting", file)}
+	}
+	return model, nil
 }
 
 func runCheck(env *Env, m *modelspec.Model, jsonFile string, id modelspec.ModuleIdentity) error {

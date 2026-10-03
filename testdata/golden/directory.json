@@ -1,6 +1,7 @@
 {
   "tool": "parseModelSpec in scripts/lib/modelspec.mjs of openvaultdb/directory",
-  "directory_commit": "2f4b5943cf69a98f035a448c3a78a3a9116ed6e7",
+  "directory_branch": "main",
+  "directory_commit": "37f311d1c6b8675419ee74f23d011586b5e10ad6",
   "node_version": "v24.20.0",
   "verdicts": {
     "json/chinook.modelspec.json": {
@@ -14,6 +15,10 @@
       ]
     },
     "json/duplicate-entity-key.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/duplicate-key-in-property.modelspec.json": {
       "verdict": "accept",
       "problems": []
     },
@@ -60,6 +65,16 @@
       "verdict": "accept",
       "problems": []
     },
+    "json/integer-enum-values.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/invalid-utf8.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "property name \"A.t�\" must be an identifier (letters, digits and _, not starting with a digit)"
+      ]
+    },
     "json/key-not-a-property.modelspec.json": {
       "verdict": "accept",
       "problems": []
@@ -93,6 +108,13 @@
     "json/named-enum.modelspec.json": {
       "verdict": "accept",
       "problems": []
+    },
+    "json/names-not-identifiers.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no module.name that is an identifier",
+        "entity name \"Order-Item\" must be an identifier (letters, digits and _, not starting with a digit)"
+      ]
     },
     "json/no-entities.modelspec.json": {
       "verdict": "refuse",
@@ -130,6 +152,10 @@
       "verdict": "accept",
       "problems": []
     },
+    "json/property-array-type.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
     "json/property-bad-type-name.modelspec.json": {
       "verdict": "refuse",
       "problems": [
@@ -158,9 +184,26 @@
       "verdict": "accept",
       "problems": []
     },
+    "json/qualified-entity-reference.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "Note.author references entity notes.Author, which the ModelSpec does not have"
+      ]
+    },
+    "json/schema-field.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
     "json/shape-wrong-types.modelspec.json": {
       "verdict": "accept",
       "problems": []
+    },
+    "json/shared-module.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no module.name that is an identifier",
+        "has no entities"
+      ]
     },
     "json/todo.modelspec.json": {
       "verdict": "accept",
