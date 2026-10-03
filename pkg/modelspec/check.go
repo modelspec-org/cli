@@ -369,6 +369,10 @@ func (c *checker) lookup(m *Model, ref string) (target *Model, name, problem str
 	}
 	targets := c.byName[module]
 	switch {
+	case module == m.Name:
+		// A model always resolves its own module name to itself, even when a
+		// twin file (the same model in the other form) shares the name.
+		return m, name, ""
 	case len(targets) == 1:
 		return targets[0], name, ""
 	case len(targets) > 1:

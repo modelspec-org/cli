@@ -183,6 +183,14 @@ func TestChinookAndTodoLintCleanAndExportCheck(t *testing.T) {
 		if d := m.ExportDrift(committed, ModuleIdentity{}); d != "" {
 			t.Errorf("%s: export --check: %s", c.hcl, d)
 		}
+		if c.hcl == "chinook" {
+			// Chinook's committed JSON was written by a JavaScript converter with
+			// JSON.stringify(x, null, 2); the export is byte-identical to it.
+			node, err := m.JSON(ModuleIdentity{ID: "github.com/datatug/chinookdb/model/chinook", Name: "chinook", Version: "0.1.0"})
+			if err != nil || string(node.Encode()) != string(committed) {
+				t.Errorf("chinook export is not byte-identical to the committed JSON (%v)", err)
+			}
+		}
 	}
 }
 

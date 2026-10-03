@@ -207,6 +207,7 @@ enum "Role" {
 			[]string{`property "w" uses a component`}},
 		{"qualified enum reference", map[string]string{"core" + hclExt: core, "booking" + hclExt: booking("  property \"r\" {\n    type = \"string\"\n    enum = \"core.Role\"\n  }\n")}, nil},
 		{"self-qualified reference", map[string]string{"booking" + hclExt: booking(prop("s", "entity", "booking.Booking"))}, nil},
+		{"self-qualified reference with a twin file of the same module", map[string]string{"booking" + hclExt: booking(prop("s", "entity", "booking.Booking")), "booking" + jsonExt: `{"modelspec": "1.0-draft", "module": {"id": "x/booking", "name": "booking", "version": "1"}, "entities": {"Booking": {"key": ["id"], "properties": {"id": {"type": "int"}, "s": {"entity": "Booking"}}}}}`}, nil},
 		{"unknown module", map[string]string{"booking" + hclExt: booking(prop("s", "entity", "core.Space"))}, []string{`reference "core.Space": unknown module "core"`}},
 		{"unknown concept in module", map[string]string{"core" + hclExt: core, "booking" + hclExt: booking(prop("s", "entity", "core.Nope"))}, []string{`reference "core.Nope": unknown entity "Nope" in module "core"`}},
 		{"wrong kind in module", map[string]string{"core" + hclExt: core, "booking" + hclExt: booking(prop("s", "entity", "core.Role"))}, []string{`reference "core.Role": "Role" is an enum, not an entity`}},
