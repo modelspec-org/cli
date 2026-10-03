@@ -33,6 +33,9 @@ func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
 	if id.ID == "" || id.Version == "" {
 		return nil, errors.New("cannot export: the JSON form needs module.id and module.version, and HCL has no place to carry them; supply both (and module.name if you want one written)")
 	}
+	if id.Name != "" && id.Name != m.Name && m.refersTo(m.Name) {
+		return nil, fmt.Errorf("cannot export: the model refers to its own module as %q, so module.name must be %q; with %q the JSON would not lint clean on its own", m.Name, m.Name, id.Name)
+	}
 	module := obj(field("id", str(id.ID)))
 	if id.Name != "" {
 		module.Fields = append(module.Fields, field("name", str(id.Name)))
@@ -112,14 +115,25 @@ func (m *Model) ExportDrift(committed []byte, id ModuleIdentity) string {
 	if id == (ModuleIdentity{}) {
 		id = identityOf(want)
 	}
-	got, err := m.JSON(id)
+	diff, err := m.exportDiff(want, id)
 	if err != nil {
 		return err.Error()
 	}
-	if d := Diff(got, want); d != "" {
-		return fmt.Sprintf("the committed JSON is not what %s exports to: %s", m.File, d)
+	if diff != "" {
+		return fmt.Sprintf("the committed JSON is not what %s exports to: %s", m.File, diff)
 	}
 	return ""
+}
+
+// exportDiff compares the export of the model, with the identity id, with a
+// parsed JSON document: "" when they are the same document with the same key and
+// array order. The error is the export's own refusal.
+func (m *Model) exportDiff(want *Node, id ModuleIdentity) (string, error) {
+	got, err := m.JSON(id)
+	if err != nil {
+		return "", err
+	}
+	return Diff(got, want), nil
 }
 
 // identityOf reads the module object of a JSON document; missing parts stay
@@ -139,4 +153,43 @@ func identityOf(root *Node) ModuleIdentity {
 		}
 	}
 	return id
+}
+
+// refersTo reports whether the model has a module-qualified reference into the
+// module of that name: <name>.<Concept> in an entity, component, enum or use
+// reference or a collection source, or <name>.<Entity>.<property> in a bind.
+func (m *Model) refersTo(name string) bool {
+	qualified := func(s string) bool { return strings.HasPrefix(s, name+".") }
+	check := func(a Attr) bool {
+		switch a.Name {
+		case "use":
+			list, _ := a.Value.stringList()
+			for _, s := range list {
+				if qualified(s) {
+					return true
+				}
+			}
+		case "source", "entity", "component", "enum":
+			return a.Value.Type == NodeString && qualified(a.Value.Str)
+		case "bind":
+			parts := strings.Split(a.Value.Str, ".")
+			return a.Value.Type == NodeString && len(parts) == 3 && parts[0] == name
+		}
+		return false
+	}
+	for _, k := range m.Concepts {
+		for _, a := range k.Attrs {
+			if check(a) {
+				return true
+			}
+		}
+		for _, mem := range k.Members {
+			for _, a := range mem.Attrs {
+				if check(a) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

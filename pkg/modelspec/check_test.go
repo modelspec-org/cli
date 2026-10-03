@@ -367,7 +367,7 @@ func TestCheckTwins(t *testing.T) {
 		{"a JSON file with no HCL beside it is a module of its own", map[string]string{"core.modelspec.json": coreJSON, "booking" + hclExt: booking}, nil},
 		{"two JSON modules of one name", map[string]string{"a/x.modelspec.json": coreJSON, "b/y.modelspec.json": coreJSON, "booking" + hclExt: booking}, []string{`module "core" is ambiguous`}},
 		{"JSON without module.name is named by its file", map[string]string{"core.modelspec.json": strings.Replace(coreJSON, `"name": "core", `, "", 1), "booking" + hclExt: booking}, nil},
-		{"the twin is still linted", map[string]string{"core" + hclExt: coreHCL, "core.modelspec.json": strings.Replace(coreJSON, `"int"`, `"serial"`, 1)}, []string{`core.modelspec.json:1: error: entity "Space" property "id" has type "serial"`}},
+		{"the twin is still linted", map[string]string{"core" + hclExt: coreHCL, "core.modelspec.json": strings.Replace(coreJSON, `"int"`, `"serial"`, 1)}, []string{`core.modelspec.json:1: error: entity "Space" property "id" has type "serial"`, "stale twin"}},
 		{"a twin's duplicate does not clash with the HCL", map[string]string{"core" + hclExt: coreHCL, "core.modelspec.json": coreJSON}, nil},
 	}
 	for _, tc := range tests {
@@ -664,5 +664,114 @@ func TestHasErrorsAndOrder(t *testing.T) {
 	}
 	if s := (Finding{File: "f", Line: 3, Rule: "r", Severity: SeverityError, Message: "m"}).String(); s != "f:3: error: m [r]" {
 		t.Errorf("String() = %q", s)
+	}
+}
+
+// A twin that is not what its HCL exports to is a warning, and the lone JSON file
+// does not hide it.
+func TestStaleTwins(t *testing.T) {
+	t.Parallel()
+	hclSrc := entityWith("Space")
+	jsonOf := func(entity, key string) string {
+		return `{"modelspec": "1.0-draft", "module": {"id": "x/core", "name": "core", "version": "1"}, "entities": {"` + entity + `": {"key": ["` + key + `"], "properties": {"id": {"type": "int"}}}}}`
+	}
+	tests := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"the exact export", map[string]string{"core" + hclExt: hclSrc, "core.modelspec.json": jsonOf("Space", "id")}, nil},
+		{"a different entity", map[string]string{"core" + hclExt: hclSrc, "core.modelspec.json": jsonOf("Room", "id")}, []string{`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (entities has key "Space" in the first but not in the second); run modelspec export [stale-twin]`}},
+		{"references from JSON resolve against the HCL, so a missing concept is found there", map[string]string{"core" + hclExt: hclSrc, "core.modelspec.json": jsonOf("Room", "id"), "booking.modelspec.json": `{"modelspec": "1.0-draft", "module": {"id": "x/b", "name": "booking", "version": "1"}, "entities": {"B": {"key": ["id"], "properties": {"id": {"type": "int"}, "s": {"entity": "core.Space"}}}}}`}, []string{"stale twin"}},
+		{"HCL with a construct that has no JSON form cannot be compared", map[string]string{"core" + hclExt: hclSrc + "projection \"p\" {\n}\n", "core.modelspec.json": jsonOf("Room", "id")}, nil},
+		{"a broken HCL is reported by its own findings", map[string]string{"core" + hclExt: "entity {", "core.modelspec.json": jsonOf("Room", "id")}, []string{"core.modelspec.hcl:1: error"}},
+		{"a JSON without an identity is reported by its own findings", map[string]string{"core" + hclExt: hclSrc, "core.modelspec.json": `{"modelspec": "1.0-draft", "module": {"name": "core"}, "entities": {}}`}, []string{"has no module.id", "has no module.version"}},
+		{"a JSON that is not an object has no module", map[string]string{"core" + hclExt: hclSrc, "core.modelspec.json": `{"modelspec": "1.0-draft", "module": 1}`}, []string{"has no module object"}},
+		{"a twin in a layout directory of several files is not compared", map[string]string{layout("m", "a.hcl"): hclSrc, layout("m", "b.hcl"): entityWith("Other"), layout("m", "m.modelspec.json"): jsonOf("Room", "id")}, nil},
+		{"the twin's own module.name is its identity, not compared with the module's name", map[string]string{"core" + hclExt: hclSrc, "core.modelspec.json": strings.Replace(jsonOf("Space", "id"), `"name": "core"`, `"name": "Core"`, 1)}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			expect(t, run(tc.files), tc.want...)
+		})
+	}
+}
+
+// A twin's own module.name is checked against the module, not discarded: both
+// the module's name and the JSON's own name resolve to the module.
+func TestTwinNames(t *testing.T) {
+	t.Parallel()
+	hclSrc := "entity \"Task\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"parent\" {\n    entity = \"todo.Task\"\n  }\n}\n"
+	jsonSrc := func(ref string) string {
+		return `{"modelspec": "1.0-draft", "module": {"id": "x/todo", "name": "Todo", "version": "1"}, "entities": {"Task": {"key": ["id"], "properties": {"id": {"type": "int"}, "parent": {"entity": "` + ref + `"}}}}}`
+	}
+	// Both names resolve inside the twin. (The HCL cannot be exported under the
+	// name Todo while it refers to itself as todo, so there is nothing to compare.)
+	expect(t, run(map[string]string{"todo" + hclExt: hclSrc, "todo.modelspec.json": jsonSrc("Todo.Task")}))
+	expect(t, run(map[string]string{"todo" + hclExt: hclSrc, "todo.modelspec.json": jsonSrc("todo.Task")}))
+	// Alone, the JSON's own name is the module's.
+	expect(t, run(map[string]string{"todo.modelspec.json": jsonSrc("Todo.Task")}))
+	expect(t, run(map[string]string{"todo.modelspec.json": jsonSrc("todo.Task")}), `unknown module "todo"`)
+	// A reference to a name that is neither is unknown, twin or not.
+	expect(t, run(map[string]string{"todo" + hclExt: strings.Replace(hclSrc, "todo.Task", "Todo.Task", 1), "todo.modelspec.json": jsonSrc("Nope.Task")}), `unknown module "Todo"`, `unknown module "Nope"`, "stale twin")
+}
+
+// A module's own name resolves to itself even when another source claims the
+// name too: the ambiguity is for the others who refer to it.
+func TestOwnNameWinsOverAnAmbiguousOne(t *testing.T) {
+	t.Parallel()
+	self := "entity \"Space\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"up\" {\n    entity = \"core.Space\"\n  }\n}\n"
+	other := entityWith("Space")
+	booking := entityWith("Booking", member("s", "    entity = \"core.Space\"\n"))
+	expect(t, run(map[string]string{"a/core" + hclExt: self, "b/core" + hclExt: other}))
+	expect(t, run(map[string]string{"a/core" + hclExt: self, "b/core" + hclExt: other, "booking" + hclExt: booking}), `module "core" is ambiguous`)
+}
+
+func TestEmptyAndBlankNames(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{"empty entity name", "entity \"\" {\n  key = []\n}\n", []string{`entity name must not be empty or blank; it could never be referenced`, "has an empty key"}},
+		{"blank entity name", "entity \" \" {\n  key = []\n}\n", []string{`entity name must not be empty or blank`, "has an empty key"}},
+		{"empty property name", "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"\" {\n    type = \"int\"\n  }\n}\n", []string{`property name must not be empty or blank in entity "A"`}},
+		{"tab as a field name", "component \"C\" {\n  field \"\t\" {\n    type = \"int\"\n  }\n}\n", []string{`field name must not be empty or blank in component "C"`}},
+		{"empty enum, collection and recordset names", "enum \"\" {\n  values = [\"a\"]\n}\ncollection \"\" {\n  kind = \"editable\"\n}\nrecordset \"\" {\n}\n", []string{"enum name must not be empty", "collection name must not be empty", "recordset name must not be empty"}},
+		{"a recordset column may have any name", "recordset \"r\" {\n  column \"\" {\n    type = \"int\"\n  }\n}\n", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			expect(t, run(map[string]string{"a" + hclExt: tc.src}), tc.want...)
+		})
+	}
+}
+
+// Names in one scope that differ only by case are a warning: valid, but they
+// collide on a case-insensitive store.
+func TestNamesThatDifferOnlyByCase(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"two entities", map[string]string{"a" + hclExt: entityWith("User") + entityWith("USER")}, []string{`warning: entity name "USER" differs only by case from "User" (declared at line 1) in the entity/component/enum scope`}},
+		{"an entity and an enum", map[string]string{"a" + hclExt: entityWith("Status") + "enum \"status\" {\n  values = [\"a\"]\n}\n"}, []string{`enum name "status" differs only by case from "Status"`}},
+		{"across the files of a module", map[string]string{layout("m", "a.hcl"): entityWith("User"), layout("m", "b.hcl"): entityWith("user")}, []string{`b.hcl:1: warning: entity name "user" differs only by case from "User" (declared at ` + layout("m", "a.hcl") + `:1)`}},
+		{"in different scopes it is fine", map[string]string{"a" + hclExt: entityWith("Orders") + "collection \"orders\" {\n  kind = \"editable\"\n}\n"}, nil},
+		{"in different modules it is fine", map[string]string{layout("m", "a.hcl"): entityWith("User"), layout("n", "a.hcl"): entityWith("user")}, nil},
+		{"properties of one entity", map[string]string{"a" + hclExt: entityWith("A", member("Name", "    type = \"string\"\n"), member("name", "    type = \"string\"\n"))}, []string{`property name "name" differs only by case from "Name" in entity "A"`}},
+		{"an exact duplicate is an error, not also a warning", map[string]string{"a" + hclExt: entityWith("User") + entityWith("User")}, []string{"duplicate concept name"}},
+		{"an exact duplicate property is an error, not also a warning", map[string]string{"a" + hclExt: entityWith("A", member("x", "    type = \"int\"\n"), member("x", "    type = \"int\"\n"))}, []string{"duplicate property"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			expect(t, run(tc.files), tc.want...)
+		})
 	}
 }

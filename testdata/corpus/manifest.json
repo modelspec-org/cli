@@ -1,6 +1,38 @@
 {
- "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why: specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item without `differs` must have the same verdict as the reader recorded for it.",
+ "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why: specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item under parts/ is one file of another item, given alone (as an editor or a hook would): `path` is where it is under this directory, and a module is the unit, so its verdict is that of the whole module it belongs to. Parts are not compared with the other readers, which lint a whole project. An item without `differs` must have the same verdict as the reader recorded for it.",
  "items": {
+  "hcl/blank-property-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "name-form",
+     "publish-name-form"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore accepts a property named by a blank string; no property of that name could ever be referenced, so the standard cannot mean it to be valid (spec/core-model.md: names identify)"
+   }
+  },
+  "hcl/case-only-difference.modelspec.hcl": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   }
+  },
   "hcl/chinook.modelspec.hcl": {
    "default": {
     "verdict": "accept"
@@ -38,6 +70,27 @@
     "rules": [
      "duplicate-name"
     ]
+   }
+  },
+  "hcl/empty-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form",
+     "publish-name-form",
+     "publish-properties"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore accepts an entity named by the empty string; nothing could ever refer to it, and the Directory's reader refuses the same model in JSON form"
    }
   },
   "hcl/empty.modelspec.hcl": {
@@ -152,6 +205,14 @@
    },
    "differs": {
     "specscore": "specscore ignores attributes whose value is not a plain literal; lint refuses expressions (decision 0009)"
+   }
+  },
+  "hcl/heredoc-pattern-brackets.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
    }
   },
   "hcl/map-style-properties.modelspec.hcl": {
@@ -445,6 +506,20 @@
     ]
    }
   },
+  "json/case-only-difference.modelspec.json": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   }
+  },
   "json/chinook.modelspec.json": {
    "default": {
     "verdict": "accept"
@@ -496,6 +571,24 @@
    },
    "differs": {
     "directory": "the Directory's reader takes the last of two equal keys, so it sees a valid `type`; lint refuses the repeat, which other readers resolve the other way"
+   }
+  },
+  "json/empty-entity-name.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form",
+     "publish-name-form",
+     "publish-properties"
+    ]
    }
   },
   "json/entities-array.modelspec.json": {
@@ -1035,6 +1128,28 @@
     ]
    }
   },
+  "modules/layout-duplicate-in-module": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "modules/layout-json-copy-in-models-dir": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
   "modules/layout-key-through-component": {
    "default": {
     "verdict": "accept"
@@ -1083,6 +1198,14 @@
     ]
    }
   },
+  "modules/layout-self-contained": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
   "modules/layout-undeclared-dependency": {
    "default": {
     "verdict": "accept"
@@ -1122,6 +1245,96 @@
      "publish-qualified-entity"
     ]
    }
+  },
+  "parts/layout-duplicate-in-module-entities": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/entities.modelspec.hcl"
+  },
+  "parts/layout-duplicate-in-module-enums": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/enums.modelspec.hcl"
+  },
+  "parts/layout-duplicate-in-module-extra": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/extra.modelspec.hcl"
+  },
+  "parts/layout-json-copy-json-alone": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   },
+   "path": "modules/layout-json-copy-in-models-dir/spec/graph/modules/sales/models/sales.modelspec.json"
+  },
+  "parts/layout-self-contained-entities": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   },
+   "path": "modules/layout-self-contained/spec/graph/modules/sales/models/entities.modelspec.hcl"
+  },
+  "parts/stale-twin-json-alone": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "path": "standalone/stale-twin/core.modelspec.json"
+  },
+  "parts/twin-name-differs-hcl-alone": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   },
+   "path": "standalone/twin-name-differs/todo.modelspec.hcl"
   },
   "standalone/chinook-pair": {
    "default": {
@@ -1175,6 +1388,34 @@
     ]
    }
   },
+  "standalone/explicit-module-with-json-copy": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   },
+   "modules": [
+    "shop=parts"
+   ]
+  },
+  "standalone/stale-twin": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   }
+  },
   "standalone/twin-and-reference": {
    "default": {
     "verdict": "accept"
@@ -1209,6 +1450,17 @@
     "rules": [
      "publish-qualified-entity",
      "reference"
+    ]
+   }
+  },
+  "standalone/twin-name-differs": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
     ]
    }
   }

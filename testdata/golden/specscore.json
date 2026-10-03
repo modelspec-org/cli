@@ -3,6 +3,16 @@
   "specscore_version": "0.54.2",
   "wrapper": "hcl/: one throwaway project per file (specscore init, specscore graph new module --id <file stem> --bare, file copied to models/, as datatug/chinookdb scripts/lint-modelspec.sh does); modules/: the case directory is a complete SpecScore project, copied unchanged",
   "verdicts": {
+    "hcl/blank-property-name.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/case-only-difference.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
     "hcl/chinook.modelspec.hcl": {
       "verdict": "accept",
       "exit": 0,
@@ -19,6 +29,11 @@
       "findings": [
         "duplicate-entity.modelspec.hcl:8 [error] graph-model-duplicate-concept: duplicate concept name \"User\" in the trio scope (also declared at line 1)"
       ]
+    },
+    "hcl/empty-name.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
     },
     "hcl/empty.modelspec.hcl": {
       "verdict": "accept",
@@ -62,6 +77,11 @@
       ]
     },
     "hcl/expression-value.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/heredoc-pattern-brackets.modelspec.hcl": {
       "verdict": "accept",
       "exit": 0,
       "findings": []
@@ -205,6 +225,18 @@
         "spec/graph/modules/sales/models/extra.modelspec.hcl:1 [error] graph-model-duplicate-concept: duplicate concept name \"OrderStatus\" in the trio scope (also declared at line 1)"
       ]
     },
+    "modules/layout-duplicate-in-module": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "spec/graph/modules/sales/models/extra.modelspec.hcl:1 [error] graph-model-duplicate-concept: duplicate concept name \"OrderStatus\" in the trio scope (also declared at line 1)"
+      ]
+    },
+    "modules/layout-json-copy-in-models-dir": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
     "modules/layout-key-through-component": {
       "verdict": "accept",
       "exit": 0,
@@ -223,6 +255,11 @@
       "findings": []
     },
     "modules/layout-same-name-in-two-modules": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "modules/layout-self-contained": {
       "verdict": "accept",
       "exit": 0,
       "findings": []

@@ -71,9 +71,10 @@ func memberAttrs(k Kind) map[string]valueKind {
 
 // unit is one module as Check sees it: the models of one Group.
 type unit struct {
-	name   string
-	models []*Model
-	broken bool // some file of the module could not be read
+	name    string
+	aliases map[string]bool // other names the module's own references may use: a twin's module.name
+	models  []*Model
+	broken  bool // some file of the module could not be read
 }
 
 func (u *unit) find(kind Kind, name string) *Concept {
@@ -116,7 +117,10 @@ func Check(models []*Model, opts Options) []Finding {
 	for _, m := range models {
 		var u *unit
 		if m.Twin {
-			u = &unit{name: m.Name}
+			u = &unit{name: m.Name, aliases: map[string]bool{}}
+			if m.Module != nil && m.Module.Name != "" {
+				u.aliases[m.Module.Name] = true
+			}
 			order = append(order, u)
 		} else if u = groups[m.Group]; u == nil {
 			u = &unit{name: m.Name}
@@ -167,6 +171,9 @@ func (c *checker) unit(u *unit) {
 			continue
 		}
 		c.cur = m
+		if m.Twin {
+			c.staleTwin(m)
+		}
 		for _, k := range m.Concepts {
 			c.names(k)
 			c.attrs(string(k.Kind)+" "+quote1(k.Name), k.Attrs, conceptAttrs[k.Kind])
@@ -195,8 +202,16 @@ func (c *checker) duplicates(u *unit) {
 	type decl struct {
 		model *Model
 		line  int
+		name  string
+	}
+	where := func(prev decl, m *Model) string {
+		if prev.model != m {
+			return fmt.Sprintf("%s:%d", prev.model.File, prev.line)
+		}
+		return fmt.Sprintf("line %d", prev.line)
 	}
 	seen := map[string]decl{}
+	folded := map[string]decl{}
 	for _, m := range u.models {
 		if m.Broken {
 			continue
@@ -204,16 +219,17 @@ func (c *checker) duplicates(u *unit) {
 		c.cur = m
 		for _, k := range m.Concepts {
 			key := conceptScope(k.Kind) + "\x00" + k.Name
-			prev, dup := seen[key]
-			if !dup {
-				seen[key] = decl{m, k.Line}
+			if prev, dup := seen[key]; dup {
+				c.errorf(k.Line, RuleDuplicate, "duplicate concept name %q in the %s scope (also declared at %s)", k.Name, conceptScope(k.Kind), where(prev, m))
 				continue
 			}
-			where := fmt.Sprintf("line %d", prev.line)
-			if prev.model != m {
-				where = fmt.Sprintf("%s:%d", prev.model.File, prev.line)
+			seen[key] = decl{m, k.Line, k.Name}
+			fkey := conceptScope(k.Kind) + "\x00" + strings.ToLower(k.Name)
+			if prev, dup := folded[fkey]; dup {
+				c.add(k.Line, RuleNameCase, SeverityWarning, "%s name %q differs only by case from %q (declared at %s) in the %s scope; on a case-insensitive store they collide", k.Kind, k.Name, prev.name, where(prev, m), conceptScope(k.Kind))
+				continue
 			}
-			c.errorf(k.Line, RuleDuplicate, "duplicate concept name %q in the %s scope (also declared at %s)", k.Name, conceptScope(k.Kind), where)
+			folded[fkey] = decl{m, k.Line, k.Name}
 		}
 	}
 }
@@ -222,6 +238,8 @@ func (c *checker) duplicates(u *unit) {
 // and the five reserved tokens (decision 0015), and nothing else.
 func (c *checker) names(k *Concept) {
 	switch {
+	case strings.TrimSpace(k.Name) == "":
+		c.errorf(k.Line, RuleNameForm, "%s name must not be empty or blank; it could never be referenced", k.Kind)
 	case ReservedNames[k.Name]:
 		c.errorf(k.Line, RuleReserved, "%s name %q is a reserved kind token (entities, components, enums, collections, recordsets) and cannot name a concept", k.Kind, k.Name)
 	case strings.Contains(k.Name, "."):
@@ -398,12 +416,20 @@ func (c *checker) propertyNames(u *unit, k *Concept) (names map[string]bool, com
 func (c *checker) members(u *unit, k *Concept) {
 	allowed := memberAttrs(k.Kind)
 	seen := map[string]int{}
+	foldedMembers := map[string]string{}
 	for _, mem := range k.Members {
 		who := fmt.Sprintf("%s %q %s %q", k.Kind, k.Name, memberWord(k.Kind), mem.Name)
+		if strings.TrimSpace(mem.Name) == "" {
+			c.errorf(mem.Line, RuleNameForm, "%s name must not be empty or blank in %s %q; it could never be referenced", memberWord(k.Kind), k.Kind, k.Name)
+		}
 		if prev, dup := seen[mem.Name]; dup {
 			c.errorf(mem.Line, RuleDuplicate, "duplicate %s %q in %s %q (also declared at line %d)", memberWord(k.Kind), mem.Name, k.Kind, k.Name, prev)
+		} else if prevName, ok := foldedMembers[strings.ToLower(mem.Name)]; ok {
+			c.add(mem.Line, RuleNameCase, SeverityWarning, "%s name %q differs only by case from %q in %s %q; on a case-insensitive store they collide", memberWord(k.Kind), mem.Name, prevName, k.Kind, k.Name)
+			seen[mem.Name] = mem.Line
 		} else {
 			seen[mem.Name] = mem.Line
+			foldedMembers[strings.ToLower(mem.Name)] = mem.Name
 		}
 		c.attrs(who, mem.Attrs, allowed)
 		if k.Kind == KindEntity || k.Kind == KindComponent {
@@ -472,8 +498,9 @@ func (c *checker) lookup(u *unit, ref string) (target *unit, name, problem strin
 	}
 	targets := c.byName[module]
 	switch {
-	case module == u.name:
-		// A module always resolves its own name to itself.
+	case module == u.name || u.aliases[module]:
+		// A module always resolves its own name to itself; a twin also its own
+		// module.name.
 		return u, name, ""
 	case len(targets) == 1:
 		if targets[0].broken {
@@ -664,4 +691,20 @@ func (c *checker) publishEntity(u *unit, k *Concept) {
 			c.errorf(a.Line, RulePublishQualified, "%s refers to %q in another module; the catalogue resolves entity references inside the one model only", who, a.Value.Str)
 		}
 	}
+}
+
+// staleTwin compares a JSON twin with the export of the HCL it sits beside. A
+// twin that differs is a warning, not an error: it is still a valid model, but
+// the copy consumers read is not what the source says. export --check is the
+// strict gate.
+func (c *checker) staleTwin(m *Model) {
+	h := m.TwinOf
+	if h == nil || h.Broken || m.Root == nil || m.Module == nil || m.Module.ID == "" || m.Module.Version == "" {
+		return // nothing to compare, or the JSON's own findings say what is wrong
+	}
+	diff, err := h.exportDiff(m.Root, *m.Module)
+	if err != nil || diff == "" {
+		return // an HCL file that cannot be exported cannot have a twin to compare with
+	}
+	c.add(1, RuleStaleTwin, SeverityWarning, "stale twin: %s is not what %s exports to (%s); run modelspec export", m.File, h.File, diff)
 }

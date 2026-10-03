@@ -1,0 +1,23 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "github.com/acme/todo",
+    "name": "Todo",
+    "version": "0.1.0"
+  },
+  "entities": {
+    "Task": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "uuid"
+        },
+        "parent": {
+          "entity": "Todo.Task"
+        }
+      }
+    }
+  }
+}

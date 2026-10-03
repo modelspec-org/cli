@@ -22,6 +22,9 @@ type verdict struct {
 }
 
 type manifestItem struct {
+	// Path, for an item that is a part of another item (one file of a tree, as a
+	// hook or an editor would pass it), is its path under the corpus directory.
+	Path    string            `json:"path"`
 	Default verdict           `json:"default"`
 	Publish verdict           `json:"publish"`
 	Modules []string          `json:"modules"`
@@ -55,7 +58,8 @@ func readJSON(t *testing.T, path string, v any) {
 }
 
 // corpusItems lists the corpus: every file under hcl/ and json/, every directory
-// under modules/ and standalone/.
+// under modules/ and standalone/. Items that are parts of others (they have a
+// path in the manifest) are not in the directories.
 func corpusItems(t *testing.T) []string {
 	t.Helper()
 	var items []string
@@ -109,6 +113,9 @@ func joinFindings(fs []Finding) string {
 func lintItem(t *testing.T, item string, entry manifestItem, profile Profile) []Finding {
 	t.Helper()
 	path := filepath.Join(corpusDir, filepath.FromSlash(item))
+	if entry.Path != "" {
+		path = filepath.Join(corpusDir, filepath.FromSlash(entry.Path))
+	}
 	var assign []Assignment
 	for _, m := range entry.Modules {
 		name, rel, _ := strings.Cut(m, "=")
@@ -128,6 +135,22 @@ func TestCorpusMatchesManifest(t *testing.T) {
 	var m manifest
 	readJSON(t, filepath.Join(corpusDir, "manifest.json"), &m)
 	items := corpusItems(t)
+	parts := 0
+	for item, entry := range m.Items {
+		if entry.Path != "" {
+			parts++
+			items = append(items, item)
+			if !strings.HasPrefix(item, "parts/") {
+				t.Errorf("%s has a path but is not under parts/", item)
+			}
+			if _, err := os.Stat(filepath.Join(corpusDir, filepath.FromSlash(entry.Path))); err != nil {
+				t.Errorf("%s: %v", item, err)
+			}
+		}
+	}
+	if parts < 5 {
+		t.Errorf("only %d parts in the corpus", parts)
+	}
 	if len(items) != len(m.Items) {
 		t.Errorf("corpus has %d items, manifest %d", len(items), len(m.Items))
 	}
@@ -269,7 +292,8 @@ func TestExportOfCleanHCLLintsClean(t *testing.T) {
 		if HasErrors(findings) {
 			t.Fatalf("%s: %v", item, findings)
 		}
-		node, err := model.JSON(ModuleIdentity{ID: "github.com/acme/" + stem, Name: stem, Version: "0.1.0"})
+		id := ModuleIdentity{ID: "github.com/acme/" + stem, Name: stem, Version: "0.1.0"}
+		node, err := model.JSON(id)
 		if len(model.Unmapped) > 0 {
 			if err == nil {
 				t.Errorf("%s: export of a file with unmapped constructs succeeded", item)
@@ -287,8 +311,33 @@ func TestExportOfCleanHCLLintsClean(t *testing.T) {
 			t.Errorf("%s: the export does not parse clean:\n%s", item, joinFindings(parse))
 			continue
 		}
-		if findings := Check([]*Model{back}, Options{}); len(findings) != 0 {
-			t.Errorf("%s: the export does not lint clean:\n%s", item, joinFindings(findings))
+		_, wantWarnings := ruleSets(Check([]*Model{model}, Options{}))
+		if gotErrs, gotWarnings := ruleSets(Check([]*Model{back}, Options{})); len(gotErrs) != 0 || !same(gotWarnings, wantWarnings) {
+			t.Errorf("%s: the export has errors %v and warnings %v; the HCL has warnings %v", item, gotErrs, gotWarnings, wantWarnings)
+		}
+		// Under another name, or none, the export must still lint clean on its own,
+		// or be refused because the model refers to itself by its name.
+		for _, other := range []string{"Other", ""} {
+			node, err := model.JSON(ModuleIdentity{ID: id.ID, Name: other, Version: id.Version})
+			if other != "" && model.refersTo(model.Name) {
+				if err == nil {
+					t.Errorf("%s: exported under the name %q although it refers to itself as %q", item, other, model.Name)
+				}
+				continue
+			}
+			if err != nil {
+				t.Errorf("%s under the name %q: %v", item, other, err)
+				continue
+			}
+			file := "other" + JSONSuffix
+			if other == "" {
+				file = stem + JSONSuffix // no module.name: the file name is the module's name
+			}
+			named, parse := ParseJSON(file, node.Encode())
+			gotErrs, gotWarnings := ruleSets(Check([]*Model{named}, Options{}))
+			if len(parse) != 0 || len(gotErrs) != 0 || !same(gotWarnings, wantWarnings) {
+				t.Errorf("%s under the name %q: the export has errors %v and warnings %v, parse findings %s; the HCL has warnings %v", item, other, gotErrs, gotWarnings, joinFindings(parse), wantWarnings)
+			}
 		}
 	}
 	sort.Strings(refused)

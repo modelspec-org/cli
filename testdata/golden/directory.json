@@ -1,9 +1,13 @@
 {
   "tool": "parseModelSpec in scripts/lib/modelspec.mjs of openvaultdb/directory",
   "directory_branch": "main",
-  "directory_commit": "37f311d1c6b8675419ee74f23d011586b5e10ad6",
+  "directory_commit": "f2dc393e68e7bd0e7ba81d9086e3a87794f69122",
   "node_version": "v24.20.0",
   "verdicts": {
+    "json/case-only-difference.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
     "json/chinook.modelspec.json": {
       "verdict": "accept",
       "problems": []
@@ -21,6 +25,12 @@
     "json/duplicate-key-in-property.modelspec.json": {
       "verdict": "accept",
       "problems": []
+    },
+    "json/empty-entity-name.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "entity name \"\" must be an identifier (letters, digits and _, not starting with a digit)"
+      ]
     },
     "json/entities-array.modelspec.json": {
       "verdict": "refuse",

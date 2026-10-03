@@ -13,6 +13,7 @@ import (
 // lintReport is the --format json output.
 type lintReport struct {
 	Files    int                 `json:"files"`
+	Notes    []string            `json:"notes"`
 	Errors   int                 `json:"errors"`
 	Warnings int                 `json:"warnings"`
 	Findings []modelspec.Finding `json:"findings"`
@@ -44,17 +45,24 @@ Each path is a file or a directory; a directory is searched recursively
 followed, links to directories are not). With no path, lint checks the current
 directory. A file reached by two names is read once.
 
-Modules. A module is a set of files, and concept names are unique per module
-and references resolve across all its files:
+Modules. A module is a set of files, and the module is the unit of checking: if
+a file you give belongs to a module with more files on disk, the whole module is
+loaded and checked, findings in the other files are reported with their paths,
+and a note says so. Concept names are unique per module and references resolve
+across all its files:
   - in the SpecScore layout, every .hcl file directly inside
     .../modules/<id>/models/ belongs to module <id>, whatever it is called;
   - otherwise <name>.modelspec.hcl is module <name>, and a JSON file is
     module.name (or its file name without .modelspec.json when it has none);
   - --module <name>=<path> (repeatable; a file or a directory) assigns files to
     a module explicitly and wins over both rules. Assigned files are linted too.
+    Assigning only part of a layout module's directory is refused: it would split
+    the module.
   - X.modelspec.json beside X.modelspec.hcl is the interchange copy of the same
-    module, not a second module. Two different sources claiming one module name
-    are an error where the module is referenced.
+    module, not a second module (a stale copy is a warning). A JSON file in a
+    layout module's models directory, or in a directory assigned to a module that
+    has HCL files, is that module's interchange copy too. Two different sources
+    claiming one module name are an error where the module is referenced.
 A module-qualified reference such as core.Space resolves against the modules in
 the files linted together.
 
@@ -93,7 +101,7 @@ Output is text by default, or one JSON object with --format json; with
 			if err != nil {
 				return ioError(err)
 			}
-			rep := lintReport{Files: res.Files, Findings: res.Findings}
+			rep := lintReport{Files: res.Files, Findings: res.Findings, Notes: res.Notes}
 			for _, f := range res.Findings {
 				if f.Severity == modelspec.SeverityError {
 					rep.Errors++
@@ -121,9 +129,17 @@ func writeReport(env *Env, format string, rep lintReport) error {
 		if rep.Findings == nil {
 			rep.Findings = []modelspec.Finding{}
 		}
+		if rep.Notes == nil {
+			rep.Notes = []string{}
+		}
 		enc := json.NewEncoder(env.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(rep)
+	}
+	for _, n := range rep.Notes {
+		if _, err := fmt.Fprintf(env.Stdout, "note: %s\n", n); err != nil {
+			return err
+		}
 	}
 	for _, f := range rep.Findings {
 		if _, err := fmt.Fprintln(env.Stdout, f); err != nil {

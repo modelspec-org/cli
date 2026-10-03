@@ -1,7 +1,6 @@
 package modelspec
 
 import (
-	"errors"
 	"io/fs"
 	"path/filepath"
 	"sort"
@@ -12,24 +11,35 @@ import (
 )
 
 // memFS is an in-memory FS. links maps a path to the path it is a symbolic link
-// to; "" is a dangling link. alias maps a path to a different canonical path, to
-// stand for the absolute name of a relative path.
+// to; "" is a dangling link. cwd, when set, is the directory relative names are
+// relative to. caseFold makes it a case-insensitive filesystem as far as SameFile
+// goes. sizes overrides the size Stat reports, to stand for a huge file.
 type memFS struct {
 	fstest.MapFS
 	written  map[string][]byte
 	perms    map[string]fs.FileMode
 	writeErr error
 	links    map[string]string
-	alias    map[string]string
-	canonErr map[string]error
+	cwd      string
+	caseFold bool
+	sizes    map[string]int64
+	absErr   map[string]error
+	statErr  map[string]error
 }
 
 func newMemFS(files map[string]string) *memFS {
-	m := &memFS{MapFS: fstest.MapFS{}, written: map[string][]byte{}, perms: map[string]fs.FileMode{}, links: map[string]string{}, alias: map[string]string{}, canonErr: map[string]error{}}
+	m := &memFS{MapFS: fstest.MapFS{}, written: map[string][]byte{}, perms: map[string]fs.FileMode{}, links: map[string]string{}, sizes: map[string]int64{}, absErr: map[string]error{}, statErr: map[string]error{}}
 	for n, s := range files {
 		m.MapFS[n] = &fstest.MapFile{Data: []byte(s)}
 	}
 	return m
+}
+
+func (m *memFS) path(name string) string {
+	if m.cwd != "" && !filepath.IsAbs(name) {
+		name = filepath.Join(m.cwd, name)
+	}
+	return strings.TrimPrefix(filepath.Clean(name), "/")
 }
 
 func (m *memFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
@@ -42,21 +52,65 @@ func (m *memFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 }
 
 func (m *memFS) resolve(name string) string {
-	name = filepath.Clean(name)
+	name = m.path(name)
 	if t, ok := m.links[name]; ok {
 		return t
 	}
 	return name
 }
 
+func (m *memFS) Abs(name string) (string, error) {
+	if err, ok := m.absErr[m.path(name)]; ok {
+		return "", err
+	}
+	return m.path(name), nil
+}
+
+// pathInfo is a FileInfo that remembers which path it describes.
+type pathInfo struct {
+	fs.FileInfo
+	path string
+	size int64
+}
+
+func (p pathInfo) Size() int64 {
+	if p.size >= 0 {
+		return p.size
+	}
+	return p.FileInfo.Size()
+}
+
+func (m *memFS) SameFile(a, b fs.FileInfo) bool {
+	pa, aok := a.(pathInfo)
+	pb, bok := b.(pathInfo)
+	if !aok || !bok {
+		return false
+	}
+	if m.caseFold {
+		return strings.EqualFold(pa.path, pb.path)
+	}
+	return pa.path == pb.path
+}
+
 func (m *memFS) ReadFile(name string) ([]byte, error) { return m.MapFS.ReadFile(m.resolve(name)) }
 
 func (m *memFS) Stat(name string) (fs.FileInfo, error) {
+	if err, ok := m.statErr[m.path(name)]; ok {
+		return nil, err
+	}
 	t := m.resolve(name)
 	if t == "" {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 	}
-	return m.MapFS.Stat(t)
+	info, err := m.MapFS.Stat(t)
+	if err != nil {
+		return nil, err
+	}
+	size := int64(-1)
+	if s, ok := m.sizes[m.path(name)]; ok {
+		size = s
+	}
+	return pathInfo{FileInfo: info, path: t, size: size}, nil
 }
 
 type linkEntry struct{ fs.DirEntry }
@@ -65,6 +119,7 @@ func (linkEntry) Type() fs.FileMode { return fs.ModeSymlink }
 func (linkEntry) IsDir() bool       { return false }
 
 func (m *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	name = m.path(name)
 	entries, err := m.MapFS.ReadDir(name)
 	if err != nil {
 		return nil, err
@@ -75,7 +130,7 @@ func (m *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 	}
 	for link, target := range m.links {
-		if target == "" && filepath.Dir(link) == filepath.Clean(name) {
+		if target == "" && filepath.Dir(link) == name {
 			entries = append(entries, linkEntry{fs.FileInfoToDirEntry(fakeInfo{name: filepath.Base(link)})})
 		}
 	}
@@ -91,25 +146,6 @@ func (fakeInfo) Mode() fs.FileMode  { return 0o777 | fs.ModeSymlink }
 func (fakeInfo) ModTime() time.Time { return time.Time{} }
 func (fakeInfo) IsDir() bool        { return false }
 func (fakeInfo) Sys() any           { return nil }
-
-func (m *memFS) Canonical(name string) (string, error) {
-	if err, ok := m.canonErr[filepath.Clean(name)]; ok {
-		return "", err
-	}
-	t := m.resolve(name)
-	if t == "" {
-		return "", &fs.PathError{Op: "lstat", Path: name, Err: fs.ErrNotExist}
-	}
-	if _, err := m.MapFS.Stat(t); err != nil {
-		return "", err
-	}
-	if a, ok := m.alias[t]; ok {
-		return a, nil
-	}
-	return t, nil
-}
-
-var errNoSuch = errors.New("no such file")
 
 // lintFiles lints a whole in-memory tree and returns every finding as a string.
 func lintFiles(files map[string]string, opts LintOptions) []string {

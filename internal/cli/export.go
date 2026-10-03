@@ -27,10 +27,13 @@ The JSON form carries a module identity that the HCL has no place for, so
 export needs --module-id and --module-version (the format requires those two);
 --module-name is written only when given.
 
-export lints the file first, as lint does under the default profile, and refuses
-a file with errors (exit 1, the findings on standard error). A file that refers to
+export lints the file first, as lint does under the default profile (so the module
+the file belongs to is checked whole, as lint checks it), and refuses a file with
+errors (exit 1, the findings for the file on standard error). A file that refers to
 other modules needs them supplied with --module <name>=<path> (repeatable), as
 for lint; those files are used to resolve references and are not exported.
+export reads HCL: any .hcl file of a SpecScore models directory is accepted, whatever
+it is called, and a JSON file is a usage error.
 
 With --check, export compares a committed JSON file with what the HCL exports to
 and exits 1 when they differ, so CI can catch a stale copy:
@@ -44,9 +47,12 @@ file unless the --module-* flags are given. --check refuses an HCL file with
 errors too, and cannot be combined with --out.
 
 The JSON form is one document per module, and the standard does not say how the
-files of a module are merged, so a file that is one of several files of a module
-in the SpecScore layout is refused. A file with an index, projection or
-migration block is refused too: the standard does not define their JSON form.`,
+files of a module are merged, so a file that is one of several .hcl files of a
+module (the SpecScore layout, or --module) is refused, with the other files named.
+A model that refers to its own module by name cannot be exported under another
+module.name (the JSON would not lint clean on its own) and is refused. A file with an
+index, projection or migration block is refused too: the standard does not define
+their JSON form.`,
 		Example: `  modelspec export model/chinook.modelspec.hcl --out model/chinook.modelspec.json \
     --module-id github.com/acme/chinook/model/chinook --module-name chinook --module-version 0.1.0
   modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json`,
@@ -101,19 +107,10 @@ func ioErrorOrNil(err error) error {
 	return nil
 }
 
-// lintForExport lints the file (with the modules it needs) and returns its model
-// when it has no error. The findings for the file go to standard error.
+// lintForExport lints the file with the loader lint uses (so the module is
+// checked whole, and the modules it needs are supplied) and returns its model when
+// it has no error. The findings for the file go to standard error.
 func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*modelspec.Model, error) {
-	if !strings.HasSuffix(file, modelspec.HCLSuffix) {
-		return nil, usageErrorf("%s: export reads %s files", file, modelspec.HCLSuffix)
-	}
-	module, files, err := modelspec.LayoutModule(env.FS, file)
-	if err != nil {
-		return nil, ioError(err)
-	}
-	if len(files) > 1 {
-		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s is one of %d files of module %s in the SpecScore layout; the JSON form is one document per module and the standard does not say how a module's files are merged, so there is nothing to export", file, len(files), module)}
-	}
 	res, err := modelspec.Lint(env.FS, []string{file}, modelspec.LintOptions{Modules: assign})
 	if err != nil {
 		return nil, ioError(err)
@@ -124,9 +121,21 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 			model = m
 		}
 	}
+	if model.Form != modelspec.FormHCL {
+		return nil, usageErrorf("%s: export reads HCL files, and this is the JSON form", file)
+	}
+	var siblings []string
+	for _, m := range res.Models {
+		if m.Form == modelspec.FormHCL && !m.Twin && m != model && m.Group == model.Group {
+			siblings = append(siblings, m.File)
+		}
+	}
+	if len(siblings) > 0 {
+		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s is one of %d files of module %s (%s); the JSON form is one document per module and the standard does not say how a module's files are merged, so there is nothing to export", file, len(siblings)+1, model.Name, strings.Join(siblings, ", "))}
+	}
 	var mine []modelspec.Finding
 	for _, f := range res.Findings {
-		if f.File == filepath.Clean(file) {
+		if f.File == model.File {
 			mine = append(mine, f)
 			fmt.Fprintln(env.Stderr, f)
 		}

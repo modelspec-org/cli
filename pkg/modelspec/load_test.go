@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func paths(ss []Source) string {
@@ -41,7 +42,7 @@ func TestDiscover(t *testing.T) {
 	}
 	// An explicitly named file is taken even in a hidden directory.
 	got, _, err = Discover(fsys, []string{".hidden/d.modelspec.hcl"})
-	if err != nil || len(got) != 1 || got[0].Canon != ".hidden/d.modelspec.hcl" {
+	if err != nil || len(got) != 1 || got[0].Abs != ".hidden/d.modelspec.hcl" {
 		t.Fatalf("explicit hidden file = %v, %v", got, err)
 	}
 	// An .hcl file of any name is a model file in a layout directory, also when named.
@@ -69,19 +70,31 @@ func TestDiscoverErrors(t *testing.T) {
 	if _, _, err := Discover(&failingFS{memFS: fsys, readDirErr: boom, failAt: "d"}, []string{"."}); !errors.Is(err, boom) {
 		t.Errorf("nested ReadDir error: %v", err)
 	}
-	fsys.canonErr["d/y.modelspec.hcl"] = boom
+	fsys.absErr["d/y.modelspec.hcl"] = boom
 	if _, _, err := Discover(fsys, []string{"d/y.modelspec.hcl"}); !errors.Is(err, boom) {
-		t.Errorf("Canonical error for a named file: %v", err)
+		t.Errorf("Abs error for a named file: %v", err)
 	}
-	// A file a search finds but cannot canonicalise is a warning, not the end.
-	got, warnings, err := Discover(fsys, []string{"d"})
-	if err != nil || len(got) != 0 || len(warnings) != 1 || warnings[0].Rule != RuleIO || warnings[0].Severity != SeverityWarning || !strings.Contains(warnings[0].Message, "boom") {
-		t.Errorf("unreadable found file: %v %v %v", got, warnings, err)
+	// A file a search finds but cannot read is a warning, not the end of the run.
+	for name, inject := range map[string]func(){
+		"abs":  func() { fsys.absErr["d/y.modelspec.hcl"] = boom },
+		"stat": func() { delete(fsys.absErr, "d/y.modelspec.hcl"); fsys.statErr["d/y.modelspec.hcl"] = boom },
+	} {
+		inject()
+		got, warnings, err := Discover(fsys, []string{"d"})
+		if name == "stat" {
+			if err != nil || len(got) != 0 || len(warnings) != 1 || warnings[0].Rule != RuleIO || warnings[0].Severity != SeverityWarning || !strings.Contains(warnings[0].Message, "boom") {
+				t.Errorf("%s: unreadable found file: %v %v %v", name, got, warnings, err)
+			}
+			continue
+		}
+		if err != nil || len(got) != 0 || len(warnings) != 1 || warnings[0].Rule != RuleIO {
+			t.Errorf("%s: unreadable found file: %v %v %v", name, got, warnings, err)
+		}
 	}
-	delete(fsys.canonErr, "d/y.modelspec.hcl")
-	fsys.canonErr["."] = boom
+	fsys.absErr["."] = boom
+	delete(fsys.statErr, "d/y.modelspec.hcl")
 	if _, _, err := Discover(fsys, []string{"."}); !errors.Is(err, boom) {
-		t.Errorf("Canonical error for a named directory: %v", err)
+		t.Errorf("Abs error for a named directory: %v", err)
 	}
 }
 
@@ -98,19 +111,49 @@ func (f *failingFS) ReadDir(name string) ([]os.DirEntry, error) {
 	return f.memFS.ReadDir(name)
 }
 
-// The same file reached by a relative and an absolute name is read once.
+// A module directory that cannot be listed is an error, not a quiet partial check.
+func TestLintRefusesAModuleItCannotListWhole(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("cannot list")
+	dir := "spec/modules/sales/models"
+	fsys := &failingFS{memFS: newMemFS(map[string]string{dir + "/a.hcl": okEntity}), readDirErr: boom, failAt: dir}
+	if _, err := Lint(fsys, []string{dir + "/a.hcl"}, LintOptions{}); !errors.Is(err, boom) {
+		t.Errorf("Lint = %v, want the listing error", err)
+	}
+}
+
+// The same file reached by a relative and an absolute name, or by a name that
+// differs by case on a case-insensitive filesystem, is read once.
 func TestDiscoverDeduplicates(t *testing.T) {
 	t.Parallel()
-	fsys := newMemFS(map[string]string{"m/a.modelspec.hcl": okEntity, "m/b.modelspec.hcl": okEntity})
-	fsys.alias["m/a.modelspec.hcl"] = "/abs/m/a.modelspec.hcl"
-	fsys.alias["m/b.modelspec.hcl"] = "/abs/m/b.modelspec.hcl"
-	got, _, err := Discover(fsys, []string{"m/a.modelspec.hcl", "./m/a.modelspec.hcl", "m", "m/b.modelspec.hcl"})
+	fsys := newMemFS(map[string]string{"work/m/a.modelspec.hcl": okEntity, "work/m/b.modelspec.hcl": okEntity})
+	fsys.cwd = "/work"
+	got, _, err := Discover(fsys, []string{"m/a.modelspec.hcl", "./m/a.modelspec.hcl", "/work/m/a.modelspec.hcl", "m", "m/b.modelspec.hcl"})
 	if err != nil || paths(got) != "m/a.modelspec.hcl m/b.modelspec.hcl" {
 		t.Fatalf("Discover = %v, %v", paths(got), err)
 	}
 	res, err := Lint(fsys, []string{"m/a.modelspec.hcl", "m", "./m/a.modelspec.hcl"}, LintOptions{})
 	if err != nil || res.Files != 2 {
 		t.Fatalf("Lint read %d files, %v", res.Files, err)
+	}
+
+	// Two spellings that differ by case: one file on a case-insensitive filesystem, two on another.
+	for _, fold := range []bool{true, false} {
+		ci := newMemFS(map[string]string{"a.modelspec.hcl": okEntity, "A.modelspec.hcl": okEntity})
+		ci.caseFold = fold
+		got, _, err := Discover(ci, []string{"a.modelspec.hcl", "A.modelspec.hcl"})
+		want := 2
+		if fold {
+			want = 1
+		}
+		if err != nil || len(got) != want {
+			t.Errorf("case-insensitive %v: %v, %v", fold, paths(got), err)
+		}
+	}
+	// Different files of one size are two files.
+	same := newMemFS(map[string]string{"a.modelspec.hcl": okEntity, "b.modelspec.hcl": okEntity})
+	if got, _, err := Discover(same, []string{"a.modelspec.hcl", "b.modelspec.hcl"}); err != nil || len(got) != 2 {
+		t.Errorf("two files of equal size: %v, %v", paths(got), err)
 	}
 }
 
@@ -132,8 +175,7 @@ func TestDiscoverSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The link's canonical path is its target, so the file is read once, under
-	// the name the search met first.
+	// The link and its target are one file, read once, under the name the search met first.
 	if paths(got) != "dir/keep.modelspec.hcl link.modelspec.hcl" {
 		t.Fatalf("files = %v", paths(got))
 	}
@@ -151,18 +193,213 @@ func TestDiscoverSymlinks(t *testing.T) {
 	}
 }
 
+// The SpecScore layout is read from the path as given or found, not from the
+// path a symbolic link resolves to.
+func TestLayoutIsReadFromTheGivenPath(t *testing.T) {
+	t.Parallel()
+	enums := "enum \"Status\" {\n  values = [\"open\"]\n}\n"
+	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    type = \"string\"\n    enum = \"Status\"\n  }\n}\n"
+	fsys := newMemFS(map[string]string{
+		layout("sales", "entities.hcl"): order,
+		"shared/enums.hcl":              enums,
+	})
+	// A part of the module that is a symbolic link to a file elsewhere is still a part.
+	fsys.links[layout("sales", "enums.hcl")] = "shared/enums.hcl"
+	fsys.MapFS[layout("sales", "enums.hcl")] = fsys.MapFS["shared/enums.hcl"]
+	expect(t, lintTree(fsys, "spec"))
+	// Named, the link has a model name and the same module as its siblings.
+	linked := newMemFS(map[string]string{
+		layout("sales", "entities.hcl"): order,
+		"shared/enums.modelspec.hcl":    enums,
+	})
+	linked.links[layout("sales", "enums.modelspec.hcl")] = "shared/enums.modelspec.hcl"
+	linked.MapFS[layout("sales", "enums.modelspec.hcl")] = linked.MapFS["shared/enums.modelspec.hcl"]
+	expect(t, lintTree(linked, "spec"))
+
+	// A tree reached through a symbolic link to its modules directory has the layout of the path used.
+	via := newMemFS(map[string]string{
+		"elsewhere/sales/models/entities.hcl": order,
+		"elsewhere/sales/models/enums.hcl":    enums,
+	})
+	via.links["project/modules"] = "elsewhere"
+	via.MapFS["project/modules"] = via.MapFS["elsewhere"]
+	// project/modules/sales/models is the lexical path; it is reached through the link by name.
+	via.MapFS["project/modules/sales/models/entities.hcl"] = via.MapFS["elsewhere/sales/models/entities.hcl"]
+	via.MapFS["project/modules/sales/models/enums.hcl"] = via.MapFS["elsewhere/sales/models/enums.hcl"]
+	expect(t, lintTree(via, "project/modules/sales/models"))
+}
+
+func lintTree(fsys FS, path string) []string {
+	res, err := Lint(fsys, []string{path}, LintOptions{})
+	if err != nil {
+		return []string{"error: " + err.Error()}
+	}
+	out := make([]string, len(res.Findings))
+	for i, f := range res.Findings {
+		out[i] = f.String()
+	}
+	return out
+}
+
+func TestLayoutDir(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		path string
+		id   string
+		ok   bool
+	}{
+		{"spec/graph/modules/sales/models/a.hcl", "sales", true},
+		{"/abs/modules/sales/models/a.modelspec.json", "sales", true},
+		{"modules/sales/models/a.hcl", "sales", true},
+		{"spec/modules/sales/other/a.hcl", "", false},         // not models
+		{"spec/mods/sales/models/a.hcl", "", false},           // not modules
+		{"spec/modules/sales/models/deeper/a.hcl", "", false}, // not directly inside
+		{"sales/models/a.hcl", "", false},                     // too short
+		{"models/a.hcl", "", false},
+	} {
+		id, dir, ok := layoutDir(tc.path)
+		if ok != tc.ok || id != tc.id || (ok && !strings.HasSuffix(dir, "/models")) {
+			t.Errorf("layoutDir(%q) = %q %q %v", tc.path, id, dir, ok)
+		}
+	}
+	if _, _, ok := layoutModule("modules/sales/models/a.json"); ok {
+		t.Error("layoutModule accepted a non-.hcl file")
+	}
+	if id, _, ok := layoutModule("modules/sales/models/a.hcl"); !ok || id != "sales" {
+		t.Error("layoutModule refused an .hcl file")
+	}
+	// A path given from inside the models directory is made absolute first.
+	fsys := newMemFS(map[string]string{layout("sales", "a.hcl"): okEntity})
+	fsys.cwd = "/" + layout("sales", "")
+	got, _, err := Discover(fsys, []string{"a.hcl"})
+	if err != nil || len(got) != 1 || got[0].Abs != layout("sales", "a.hcl") {
+		t.Fatalf("from inside the models directory: %v, %v", got, err)
+	}
+}
+
+// A module is the unit of checking: given one file of it, the whole module is
+// loaded and checked.
+func TestLintLoadsTheWholeModule(t *testing.T) {
+	t.Parallel()
+	entities := layout("sales", "entities.modelspec.hcl")
+	enums := layout("sales", "enums.modelspec.hcl")
+	extra := layout("sales", "extra.modelspec.hcl")
+	tree := func() *memFS {
+		return newMemFS(map[string]string{
+			entities:                    "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    type = \"string\"\n    enum = \"OrderStatus\"\n  }\n}\n",
+			enums:                       "enum \"OrderStatus\" {\n  values = [\"open\"]\n}\n",
+			extra:                       "enum \"OrderStatus\" {\n  values = [\"x\"]\n}\n",
+			layout("core", "model.hcl"): okEntity,
+		})
+	}
+	wantNote := `a module is the unit of checking: module "sales" has more files in ` + filepath.ToSlash(filepath.Dir(entities)) + ` than were given, so the whole module was checked`
+
+	// The reviewer's first case: an enum in a sibling file resolves.
+	res, err := Lint(tree(), []string{entities}, LintOptions{})
+	if err != nil || res.Files != 3 || len(res.Notes) != 1 || res.Notes[0] != wantNote {
+		t.Fatalf("entities alone: %d files, notes %q, %v", res.Files, res.Notes, err)
+	}
+	// ... and the module holds the enum twice, which is reported, with the sibling's path.
+	got := []string{}
+	for _, f := range res.Findings {
+		got = append(got, f.String())
+	}
+	expect(t, got, extra+":1: error: duplicate concept name \"OrderStatus\" in the entity/component/enum scope (also declared at "+enums+":1)")
+
+	// The reviewer's second case: a file that repeats a sibling's concept is not clean.
+	res, err = Lint(tree(), []string{extra}, LintOptions{})
+	if err != nil || res.Files != 3 || len(res.Findings) != 1 || res.Findings[0].File != extra || res.Findings[0].Rule != RuleDuplicate {
+		t.Fatalf("extra alone: %d files, %v, %v", res.Files, res.Findings, err)
+	}
+
+	// Without the duplicate, one file is clean and the sibling is found.
+	clean := tree()
+	delete(clean.MapFS, extra)
+	res, err = Lint(clean, []string{entities}, LintOptions{})
+	if err != nil || res.Files != 2 || len(res.Findings) != 0 || len(res.Notes) != 1 {
+		t.Fatalf("clean module, one file: %d files, %v, notes %q, %v", res.Files, res.Findings, res.Notes, err)
+	}
+
+	// The same module reached through two files of one invocation is checked once, and said once.
+	res, err = Lint(clean, []string{entities, enums}, LintOptions{})
+	if err != nil || res.Files != 2 || len(res.Notes) != 0 {
+		t.Fatalf("both files given: %d files, notes %q, %v", res.Files, res.Notes, err)
+	}
+	// Three files of a module, two of them given: the module is checked once and said once.
+	three := tree()
+	res, err = Lint(three, []string{entities, extra}, LintOptions{})
+	if err != nil || res.Files != 3 || len(res.Notes) != 1 {
+		t.Fatalf("two of three given: %d files, notes %q, %v", res.Files, res.Notes, err)
+	}
+	// Two different modules, one file of each: one note each.
+	two := tree()
+	two.MapFS[layout("core", "second.hcl")] = &fstest.MapFile{Data: []byte("enum \"E\" {\n  values = [\"x\"]\n}\n")}
+	res, err = Lint(two, []string{entities, layout("core", "model.hcl")}, LintOptions{})
+	if err != nil || len(res.Notes) != 2 {
+		t.Fatalf("two modules: notes %q, %v", res.Notes, err)
+	}
+	// A directory given is complete already: no note.
+	res, err = Lint(tree(), []string{layout("sales", "")}, LintOptions{})
+	if err != nil || res.Files != 3 || len(res.Notes) != 0 {
+		t.Fatalf("a directory: %d files, notes %q, %v", res.Files, res.Notes, err)
+	}
+	// A file outside the layout is a module of its own: nothing to add.
+	alone := newMemFS(map[string]string{"x.modelspec.hcl": okEntity, "y.modelspec.hcl": okEntity})
+	res, err = Lint(alone, []string{"x.modelspec.hcl"}, LintOptions{})
+	if err != nil || res.Files != 1 || len(res.Notes) != 0 {
+		t.Fatalf("a standalone file: %d files, notes %q, %v", res.Files, res.Notes, err)
+	}
+	// A models directory that cannot be listed is an error.
+	broken := tree()
+	if _, err = Lint(&failingFS{memFS: broken, readDirErr: errors.New("no listing"), failAt: filepath.Dir(entities)}, []string{entities}, LintOptions{}); err == nil {
+		t.Fatal("an unlistable directory was linted")
+	}
+}
+
+// X.modelspec.hcl and X.modelspec.json are one module: given one, both are checked.
+func TestLintLoadsTheTwin(t *testing.T) {
+	t.Parallel()
+	hclSrc := entityWith("Space")
+	jsonSrc := `{"modelspec": "1.0-draft", "module": {"id": "x/core", "name": "core", "version": "1"}, "entities": {"Space": {"key": ["id"], "properties": {"id": {"type": "int"}}}}}`
+	for _, given := range []string{"d/core.modelspec.hcl", "d/core.modelspec.json"} {
+		fsys := newMemFS(map[string]string{"d/core.modelspec.hcl": hclSrc, "d/core.modelspec.json": jsonSrc})
+		res, err := Lint(fsys, []string{given}, LintOptions{})
+		if err != nil || res.Files != 2 || len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "are one module (the JSON is the interchange copy of the HCL), so both were checked") || len(res.Findings) != 0 {
+			t.Errorf("%s: %d files, notes %q, findings %v, %v", given, res.Files, res.Notes, res.Findings, err)
+		}
+	}
+	// With the JSON stale, linting only the HCL (the file a hook passes) says so.
+	stale := newMemFS(map[string]string{"d/core.modelspec.hcl": hclSrc, "d/core.modelspec.json": strings.Replace(jsonSrc, "Space", "Room", 2)})
+	res, err := Lint(stale, []string{"d/core.modelspec.hcl"}, LintOptions{})
+	if err != nil || len(res.Findings) != 1 || res.Findings[0].File != "d/core.modelspec.json" || res.Findings[0].Rule != RuleStaleTwin || res.Findings[0].Severity != SeverityWarning {
+		t.Fatalf("stale twin: %v, %v", res.Findings, err)
+	}
+	// Only one of the pair exists: nothing to add, and a lone JSON is a module of its own.
+	lone := newMemFS(map[string]string{"d/core.modelspec.json": jsonSrc})
+	if res, err := Lint(lone, []string{"d/core.modelspec.json"}, LintOptions{}); err != nil || res.Files != 1 || len(res.Notes) != 0 {
+		t.Fatalf("a lone JSON file: %d files, %v, %v", res.Files, res.Notes, err)
+	}
+	// A directory with the same name as the partner is not a partner.
+	dir := newMemFS(map[string]string{"d/core.modelspec.hcl": hclSrc, "d/core.modelspec.json/x": "", "d/other.txt": ""})
+	if res, err := Lint(dir, []string{"d/core.modelspec.hcl"}, LintOptions{}); err != nil || res.Files != 1 {
+		t.Fatalf("a directory named like the partner: %d files, %v", res.Files, err)
+	}
+}
+
 func TestLoadModuleRules(t *testing.T) {
 	t.Parallel()
 	fsys := newMemFS(map[string]string{
-		layout("sales", "a.hcl"):   okEntity,
-		layout("sales", "b.hcl"):   "enum \"E\" {\n  values = [\"x\"]\n}\n",
-		"std/core" + hclExt:        okEntity,
-		"std/core.modelspec.json":  doc(jEntities),
-		"std/other.modelspec.json": strings.Replace(doc(jEntities), `"name": "y"`, `"name": "named"`, 1),
-		"std/odd.hcl":              okEntity,
-		"std/odd2.hcl":             "enum \"F\" {\n  values = [\"x\"]\n}\n",
+		layout("sales", "a.hcl"):                okEntity,
+		layout("sales", "b.hcl"):                "enum \"E\" {\n  values = [\"x\"]\n}\n",
+		layout("sales", "sales.modelspec.json"): strings.Replace(doc(jEntities), `"name": "y"`, `"name": "sales"`, 1),
+		"std/core" + hclExt:                     okEntity,
+		"std/core.modelspec.json":               doc(jEntities),
+		"std/other.modelspec.json":              strings.Replace(doc(jEntities), `"name": "y"`, `"name": "named"`, 1),
+		"std/odd.hcl":                           okEntity,
+		"std/odd2.hcl":                          "enum \"F\" {\n  values = [\"x\"]\n}\n",
+		"std/shop.modelspec.json":               strings.Replace(doc(jEntities), `"name": "y"`, `"name": "shop"`, 1),
 	})
-	sources, _, err := Discover(fsys, []string{layout("sales", "a.hcl"), layout("sales", "b.hcl"), "std/core" + hclExt, "std/core.modelspec.json", "std/other.modelspec.json"})
+	sources, _, err := Discover(fsys, []string{layout("sales", ""), "std/core" + hclExt, "std/core.modelspec.json", "std/other.modelspec.json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,32 +411,43 @@ func TestLoadModuleRules(t *testing.T) {
 	for _, m := range models {
 		byFile[m.File] = m
 	}
-	a, b := byFile[layout("sales", "a.hcl")], byFile[layout("sales", "b.hcl")]
+	a, b, sj := byFile[layout("sales", "a.hcl")], byFile[layout("sales", "b.hcl")], byFile[layout("sales", "sales.modelspec.json")]
 	if a.Name != "sales" || b.Name != "sales" || a.Group != b.Group || a.Group != "spec/graph/modules/sales/models" {
 		t.Errorf("layout: %q %q groups %q %q", a.Name, b.Name, a.Group, b.Group)
 	}
+	if !sj.Twin || sj.Name != "sales" || sj.TwinOf != nil {
+		t.Errorf("a JSON file in a layout module's directory is its interchange copy: %+v", sj)
+	}
 	core, twin, other := byFile["std/core"+hclExt], byFile["std/core.modelspec.json"], byFile["std/other.modelspec.json"]
-	if core.Name != "core" || core.Group == twin.Group && !twin.Twin || !twin.Twin || twin.Name != "core" || core.Twin {
+	if core.Name != "core" || !twin.Twin || twin.Name != "core" || twin.TwinOf != core || core.Twin {
 		t.Errorf("twin: core %+v twin %+v", core, twin)
 	}
 	if other.Twin || other.Name != "named" {
 		t.Errorf("a JSON file without an HCL twin: %+v", other)
 	}
 
-	// --module assignments win, accept any .hcl file name, and unite files.
-	assign := []Assignment{{Module: "shop", Path: "std/odd.hcl"}, {Module: "shop", Path: "std/odd2.hcl"}, {Module: "renamed", Path: layout("sales", "a.hcl")}, {Module: "forced", Path: "std/other.modelspec.json"}}
-	sources, _, err = Discover(fsys, []string{layout("sales", "a.hcl"), "std/other.modelspec.json"})
-	if err != nil {
-		t.Fatal(err)
+	// A single-file layout module's JSON also has the HCL of the same stem as its source.
+	solo := newMemFS(map[string]string{layout("solo", "solo.modelspec.hcl"): okEntity, layout("solo", "solo.modelspec.json"): doc(jEntities)})
+	sources, _, _ = Discover(solo, []string{layout("solo", "")})
+	models, _, _ = Load(solo, sources, nil)
+	if j := models[1]; !j.Twin || j.TwinOf != models[0] || j.Name != "solo" {
+		t.Errorf("solo layout twin: %+v", j)
 	}
-	for _, a := range assign[:2] {
-		more, _, err := discover(fsys, []string{a.Path}, true)
-		if err != nil {
+
+	// --module assignments win, accept any .hcl file name, and unite files.
+	assign := []Assignment{{Module: "shop", Path: "std/odd.hcl"}, {Module: "shop", Path: "std/odd2.hcl"}, {Module: "renamed", Path: layout("sales", "")}, {Module: "forced", Path: "std/other.modelspec.json"}, {Module: "other", Path: "std/core.modelspec.json"}, {Module: "shop", Path: "std/shop.modelspec.json"}}
+	d := newDiscovery(fsys)
+	for _, p := range []string{layout("sales", ""), "std/other.modelspec.json", "std/core.modelspec.json", "std/core" + hclExt} {
+		if err := d.addPath(p, false); err != nil {
 			t.Fatal(err)
 		}
-		sources = mergeSources(sources, more)
 	}
-	models, _, err = Load(fsys, sources, assign)
+	for _, a := range assign {
+		if err := d.addPath(a.Path, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	models, _, err = Load(fsys, d.sorted(), assign)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,17 +462,26 @@ func TestLoadModuleRules(t *testing.T) {
 	if got := byFile[layout("sales", "a.hcl")]; got.Name != "renamed" || got.Group != "--module renamed" {
 		t.Errorf("explicit wins over layout: %+v", got)
 	}
-	if got := byFile["std/other.modelspec.json"]; got.Name != "forced" || got.Group == "--module forced" {
+	if got := byFile["std/other.modelspec.json"]; got.Name != "forced" || got.Twin {
 		t.Errorf("explicit name on JSON: %+v", got)
+	}
+	if got := byFile["std/core.modelspec.json"]; got.Name != "other" || got.Twin || got.TwinOf != nil {
+		t.Errorf("an explicit assignment of a JSON file wins over the twin rule: %+v", got)
+	}
+	if got := byFile["std/shop.modelspec.json"]; got.Name != "shop" || !got.Twin || got.TwinOf != nil {
+		t.Errorf("a JSON file assigned to a module that has HCL files is its interchange copy: %+v", got)
 	}
 }
 
 func TestLoadErrors(t *testing.T) {
 	t.Parallel()
-	fsys := newMemFS(map[string]string{"a.modelspec.hcl": okEntity, "d/b.hcl": okEntity})
+	fsys := newMemFS(map[string]string{"a.modelspec.hcl": okEntity, "d/b.hcl": okEntity, layout("sales", "p.hcl"): okEntity, layout("sales", "q.hcl"): okEntity})
 	sources, _, _ := Discover(fsys, []string{"a.modelspec.hcl"})
 	if _, _, err := Load(&unreadableFS{fsys}, sources, nil); err == nil {
 		t.Error("Load of an unreadable file succeeded")
+	}
+	if _, _, err := Load(fsys, []Source{{Path: "missing.modelspec.hcl", Abs: "missing.modelspec.hcl"}}, nil); err == nil {
+		t.Error("Load of a missing file succeeded")
 	}
 	if _, _, err := Load(fsys, sources, []Assignment{{Module: "x", Path: "missing"}}); err == nil {
 		t.Error("an assignment of a missing path succeeded")
@@ -237,6 +494,59 @@ func TestLoadErrors(t *testing.T) {
 	if _, _, err := Load(fsys, sources, []Assignment{{Module: "x", Path: "a.modelspec.hcl"}, {Module: "x", Path: "."}}); err != nil {
 		t.Errorf("repeated assignment: %v", err)
 	}
+	// Assigning part of a layout module's directory would split the module.
+	_, _, err = Load(fsys, sources, []Assignment{{Module: "sales2", Path: layout("sales", "p.hcl")}})
+	if err == nil || !strings.Contains(err.Error(), `would split it, so assign the whole directory: --module sales2=spec/graph/modules/sales/models`) {
+		t.Errorf("a part of a layout module: %v", err)
+	}
+	// Assigning the whole directory, under any name, or the files with the module's own name, is fine.
+	for _, a := range [][]Assignment{
+		{{Module: "renamed", Path: layout("sales", "")}},
+		{{Module: "sales", Path: layout("sales", "p.hcl")}, {Module: "sales", Path: layout("sales", "q.hcl")}},
+	} {
+		if _, _, err := Load(fsys, sources, a); err != nil {
+			t.Errorf("%v: %v", a, err)
+		}
+	}
+	boom := errors.New("no listing")
+	if _, _, err := Load(&failingFS{memFS: fsys, readDirErr: boom, failAt: filepath.Dir(layout("sales", "p.hcl"))}, sources, []Assignment{{Module: "x", Path: layout("sales", "p.hcl")}}); !errors.Is(err, boom) {
+		t.Errorf("a models directory that cannot be listed: %v", err)
+	}
+}
+
+// A file larger than the limit is refused from its size, before it is read.
+func TestOversizeFileIsNotRead(t *testing.T) {
+	t.Parallel()
+	fsys := newMemFS(map[string]string{"big.modelspec.hcl": okEntity, "bigj.modelspec.json": "{}", "ok.modelspec.hcl": okEntity})
+	fsys.sizes["big.modelspec.hcl"] = MaxInputBytes + 1
+	fsys.sizes["bigj.modelspec.json"] = MaxInputBytes + 1
+	read := map[string]bool{}
+	spy := &readSpy{memFS: fsys, read: read}
+	res, err := Lint(spy, []string{"."}, LintOptions{})
+	if err != nil || read["big.modelspec.hcl"] || read["bigj.modelspec.json"] || !read["ok.modelspec.hcl"] {
+		t.Fatalf("read %v, %v", read, err)
+	}
+	if len(res.Findings) != 2 || res.Findings[0].Rule != RuleLimit || !strings.Contains(res.Findings[0].Message, "the limit is 4194304 bytes") || res.Findings[0].File != "big.modelspec.hcl" || res.Findings[1].File != "bigj.modelspec.json" {
+		t.Fatalf("findings = %v", res.Findings)
+	}
+	for _, m := range res.Models {
+		if m.File != "ok.modelspec.hcl" && !m.Broken {
+			t.Errorf("%s is not broken", m.File)
+		}
+	}
+	if res.Models[1].Form != FormJSON || res.Models[0].Form != FormHCL {
+		t.Errorf("forms: %v %v", res.Models[0].Form, res.Models[1].Form)
+	}
+}
+
+type readSpy struct {
+	*memFS
+	read map[string]bool
+}
+
+func (r *readSpy) ReadFile(name string) ([]byte, error) {
+	r.read[name] = true
+	return r.memFS.ReadFile(name)
 }
 
 func TestLint(t *testing.T) {
@@ -265,6 +575,9 @@ func TestLint(t *testing.T) {
 	if _, err := Lint(fsys, nil, LintOptions{}); err == nil {
 		t.Error("no paths and no assignments was accepted")
 	}
+	if _, err := Lint(fsys, nil, LintOptions{Modules: []Assignment{{Module: "x", Path: "nope"}}}); err == nil {
+		t.Error("an assignment of a missing path was accepted")
+	}
 	// Assignments lint their own files even when no path names them, and add them to the paths'.
 	fsys.MapFS["ctx/core.hcl"] = fsys.MapFS["ok.modelspec.hcl"]
 	res, err = Lint(fsys, []string{"ok.modelspec.hcl"}, LintOptions{Modules: []Assignment{{Module: "core", Path: "ctx/core.hcl"}}})
@@ -274,9 +587,6 @@ func TestLint(t *testing.T) {
 	res, err = Lint(fsys, nil, LintOptions{Modules: []Assignment{{Module: "core", Path: "ctx"}}})
 	if err != nil || res.Files != 1 {
 		t.Fatalf("Lint with only an assignment = %d files, %v", res.Files, err)
-	}
-	if _, err := Lint(fsys, nil, LintOptions{Modules: []Assignment{{Module: "core", Path: "nope"}}}); err == nil {
-		t.Error("an assignment of a missing path was accepted")
 	}
 	// Warnings from an assigned directory are kept.
 	fsys.links["ctx/dead.hcl"] = ""
@@ -312,80 +622,58 @@ func TestOSFS(t *testing.T) {
 	if err != nil || res.Files != 1 || len(res.Findings) != 0 {
 		t.Fatalf("Lint = %v, %d, %v", res.Findings, res.Files, err)
 	}
-	// Two names for one file (a symlink, and a path with a detour) are one file.
+	// Abs is the lexical absolute path, symbolic links left as they are.
 	link := filepath.Join(dir, "alias.modelspec.hcl")
 	if err := os.Symlink(file, link); err != nil {
 		t.Skipf("no symbolic links here: %v", err)
 	}
-	detour := filepath.Join(dir, ".", "m.modelspec.hcl")
-	canonA, errA := fsys.Canonical(link)
-	canonB, errB := fsys.Canonical(detour)
-	if errA != nil || errB != nil || canonA != canonB || !filepath.IsAbs(canonA) {
-		t.Fatalf("Canonical = %q %v, %q %v", canonA, errA, canonB, errB)
+	if abs, err := fsys.Abs(filepath.Join(dir, ".", "alias.modelspec.hcl")); err != nil || abs != link {
+		t.Fatalf("Abs = %q, %v; want %q", abs, err, link)
 	}
+	// Two names for one file (a symbolic link, and a path with a detour) are one file.
+	detour := filepath.Join(dir, ".", "m.modelspec.hcl")
 	res, err = Lint(fsys, []string{dir, link, detour}, LintOptions{})
 	if err != nil || res.Files != 1 {
 		t.Fatalf("Lint of three names read %d files, %v", res.Files, err)
 	}
+	a, _ := fsys.Stat(link)
+	b, _ := fsys.Stat(file)
+	other := filepath.Join(dir, "other.modelspec.hcl")
+	if err := os.WriteFile(other, []byte(okEntity), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := fsys.Stat(other)
+	if !fsys.SameFile(a, b) || fsys.SameFile(a, c) {
+		t.Fatal("SameFile wrong")
+	}
 	// A relative name is made absolute from the working directory.
 	boom := errors.New("no working directory")
-	if _, err := (OSFS{getwd: func() (string, error) { return "", boom }}).Canonical("rel"); !errors.Is(err, boom) {
-		t.Fatalf("Canonical without a working directory: %v", err)
+	if _, err := (OSFS{getwd: func() (string, error) { return "", boom }}).Abs("rel"); !errors.Is(err, boom) {
+		t.Fatalf("Abs without a working directory: %v", err)
 	}
-	if got, err := (OSFS{getwd: func() (string, error) { return dir, nil }}).Canonical("m.modelspec.hcl"); err != nil || got != canonA {
-		t.Fatalf("Canonical of a relative name = %q, %v; want %q", got, err, canonA)
+	if got, err := (OSFS{getwd: func() (string, error) { return dir, nil }}).Abs("m.modelspec.hcl"); err != nil || got != file {
+		t.Fatalf("Abs of a relative name = %q, %v; want %q", got, err, file)
 	}
-	if got, err := (OSFS{}).Canonical("."); err != nil || !filepath.IsAbs(got) {
-		t.Fatalf("Canonical(.) = %q, %v", got, err)
+	if got, err := (OSFS{}).Abs("."); err != nil || !filepath.IsAbs(got) {
+		t.Fatalf("Abs(.) = %q, %v", got, err)
 	}
 	// A dangling link found in a search is a warning; named, an error. A link to a directory is not followed.
 	if err := os.Symlink(filepath.Join(dir, "gone"), filepath.Join(dir, "dangling.modelspec.hcl")); err != nil {
 		t.Fatal(err)
 	}
-	other := t.TempDir()
-	if err := os.WriteFile(filepath.Join(other, "x.modelspec.hcl"), []byte(okEntity), 0o644); err != nil {
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "x.modelspec.hcl"), []byte(okEntity), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(other, filepath.Join(dir, "dirlink")); err != nil {
+	if err := os.Symlink(elsewhere, filepath.Join(dir, "dirlink")); err != nil {
 		t.Fatal(err)
 	}
 	res, err = Lint(fsys, []string{dir}, LintOptions{})
-	if err != nil || res.Files != 1 || len(res.Findings) != 1 || res.Findings[0].Rule != RuleIO {
+	if err != nil || res.Files != 2 || len(res.Findings) != 1 || res.Findings[0].Rule != RuleIO {
 		t.Fatalf("Lint with a dangling link and a directory link = %d files, %v, %v", res.Files, res.Findings, err)
-	}
-	if _, err := fsys.Canonical(filepath.Join(dir, "dangling.modelspec.hcl")); err == nil {
-		t.Fatal("Canonical of a dangling link succeeded")
 	}
 	var pathErr *fs.PathError
 	if _, err := Lint(fsys, []string{filepath.Join(dir, "dangling.modelspec.hcl")}, LintOptions{}); !errors.As(err, &pathErr) {
 		t.Fatalf("a dangling link named explicitly: %v", err)
-	}
-}
-
-func TestLayoutModule(t *testing.T) {
-	t.Parallel()
-	fsys := newMemFS(map[string]string{
-		layout("sales", "a.modelspec.hcl"):   okEntity,
-		layout("sales", "b.hcl"):             okEntity,
-		layout("sales", "notes.md"):          "",
-		layout("solo", "only.modelspec.hcl"): okEntity,
-		"plain.modelspec.hcl":                okEntity,
-	})
-	id, files, err := LayoutModule(fsys, layout("sales", "a.modelspec.hcl"))
-	if err != nil || id != "sales" || strings.Join(files, " ") != layout("sales", "a.modelspec.hcl")+" "+layout("sales", "b.hcl") {
-		t.Fatalf("LayoutModule = %q %v %v", id, files, err)
-	}
-	if id, files, err = LayoutModule(fsys, layout("solo", "only.modelspec.hcl")); err != nil || id != "solo" || len(files) != 1 {
-		t.Fatalf("a module of one file: %q %v %v", id, files, err)
-	}
-	if id, files, err = LayoutModule(fsys, "plain.modelspec.hcl"); err != nil || id != "" || files != nil {
-		t.Fatalf("outside the layout: %q %v %v", id, files, err)
-	}
-	if _, _, err = LayoutModule(fsys, "missing.modelspec.hcl"); err == nil {
-		t.Fatal("a missing file succeeded")
-	}
-	boom := errors.New("boom")
-	if _, _, err = LayoutModule(&failingFS{memFS: fsys, readDirErr: boom}, layout("sales", "a.modelspec.hcl")); !errors.Is(err, boom) {
-		t.Fatalf("ReadDir error: %v", err)
 	}
 }

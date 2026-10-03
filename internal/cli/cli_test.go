@@ -41,12 +41,28 @@ func (m *memFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	return nil
 }
 
-func (m *memFS) Canonical(name string) (string, error) {
-	name = filepath.Clean(name)
-	if _, err := m.MapFS.Stat(name); err != nil {
-		return "", err
+func (m *memFS) Abs(name string) (string, error) {
+	return strings.TrimPrefix(filepath.Clean(name), "/"), nil
+}
+
+// pathInfo remembers which path it describes, so that SameFile can tell.
+type pathInfo struct {
+	fs.FileInfo
+	path string
+}
+
+func (m *memFS) Stat(name string) (fs.FileInfo, error) {
+	info, err := m.MapFS.Stat(strings.TrimPrefix(filepath.Clean(name), "/"))
+	if err != nil {
+		return nil, err
 	}
-	return name, nil
+	return pathInfo{info, filepath.Clean(name)}, nil
+}
+
+func (m *memFS) SameFile(a, b fs.FileInfo) bool {
+	pa, aok := a.(pathInfo)
+	pb, bok := b.(pathInfo)
+	return aok && bok && pa.path == pb.path
 }
 
 // roundTripper answers GitHub release requests from a canned body.
@@ -226,6 +242,51 @@ func TestLintModules(t *testing.T) {
 	h = newHarness(files)
 	if code := h.run("lint", "--module", "core=shared"); code != 0 || h.out.String() != "ok: 1 file checked, 0 errors, 0 warnings\n" {
 		t.Fatalf("only an assignment: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+}
+
+// A module is the unit: given one file of a layout module, lint checks the whole
+// module, reports the sibling's findings with its path, and says so once.
+func TestLintChecksTheWholeModule(t *testing.T) {
+	t.Parallel()
+	enums := "enum \"Status\" {\n  values = [\"open\"]\n}\n"
+	tree := map[string]string{
+		layoutPath("sales", "entities.hcl"): goodHCL,
+		layoutPath("sales", "enums.hcl"):    enums,
+		layoutPath("sales", "extra.hcl"):    enums,
+	}
+	h := newHarness(tree)
+	code := h.run("lint", layoutPath("sales", "entities.hcl"))
+	out := h.out.String()
+	if code != 1 || !strings.Contains(out, "extra.hcl:1: error: duplicate concept name \"Status\"") || !strings.Contains(out, "failed: 3 files checked, 1 error") ||
+		!strings.HasPrefix(out, "note: a module is the unit of checking: module \"sales\" has more files in spec/graph/modules/sales/models than were given") || strings.Count(out, "note:") != 1 {
+		t.Fatalf("one file of the module: exit %d, stdout %q", code, out)
+	}
+	// Two files of the same module are one module, checked once.
+	h = newHarness(tree)
+	code = h.run("lint", layoutPath("sales", "entities.hcl"), layoutPath("sales", "extra.hcl"))
+	out = h.out.String()
+	if code != 1 || strings.Count(out, "duplicate concept name") != 1 || !strings.Contains(out, "failed: 3 files checked, 1 error") {
+		t.Fatalf("two files of the module: exit %d, stdout %q", code, out)
+	}
+	// A module that is given whole needs no note, and the JSON report carries the notes.
+	h = newHarness(tree)
+	if code := h.run("lint", "--format", "json", layoutPath("sales", "entities.hcl")); code != 1 || !strings.Contains(h.out.String(), `"notes": [`) || !strings.Contains(h.out.String(), "a module is the unit of checking") {
+		t.Fatalf("json: exit %d, stdout %q", code, h.out)
+	}
+	h = newHarness(tree)
+	if code := h.run("lint", "spec"); strings.Contains(h.out.String(), "note:") {
+		t.Fatalf("whole module given: exit %d, stdout %q", code, h.out)
+	}
+	h = newHarness(tree)
+	if code := h.run("lint", "--format", "json", "spec"); !strings.Contains(h.out.String(), `"notes": []`) {
+		t.Fatalf("whole module given, json: exit %d, stdout %q", code, h.out)
+	}
+	// Failing to write the note is an I/O failure.
+	h = newHarness(tree)
+	h.env.Stdout = &failWriter{}
+	if code := h.run("lint", layoutPath("sales", "entities.hcl")); code != 2 || !strings.Contains(h.errb.String(), "write failed") {
+		t.Fatalf("note write: exit %d, stderr %q", code, h.errb)
 	}
 }
 
@@ -443,13 +504,35 @@ func TestExportModules(t *testing.T) {
 	}
 	h = newHarness(multi)
 	code := h.run(append([]string{"export", layoutPath("sales", "a.modelspec.hcl")}, exportID...)...)
-	if code != 1 || !strings.Contains(h.errb.String(), "is one of 2 files of module sales in the SpecScore layout") || h.out.Len() != 0 {
+	if code != 1 || !strings.Contains(h.errb.String(), "is one of 2 files of module sales (spec/graph/modules/sales/models/b.hcl)") || h.out.Len() != 0 {
 		t.Fatalf("multi-file module: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// The other file's name does not matter: the module is the unit.
+	h = newHarness(multi)
+	code = h.run(append([]string{"export", layoutPath("sales", "b.hcl")}, exportID...)...)
+	if code != 1 || !strings.Contains(h.errb.String(), "is one of 2 files of module sales (spec/graph/modules/sales/models/a.modelspec.hcl)") {
+		t.Fatalf("multi-file module, other file: exit %d, stderr %q", code, h.errb)
 	}
 	// A module of one file in the layout is exported.
 	h = newHarness(multi)
 	if code := h.run(append([]string{"export", layoutPath("solo", "only.modelspec.hcl")}, exportID...)...); code != 0 {
 		t.Fatalf("single-file layout module: exit %d, stderr %q", code, h.errb)
+	}
+	// Any .hcl file of a layout module is exported, whatever it is called, and a
+	// JSON copy beside it is not another file of the module.
+	copyOfA, _ := exportString(t, goodHCL)
+	one := map[string]string{
+		layoutPath("solo", "entities.hcl"):            goodHCL,
+		layoutPath("solo", "entities.modelspec.json"): copyOfA,
+	}
+	h = newHarness(one)
+	if code := h.run(append([]string{"export", layoutPath("solo", "entities.hcl")}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"entities"`) {
+		t.Fatalf("a layout .hcl file: exit %d, stdout %s, stderr %q", code, h.out, h.errb)
+	}
+	// A JSON file is not exported.
+	h = newHarness(map[string]string{"a.modelspec.json": "{}"})
+	if code := h.run(append([]string{"export", "a.modelspec.json"}, exportID...)...); code != 2 || !strings.Contains(h.errb.String(), "export reads HCL files") {
+		t.Fatalf("a JSON file: exit %d, stderr %q", code, h.errb)
 	}
 }
 
@@ -467,7 +550,7 @@ func TestExportFailures(t *testing.T) {
 		{"two arguments", nil, []string{"export", "a", "b"}, 2, "export takes one HCL file"},
 		{"check with one argument", nil, []string{"export", "--check", "a.modelspec.hcl"}, 2, "export --check takes the HCL file and the committed JSON file"},
 		{"out with check", map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": good}, []string{"export", "--check", "--out", "x.json", "a.modelspec.hcl", "a.modelspec.json"}, 2, "--out cannot be combined with --check"},
-		{"not an hcl file", map[string]string{"a.json": "{}"}, append([]string{"export", "a.json"}, exportID...), 2, "export reads .modelspec.hcl files"},
+		{"not a model file", map[string]string{"a.json": "{}"}, append([]string{"export", "a.json"}, exportID...), 2, "not a ModelSpec file"},
 		{"missing file", nil, append([]string{"export", "a.modelspec.hcl"}, exportID...), 2, "modelspec: "},
 		{"bad module flag", map[string]string{"a.modelspec.hcl": goodHCL}, append([]string{"export", "a.modelspec.hcl", "--module", "x"}, exportID...), 2, `invalid --module "x"`},
 		{"module flag for a missing path", map[string]string{"a.modelspec.hcl": goodHCL}, append([]string{"export", "a.modelspec.hcl", "--module", "x=nope"}, exportID...), 2, "modelspec: "},

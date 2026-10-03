@@ -196,3 +196,41 @@ func TestExportModuleName(t *testing.T) {
 		t.Errorf("drift: %s", d)
 	}
 }
+
+// A model that refers to its own module by name can only be exported under that
+// name: with another, the JSON would not lint clean on its own.
+func TestExportRefusesANameThatBreaksOwnReferences(t *testing.T) {
+	t.Parallel()
+	for name, src := range map[string]string{
+		"an entity reference":   "entity \"Node\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"p\" {\n    entity = \"m.Node\"\n  }\n}\n",
+		"a component reference": "component \"C\" {\n}\nentity \"N\" {\n  key = []\n  property \"c\" {\n    component = \"m.C\"\n  }\n}\n",
+		"an enum reference":     "enum \"E\" {\n  values = [\"a\"]\n}\nentity \"N\" {\n  key = []\n  property \"c\" {\n    type = \"string\"\n    enum = \"m.E\"\n  }\n}\n",
+		"a use":                 "component \"C\" {\n}\nentity \"N\" {\n  key = []\n  use = [\"m.C\"]\n}\n",
+		"a collection source":   "entity \"N\" {\n  key = []\n}\ncollection \"c\" {\n  kind = \"editable\"\n  source = \"m.N\"\n}\n",
+		"a bind":                "entity \"N\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\nrecordset \"r\" {\n  column \"c\" {\n    type = \"int\"\n    bind = \"m.N.id\"\n  }\n}\n",
+	} {
+		m, fs := ParseHCL("m.modelspec.hcl", []byte(src))
+		if HasErrors(fs) {
+			t.Fatalf("%s: %v", name, fs)
+		}
+		if _, err := m.JSON(ModuleIdentity{ID: "x/m", Name: "Tree", Version: "1"}); err == nil || !strings.Contains(err.Error(), `refers to its own module as "m", so module.name must be "m"`) {
+			t.Errorf("%s: %v", name, err)
+		}
+		if _, err := m.JSON(ModuleIdentity{ID: "x/m", Name: "m", Version: "1"}); err != nil {
+			t.Errorf("%s with the module's own name: %v", name, err)
+		}
+		if _, err := m.JSON(ModuleIdentity{ID: "x/m", Version: "1"}); err != nil {
+			t.Errorf("%s without a name: %v", name, err)
+		}
+	}
+	// No such reference: any name will do. Others' names, bare names and a bind of two parts are not self-references.
+	m := mustHCL(t, "entity \"N\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"o\" {\n    entity = \"other.N\"\n  }\n  property \"b\" {\n    entity = \"N\"\n  }\n}\nrecordset \"r\" {\n  column \"c\" {\n    type = \"int\"\n    bind = \"N.id\"\n  }\n}\n")
+	if _, err := m.JSON(ModuleIdentity{ID: "x/m", Name: "Tree", Version: "1"}); err != nil {
+		t.Errorf("no self-reference: %v", err)
+	}
+	// The drift check says the same through the committed file's name.
+	named := mustHCL(t, "entity \"N\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"p\" {\n    entity = \"m.N\"\n  }\n}\n")
+	if d := named.ExportDrift([]byte(`{"modelspec": "1.0-draft", "module": {"id": "x", "name": "Tree", "version": "1"}}`), ModuleIdentity{}); !strings.Contains(d, "refers to its own module") {
+		t.Errorf("drift = %q", d)
+	}
+}

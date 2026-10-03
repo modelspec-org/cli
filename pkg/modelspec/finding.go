@@ -35,6 +35,8 @@ const (
 	RuleCollection = "collection"
 	RuleUnknown    = "unknown-field" // a top-level JSON field the format does not define
 	RuleIO         = "unreadable"    // a file found by a directory search that cannot be read
+	RuleStaleTwin  = "stale-twin"    // a JSON twin that is not what its HCL exports to
+	RuleNameCase   = "name-case"     // names in one scope that differ only by case
 
 	RulePublishModuleName = "publish-module-name"
 	RulePublishEntities   = "publish-entities"
