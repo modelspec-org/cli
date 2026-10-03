@@ -16,16 +16,17 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 # Only a pull request's superseded runs are cancelled. A run on main is never
-# cancelled: its commit's release waits for this workflow, and a cancelled run
-# would make the release fail its guard.
+# cancelled and never replaced: its commit's release waits for this workflow, and a
+# cancelled run would make the release fail its guard. A group allows one running
+# and one pending run, and a newer pending run replaces an older one, so a push to
+# main gets a group of its own (its commit hash).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

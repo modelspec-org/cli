@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -22,7 +23,23 @@ const (
 	gateCommand = "go run ./cmd/covergate cover.out"
 	ciName      = "CI"
 	cancelExpr  = "${{ github.event_name == 'pull_request' }}"
+	// A push to main gets a concurrency group of its own, so that a newer pending
+	// run can never replace its CI run; only pull requests share a group per ref.
+	ciGroup = "ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}"
 )
+
+// allowedWorkflows is every file that may exist under .github/workflows, each
+// with the reason it may. A new workflow file fails TestOnlyTheKnownWorkflows
+// until it is added here with a stated reason: a workflow that calls the shared
+// release workflow, or is named CI, could release without the gate.
+var allowedWorkflows = map[string]string{
+	"ci.yml":      "runs the exact coverage gate and the packaging checks; the only workflow named CI",
+	"release.yml": "releases from a push to main through the shared workflow, which waits for the CI workflow",
+}
+
+// releasePin is what the shared release workflow reference must end in: an exact
+// version tag, never a branch.
+var releasePin = regexp.MustCompile(`@v\d+\.\d+\.\d+$`)
 
 type obj = map[string]any
 
@@ -126,11 +143,28 @@ func triggerProblems(what string, doc obj, isCI bool) []string {
 	if got := keys(on["push"]); strings.Join(got, ",") != "branches" {
 		problems = append(problems, fmt.Sprintf("the push trigger of %s may carry only a branch list, it has %v (a paths or tags filter lets a commit go without a CI run)", what, got))
 	}
-	if isCI && !has(on, "pull_request") {
-		problems = append(problems, what+" must run on pull requests")
+	want := "push"
+	if isCI {
+		want = "pull_request,push"
+		if !has(on, "pull_request") {
+			problems = append(problems, what+" must run on pull requests")
+		}
 	}
-	if !isCI && strings.Join(keys(on), ",") != "push" {
-		problems = append(problems, fmt.Sprintf("%s must have no trigger but a push to main (no tags, no workflow_dispatch: a release must always have a CI run to wait for), it has %v", what, keys(on)))
+	if got := strings.Join(keys(on), ","); got != want {
+		problems = append(problems, fmt.Sprintf("%s must have exactly the triggers %q (no tags and no workflow_dispatch anywhere: a release must always have a CI run to wait for), it has %q", what, want, got))
+	}
+	return problems
+}
+
+// topLevelProblems refuses what changes the environment of every job of a
+// workflow: a workflow-level env or defaults (a default shell can make every run
+// step execute nothing and succeed).
+func topLevelProblems(what string, doc obj) []string {
+	var problems []string
+	for _, key := range []string{"env", "defaults"} {
+		if has(doc, key) {
+			problems = append(problems, fmt.Sprintf("%s has a workflow-level %q, which changes every step", what, key))
+		}
 	}
 	return problems
 }
@@ -147,14 +181,21 @@ func checkCI(text string) []string {
 		problems = append(problems, fmt.Sprintf("the workflow must be named %q, which the release waits for; it is %q", ciName, str(doc["name"])))
 	}
 	problems = append(problems, triggerProblems("ci.yml", doc, true)...)
+	problems = append(problems, topLevelProblems("ci.yml", doc)...)
 	if got := str(asObj(doc["concurrency"])["cancel-in-progress"]); got != cancelExpr {
 		problems = append(problems, fmt.Sprintf("cancel-in-progress must be %q so that a run on main is never cancelled, it is %q", cancelExpr, got))
+	}
+	if got := str(asObj(doc["concurrency"])["group"]); got != ciGroup {
+		problems = append(problems, fmt.Sprintf("the concurrency group must be %q so that a push to main never shares one (a pending run would be replaced), it is %q", ciGroup, got))
 	}
 	job := asObj(asObj(doc["jobs"])["test"])
 	if job == nil {
 		return append(problems, `ci.yml has no "test" job`)
 	}
-	problems = append(problems, plain(`job "test"`, job, "needs", "uses", "with")...)
+	problems = append(problems, plain(`job "test"`, job, "needs", "uses", "with", "container", "services", "permissions")...)
+	if got := str(job["runs-on"]); got != "ubuntu-latest" {
+		problems = append(problems, fmt.Sprintf("the test job must run on ubuntu-latest, not %q", got))
+	}
 	steps := asList(job["steps"])
 	testAt, gateAt := -1, -1
 	for i, raw := range steps {
@@ -174,8 +215,8 @@ func checkCI(text string) []string {
 			if mentions(step, "cover.out") {
 				problems = append(problems, fmt.Sprintf("step %d touches the cover profile, which only the test and gate steps may", i+1))
 			}
-			if mentions(step, "GITHUB_ENV") || mentions(step, "GOFLAGS") {
-				problems = append(problems, fmt.Sprintf("step %d sets the environment of later steps", i+1))
+			if mentions(step, "GITHUB_ENV") || mentions(step, "GITHUB_PATH") || mentions(step, "GOFLAGS") {
+				problems = append(problems, fmt.Sprintf("step %d sets the environment or the path of later steps", i+1))
 			}
 		}
 	}
@@ -208,7 +249,15 @@ func checkRelease(ci, text string) []string {
 		return []string{"ci.yml does not parse: " + err.Error()}
 	}
 	problems := triggerProblems("release.yml", doc, false)
-	job := asObj(asObj(doc["jobs"])["release"])
+	problems = append(problems, topLevelProblems("release.yml", doc)...)
+	if name := str(doc["name"]); name == "" || name == str(cidoc["name"]) {
+		problems = append(problems, fmt.Sprintf("release.yml must have a name of its own, not %q: the release waits for the workflow named %q, and a second workflow of that name could stand in for it", name, str(cidoc["name"])))
+	}
+	jobs := asObj(doc["jobs"])
+	if len(jobs) != 1 {
+		problems = append(problems, fmt.Sprintf("release.yml must have exactly one job (the release, which goes through the guard); it has %v", keys(jobs)))
+	}
+	job := asObj(jobs["release"])
 	if job == nil {
 		return append(problems, `release.yml has no "release" job`)
 	}
@@ -217,12 +266,37 @@ func checkRelease(ci, text string) []string {
 			problems = append(problems, fmt.Sprintf("the release job has %q; it must run on every push to main", key))
 		}
 	}
-	if !strings.HasPrefix(str(job["uses"]), "strongo/cicd/.github/workflows/release.yml@") {
-		problems = append(problems, fmt.Sprintf("the release job must call the shared release workflow, it uses %q", str(job["uses"])))
+	uses := str(job["uses"])
+	if !strings.HasPrefix(uses, "strongo/cicd/.github/workflows/release.yml@") {
+		problems = append(problems, fmt.Sprintf("the release job must call the shared release workflow, it uses %q", uses))
+	} else if !releasePin.MatchString(uses) {
+		problems = append(problems, fmt.Sprintf("the shared release workflow must be pinned to an exact version tag, it uses %q", uses))
 	}
 	if got := str(asObj(job["with"])["require_workflow_success"]); got != ciName || got != str(cidoc["name"]) {
 		problems = append(problems, fmt.Sprintf("require_workflow_success must be the literal %q, the name of the CI workflow; it is %q", ciName, got))
 	}
+	return problems
+}
+
+// checkWorkflowFiles refuses any file under .github/workflows that is not in the
+// allow-list, and any allow-list entry without a stated reason.
+func checkWorkflowFiles(names []string, allowed map[string]string) []string {
+	var problems []string
+	for _, n := range names {
+		reason, ok := allowed[n]
+		switch {
+		case !ok:
+			problems = append(problems, fmt.Sprintf(".github/workflows/%s is not in the allow-list: a new workflow must be added to allowedWorkflows with the reason it may exist (one that calls the shared release workflow or is named CI could release without the gate)", n))
+		case strings.TrimSpace(reason) == "":
+			problems = append(problems, fmt.Sprintf("the allow-list entry for %s has no reason", n))
+		}
+	}
+	for n := range allowed {
+		if !contains(names, n) {
+			problems = append(problems, fmt.Sprintf("the allow-list names %s, which does not exist", n))
+		}
+	}
+	sort.Strings(problems)
 	return problems
 }
 
@@ -243,6 +317,35 @@ func TestRepositoryWorkflows(t *testing.T) {
 	}
 	if p := checkRelease(ci, release); len(p) != 0 {
 		t.Errorf("release.yml: %v", p)
+	}
+}
+
+func TestOnlyTheKnownWorkflows(t *testing.T) {
+	t.Parallel()
+	entries, err := os.ReadDir(filepath.Join("..", "..", ".github", "workflows"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if p := checkWorkflowFiles(names, allowedWorkflows); len(p) != 0 {
+		t.Errorf("%v", p)
+	}
+	for _, tc := range []struct {
+		name    string
+		names   []string
+		allowed map[string]string
+		want    string
+	}{
+		{"a third workflow", []string{"ci.yml", "release.yml", "extra.yml"}, allowedWorkflows, "extra.yml is not in the allow-list"},
+		{"an allowed file without a reason", []string{"ci.yml", "release.yml"}, map[string]string{"ci.yml": "ok", "release.yml": " "}, "no reason"},
+		{"an allowed file that is gone", []string{"ci.yml"}, allowedWorkflows, "release.yml, which does not exist"},
+	} {
+		if p := checkWorkflowFiles(tc.names, tc.allowed); len(p) != 1 || !strings.Contains(p[0], tc.want) {
+			t.Errorf("%s: %v", tc.name, p)
+		}
 	}
 }
 
@@ -299,7 +402,7 @@ func TestEditsThatWeakenTheGateAreCaught(t *testing.T) {
 		}, `job "test" has "env"`},
 		{"a step that exports GOFLAGS for later steps", func(t *testing.T) (string, string) {
 			return edit(t, ci, "      - name: gofmt\n", "      - run: echo GOFLAGS=-run=x >> $GITHUB_ENV\n\n      - name: gofmt\n"), release
-		}, "sets the environment of later steps"},
+		}, "sets the environment or the path of later steps"},
 		{"a step between test and gate", func(t *testing.T) (string, string) {
 			return edit(t, ci, "      - name: Coverage gate (every statement)\n", "      - run: echo between\n\n      - name: Coverage gate (every statement)\n"), release
 		}, "must directly follow"},
@@ -369,13 +472,13 @@ func TestEditsThatWeakenTheGateAreCaught(t *testing.T) {
 		}, "must run on push to main only"},
 		{"a manual dispatch trigger on the release", func(t *testing.T) (string, string) {
 			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n  workflow_dispatch:\n")
-		}, "must have no trigger but a push to main"},
+		}, "must have exactly the triggers"},
 		{"a tag trigger on the release", func(t *testing.T) (string, string) {
 			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n    tags:\n      - 'v*'\n")
 		}, "may carry only a branch list"},
 		{"a pull request trigger on the release", func(t *testing.T) (string, string) {
 			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n  pull_request:\n")
-		}, "must have no trigger but a push to main"},
+		}, "must have exactly the triggers"},
 		{"a paths filter on the release push", func(t *testing.T) (string, string) {
 			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n    paths:\n      - 'pkg/**'\n")
 		}, "may carry only a branch list"},
@@ -388,6 +491,48 @@ func TestEditsThatWeakenTheGateAreCaught(t *testing.T) {
 		{"CI without a push trigger", func(t *testing.T) (string, string) {
 			return edit(t, ci, "  push:\n    branches: [main]\n", ""), release
 		}, "must run on push to main only"},
+		{"workflow-level defaults.run.shell makes every run step a no-op", func(t *testing.T) (string, string) {
+			return edit(t, ci, "permissions:\n  contents: read\n", "permissions:\n  contents: read\n\ndefaults:\n  run:\n    shell: \"sh -c 'exit 0' {0}\"\n"), release
+		}, `workflow-level "defaults"`},
+		{"workflow-level env GOFLAGS", func(t *testing.T) (string, string) {
+			return edit(t, ci, "permissions:\n  contents: read\n", "permissions:\n  contents: read\n\nenv:\n  GOFLAGS: -overlay=/tmp/x.json\n"), release
+		}, `workflow-level "env"`},
+		{"a step that adds a directory with its own go to GITHUB_PATH", func(t *testing.T) (string, string) {
+			return edit(t, ci, "      - name: gofmt\n", "      - run: echo /tmp/fake >> $GITHUB_PATH\n\n      - name: gofmt\n"), release
+		}, "sets the environment or the path of later steps"},
+		{"a second job in release.yml that skips the guard", func(t *testing.T) (string, string) {
+			return ci, release + "\n  other:\n    uses: strongo/cicd/.github/workflows/release.yml@v1.21.0\n    permissions:\n      contents: write\n"
+		}, "must have exactly one job"},
+		{"release.yml named CI", func(t *testing.T) (string, string) {
+			return ci, edit(t, release, "name: Release\n", "name: CI\n")
+		}, "must have a name of its own"},
+		{"release.yml without a name", func(t *testing.T) (string, string) {
+			return ci, edit(t, release, "name: Release\n", "")
+		}, "must have a name of its own"},
+		{"a container on the test job", func(t *testing.T) (string, string) {
+			return edit(t, ci, "    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v7\n\n      - uses: actions/setup-go@v7\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt", "    runs-on: ubuntu-latest\n    container: alpine\n    steps:\n      - uses: actions/checkout@v7\n\n      - uses: actions/setup-go@v7\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt"), release
+		}, `job "test" has "container"`},
+		{"services on the test job", func(t *testing.T) (string, string) {
+			return edit(t, ci, "    name: Test, vet, race, exact coverage\n", "    name: Test, vet, race, exact coverage\n    services:\n      x:\n        image: alpine\n"), release
+		}, `job "test" has "services"`},
+		{"the test job on a self-hosted runner", func(t *testing.T) (string, string) {
+			return edit(t, ci, "  test:\n    name: Test, vet, race, exact coverage\n    runs-on: ubuntu-latest", "  test:\n    name: Test, vet, race, exact coverage\n    runs-on: self-hosted"), release
+		}, "must run on ubuntu-latest"},
+		{"the shared workflow pinned to a branch", func(t *testing.T) (string, string) {
+			return ci, edit(t, release, "release.yml@v1.21.0", "release.yml@main")
+		}, "pinned to an exact version tag"},
+		{"the shared workflow pinned to a major tag", func(t *testing.T) (string, string) {
+			return ci, edit(t, release, "release.yml@v1.21.0", "release.yml@v1")
+		}, "pinned to an exact version tag"},
+		{"a workflow_dispatch trigger on CI", func(t *testing.T) (string, string) {
+			return edit(t, ci, "  pull_request:\n", "  pull_request:\n  workflow_dispatch:\n"), release
+		}, "must have exactly the triggers"},
+		{"a schedule trigger on CI", func(t *testing.T) (string, string) {
+			return edit(t, ci, "  pull_request:\n", "  pull_request:\n  schedule:\n    - cron: '0 0 * * *'\n"), release
+		}, "must have exactly the triggers"},
+		{"a concurrency group shared by pushes to main", func(t *testing.T) (string, string) {
+			return edit(t, ci, "github.event_name == 'pull_request' && github.ref || github.sha", "github.ref"), release
+		}, "the concurrency group must be"},
 		{"release job missing", func(t *testing.T) (string, string) {
 			return ci, edit(t, release, "\n  release:\n", "\n  publish:\n")
 		}, `no "release" job`},
