@@ -289,7 +289,8 @@ The standard does not settle these, so `modelspec` does not invent an answer (ea
 
 - **Module identity.** HCL has no place for `module.id`, `module.name` and `module.version`
   (`spec/hcl-authoring.md`, "Open Questions"), so `export` takes `--module-id` and
-  `--module-version` (the format requires those two) and `--module-name` if you want one.
+  `--module-version` (the format requires those two) and `--module-name` if you want one (it is written without being given when the model refers to its own
+  module by name, so the JSON lints clean whatever file it is saved as).
 - **The module short name outside a SpecScore layout.** `lint` takes it from the file name
   (`<name>.modelspec.hcl`), from `module.name` in JSON, or from `--module`.
 - **`index`, `projection` and `migration` blocks.** `spec/core-model.md` shows `index`,
@@ -312,10 +313,10 @@ The standard does not settle these, so `modelspec` does not invent an answer (ea
 ## Parity with the other readers
 
 `go test` compares `modelspec lint` with committed verdicts of two other readers over the corpus
-in `testdata/corpus` (112 manifest items: 38 HCL files, 45 JSON files, 11 SpecScore-layout trees, 10
-standalone module sets, and 8 `parts/` entries, which are one file of a tree given alone and so must
-give the verdict of the whole module; `testdata/corpus/manifest.json` is the expected verdict of
-each, under both profiles):
+in `testdata/corpus` (**111 manifest items**; each is a file, a SpecScore-layout tree or a set of standalone files, or an
+entry under `parts/` that is one file of another item given alone and must give the verdict of its whole module;
+`testdata/corpus/manifest.json` is the expected verdict of each, under both profiles; a test fails when this
+number is not the manifest's):
 
 - `testdata/golden/specscore.json`: `specscore graph lint`, compared with the **default**
   profile, through the throwaway-project wrapper that datatug/chinookdb's `scripts/lint-modelspec.sh`

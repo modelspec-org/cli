@@ -2,9 +2,12 @@ package modelspec
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -329,11 +332,9 @@ func TestExportOfCleanHCLLintsClean(t *testing.T) {
 				t.Errorf("%s under the name %q: %v", item, other, err)
 				continue
 			}
-			file := "other" + JSONSuffix
-			if other == "" {
-				file = stem + JSONSuffix // no module.name: the file name is the module's name
-			}
-			named, parse := ParseJSON(file, node.Encode())
+			// Whatever the file is called: a model that refers to itself by name has
+			// module.name written even when none was given.
+			named, parse := ParseJSON("other"+JSONSuffix, node.Encode())
 			gotErrs, gotWarnings := ruleSets(Check([]*Model{named}, Options{}))
 			if len(parse) != 0 || len(gotErrs) != 0 || !same(gotWarnings, wantWarnings) {
 				t.Errorf("%s under the name %q: the export has errors %v and warnings %v, parse findings %s; the HCL has warnings %v", item, other, gotErrs, gotWarnings, joinFindings(parse), wantWarnings)
@@ -388,5 +389,39 @@ func TestTodoExampleDriftIsTheRecordsetName(t *testing.T) {
 	d := m.ExportDrift(committed, ModuleIdentity{})
 	if !strings.Contains(d, `recordsets has key "task_summary" in the first but not in the second`) {
 		t.Fatalf("drift = %q", d)
+	}
+}
+
+// statedCorpusSize returns the number the README states for the corpus (in bold,
+// once), or a problem.
+func statedCorpusSize(readme string) (string, string) {
+	found := regexp.MustCompile(`\*\*(\d+) manifest items\*\*`).FindAllStringSubmatch(readme, -1)
+	if len(found) != 1 {
+		return "", fmt.Sprintf("the README states the corpus size %d times, want once", len(found))
+	}
+	return found[0][1], ""
+}
+
+// The README states the size of the corpus once, and it must be the manifest's.
+func TestREADMEStatesTheCorpusSize(t *testing.T) {
+	t.Parallel()
+	var m manifest
+	readJSON(t, filepath.Join(corpusDir, "manifest.json"), &m)
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, problem := statedCorpusSize(string(readme))
+	if problem != "" {
+		t.Fatal(problem)
+	}
+	if want := strconv.Itoa(len(m.Items)); got != want {
+		t.Errorf("the README says %s manifest items, the manifest has %s", got, want)
+	}
+	// The check itself: a number that differs, none, or two are found.
+	for text, wantNumber := range map[string]string{"(**7 manifest items**)": "7", "(7 manifest items)": "", "**7 manifest items** and **8 manifest items**": ""} {
+		if n, p := statedCorpusSize(text); n != wantNumber || (n == "") != (p != "") {
+			t.Errorf("statedCorpusSize(%q) = %q, %q", text, n, p)
+		}
 	}
 }
