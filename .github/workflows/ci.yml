@@ -6,7 +6,9 @@ name: CI
 #
 # The coverage gate is `go run ./cmd/covergate cover.out`. It has no threshold to
 # set: it fails unless every statement is covered. internal/covergate's tests
-# fail if this file ever changes how the gate is run.
+# parse this file and fail if the gate job or its steps become conditional, can
+# fail without failing the job, stop running exactly these two commands one after
+# the other, or if anything touches the cover profile in between.
 
 on:
   push:
@@ -17,9 +19,12 @@ on:
 permissions:
   contents: read
 
+# Only a pull request's superseded runs are cancelled. A run on main is never
+# cancelled: its commit's release waits for this workflow, and a cancelled run
+# would make the release fail its guard.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:

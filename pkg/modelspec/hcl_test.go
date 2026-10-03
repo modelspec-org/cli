@@ -151,3 +151,30 @@ func TestModuleNameFromFile(t *testing.T) {
 		}
 	}
 }
+
+// Inputs that make a recursive parser deep or slow are findings, not crashes. A
+// stack overflow in Go is fatal, so this is a test that the process survives.
+func TestPathologicalHCLIsAFinding(t *testing.T) {
+	t.Parallel()
+	n := 120000
+	cases := map[string]string{
+		"unary not":           "x = " + strings.Repeat("!", n),
+		"unary minus":         "x = " + strings.Repeat("-", n),
+		"conditionals":        "x = " + strings.Repeat("a ? b : ", n/8) + "c",
+		"nested templates":    "x = " + strings.Repeat("\"${", n/4) + "1" + strings.Repeat("}\"", n/4),
+		"long sum":            "x = 1" + strings.Repeat(" + 1", n/4),
+		"long traversal":      "x = a" + strings.Repeat(".b", n/2),
+		"many indexes":        "x = a" + strings.Repeat("[0]", n/3),
+		"many labels":         "entity " + strings.Repeat("\"a\" ", n/4) + "{}",
+		"nested blocks":       strings.Repeat("a {\n", 70) + strings.Repeat("}\n", 70),
+		"nested for":          "x = " + strings.Repeat("[for a in b : ", 70) + "1" + strings.Repeat("]", 70),
+		"unclosed heredoc":    "x = <<EOT\n" + strings.Repeat("${", n/2) + "\n",
+		"80000 open brackets": strings.Repeat("[", 80000),
+	}
+	for name, src := range cases {
+		_, findings := ParseHCL("a"+hclExt, []byte(src))
+		if len(findings) == 0 {
+			t.Errorf("%s: no finding", name)
+		}
+	}
+}

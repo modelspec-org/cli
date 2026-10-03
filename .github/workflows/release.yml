@@ -26,8 +26,8 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: write
+# The job below sets the permissions it needs; nothing else gets any.
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}

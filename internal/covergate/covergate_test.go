@@ -22,6 +22,8 @@ func TestParse(t *testing.T) {
 		{"all covered", "mode: atomic\na.go:1.1,2.2 3 1\na.go:3.1,4.2 2 7\n", Result{5, 5}, ""},
 		{"one uncovered statement", "mode: set\na.go:1.1,2.2 3 1\na.go:3.1,4.2 1 0\n", Result{3, 4}, ""},
 		{"duplicate block covered in any listing", "mode: set\na.go:1.1,2.2 3 0\na.go:1.1,2.2 3 4\n", Result{3, 3}, ""},
+		{"duplicate block covered in the first listing only", "mode: set\na.go:1.1,2.2 3 5\na.go:1.1,2.2 3 0\n", Result{3, 3}, ""},
+		{"duplicate block covered in the second listing only", "mode: set\na.go:1.1,2.2 3 0\na.go:1.1,2.2 3 5\n", Result{3, 3}, ""},
 		{"duplicate block uncovered in every listing", "mode: set\na.go:1.1,2.2 3 0\na.go:1.1,2.2 3 0\n", Result{0, 3}, ""},
 		{"blank lines ignored", "mode: set\n\na.go:1.1,2.2 1 1\n\n", Result{1, 1}, ""},
 		{"mode only", "mode: set\n", Result{0, 0}, ""},
