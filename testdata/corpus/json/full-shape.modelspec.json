@@ -1,0 +1,84 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "github.com/acme/notes",
+    "name": "notes",
+    "version": "0.1.0"
+  },
+  "entities": {
+    "Note": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "uuid",
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "max_len": 120
+        },
+        "author": {
+          "entity": "Author"
+        }
+      }
+    },
+    "Author": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "uuid"
+        }
+      }
+    }
+  },
+  "recordsets": {
+    "summary": {
+      "key": [
+        "id"
+      ],
+      "query": "from notes",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "bind": "Note.id"
+        },
+        {
+          "name": "id",
+          "type": "uuid"
+        }
+      ]
+    }
+  },
+  "collections": {
+    "notes": {
+      "kind": "editable",
+      "source": "Note",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "bind": "Note.id"
+        }
+      }
+    }
+  },
+  "projections": {
+    "sqlite": {
+      "collections": {
+        "notes": {
+          "source": "Note"
+        }
+      }
+    }
+  },
+  "migrations": {
+    "m1": {
+      "from": "0.1.0",
+      "to": "0.2.0"
+    }
+  }
+}

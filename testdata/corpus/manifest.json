@@ -1,0 +1,396 @@
+{
+ "about": "Expected verdict of `modelspec lint` for every corpus file. `differs` names the reader whose recorded verdict (testdata/golden) is different and says why; a file without it must have the same verdict.",
+ "items": {
+  "hcl/chinook.modelspec.hcl": {
+   "lint": "accept"
+  },
+  "hcl/collection-bind-unresolved.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "reference"
+   ],
+   "differs": {
+    "specscore": "specscore does not resolve collection bind values; the JSON format requires references, including bind, to resolve (spec/json-format.md, Validation Requirements)"
+   }
+  },
+  "hcl/duplicate-entity.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "duplicate-name"
+   ]
+  },
+  "hcl/entity-ref-to-enum.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "reference"
+   ],
+   "differs": {
+    "specscore": "specscore resolves a bare entity reference anywhere in the entity/component/enum scope without checking the kind; lint requires the name to be an entity"
+   }
+  },
+  "hcl/enum-duplicate-values.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "enum-values"
+   ]
+  },
+  "hcl/enum-no-values.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "enum-values"
+   ]
+  },
+  "hcl/expression-value.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "literal"
+   ],
+   "differs": {
+    "specscore": "specscore ignores attributes whose value is not a plain literal; lint refuses expressions (decision 0009)"
+   }
+  },
+  "hcl/map-style-properties.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "key",
+    "literal"
+   ],
+   "differs": {
+    "specscore": "specscore ignores attributes it does not know; lint refuses map-style containers (decisions 0007, 0009), and the entity keeps a key naming a property that was never declared"
+   }
+  },
+  "hcl/missing-key.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "key"
+   ],
+   "differs": {
+    "specscore": "specscore does not require an entity key; spec/core-model.md lists missing keys among the validation errors"
+   }
+  },
+  "hcl/non-identifier-name.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "name-form"
+   ],
+   "differs": {
+    "specscore": "specscore accepts any block label; lint requires identifiers, so that the exported JSON is readable by the Directory's reader, which requires them"
+   }
+  },
+  "hcl/reserved-entity-name.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "reserved-name"
+   ]
+  },
+  "hcl/reserved-recordset-name.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "reserved-name"
+   ]
+  },
+  "hcl/shop.modelspec.hcl": {
+   "lint": "accept",
+   "warnings": [
+    "unsupported-by-consumers"
+   ]
+  },
+  "hcl/syntax-error.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "syntax"
+   ]
+  },
+  "hcl/todo-aligned.modelspec.hcl": {
+   "lint": "accept"
+  },
+  "hcl/todo.modelspec.hcl": {
+   "lint": "accept"
+  },
+  "hcl/trio-name-clash.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "duplicate-name"
+   ]
+  },
+  "hcl/unknown-attribute.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "attribute"
+   ],
+   "differs": {
+    "specscore": "specscore ignores attributes it does not know; the JSON format requires constraints to use supported keys"
+   }
+  },
+  "hcl/unknown-module.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "reference"
+   ]
+  },
+  "hcl/unknown-type.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "unknown-type"
+   ],
+   "differs": {
+    "specscore": "specscore does not check types; the JSON format requires the type to be in the supported set"
+   }
+  },
+  "hcl/unmapped-index.modelspec.hcl": {
+   "lint": "accept"
+  },
+  "hcl/unresolved-entity.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "reference"
+   ]
+  },
+  "hcl/unresolved-enum.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "reference"
+   ]
+  },
+  "hcl/unresolved-use.modelspec.hcl": {
+   "lint": "refuse",
+   "rules": [
+    "reference"
+   ]
+  },
+  "json/chinook.modelspec.json": {
+   "lint": "accept"
+  },
+  "json/component-property.modelspec.json": {
+   "lint": "accept",
+   "warnings": [
+    "unsupported-by-consumers"
+   ],
+   "differs": {
+    "directory": "the Directory's reader accepts only scalar and entity-reference properties; a component property is valid ModelSpec (core-model.md), so lint reports a warning, not an error"
+   }
+  },
+  "json/duplicate-entity-key.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "duplicate-name"
+   ],
+   "differs": {
+    "directory": "JSON.parse in the Directory's reader keeps the last of two equal keys; the format requires names to be unique within their maps"
+   }
+  },
+  "json/entities-array.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "shape"
+   ]
+  },
+  "json/entities-empty.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "entities"
+   ]
+  },
+  "json/entity-empty-properties.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "entities",
+    "key"
+   ]
+  },
+  "json/entity-name-not-identifier.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "name-form",
+    "reference"
+   ]
+  },
+  "json/entity-no-key.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "key"
+   ],
+   "differs": {
+    "directory": "the Directory's reader does not use keys; core-model.md lists missing keys among the validation errors"
+   }
+  },
+  "json/entity-no-properties.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "entities",
+    "key"
+   ]
+  },
+  "json/enum-duplicate-values.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "enum-values"
+   ],
+   "differs": {
+    "directory": "the Directory's reader does not read enums; the format requires enum values to be unique"
+   }
+  },
+  "json/full-shape.modelspec.json": {
+   "lint": "accept"
+  },
+  "json/key-not-a-property.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "key"
+   ],
+   "differs": {
+    "directory": "the Directory's reader does not use keys; a key must name a property"
+   }
+  },
+  "json/modelspec-not-string.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "modelspec-version"
+   ]
+  },
+  "json/module-id-missing.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "module"
+   ],
+   "differs": {
+    "directory": "the Directory's reader reads only module.name; the format requires module.id and module.version"
+   }
+  },
+  "json/module-name-missing.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "module"
+   ]
+  },
+  "json/module-name-not-identifier.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "module"
+   ]
+  },
+  "json/module-version-missing.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "module"
+   ],
+   "differs": {
+    "directory": "the Directory's reader reads only module.name; the format requires module.id and module.version"
+   }
+  },
+  "json/named-enum.modelspec.json": {
+   "lint": "accept"
+  },
+  "json/no-entities.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "entities"
+   ]
+  },
+  "json/no-modelspec.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "modelspec-version"
+   ]
+  },
+  "json/no-module.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "module"
+   ]
+  },
+  "json/not-an-object.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "shape"
+   ]
+  },
+  "json/not-json.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "syntax"
+   ]
+  },
+  "json/notes.modelspec.json": {
+   "lint": "accept"
+  },
+  "json/property-bad-type-name.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "unknown-type"
+   ]
+  },
+  "json/property-name-not-identifier.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "name-form"
+   ]
+  },
+  "json/property-neither-type-nor-entity.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "member-kind"
+   ]
+  },
+  "json/property-unknown-entity.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "reference"
+   ]
+  },
+  "json/property-unknown-type.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "unknown-type"
+   ],
+   "differs": {
+    "directory": "the Directory's reader checks only that a type is spelled like a type name; the format requires one of the supported types"
+   }
+  },
+  "json/shape-wrong-types.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "shape"
+   ],
+   "differs": {
+    "directory": "the Directory's reader reads only entities; the format requires every group to have the shape it defines"
+   }
+  },
+  "json/todo.modelspec.json": {
+   "lint": "accept"
+  },
+  "json/trailing-garbage.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "syntax"
+   ]
+  },
+  "json/unknown-top-level-field.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "shape"
+   ],
+   "differs": {
+    "directory": "the Directory's reader ignores fields it does not know; the format defines the top-level fields"
+   }
+  },
+  "json/wrong-attribute-type.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "attribute"
+   ],
+   "differs": {
+    "directory": "the Directory's reader ignores constraints; the format requires them to have valid value types"
+   }
+  },
+  "json/wrong-version.modelspec.json": {
+   "lint": "refuse",
+   "rules": [
+    "modelspec-version"
+   ],
+   "differs": {
+    "directory": "the Directory's reader accepts any string as the modelspec version; the format defines 1.0-draft"
+   }
+  }
+ }
+}
