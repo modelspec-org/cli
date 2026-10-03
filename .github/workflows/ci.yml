@@ -10,21 +10,21 @@ name: CI
 # fail without failing the job, stop running exactly these two commands one after
 # the other, or if anything touches the cover profile in between.
 
-# The push trigger has no path filter on purpose: every push to main gets a run
-# of this workflow, which is what the release of that commit waits for.
+# There is no push trigger. A push to main runs this workflow through release.yml,
+# whose first job calls it (workflow_call) and whose release job needs that job, so
+# the gate runs once for the commit being released and nothing is released unless
+# it passed. Pull requests run it directly.
 on:
-  push:
-    branches: [main]
+  workflow_call:
   pull_request:
 
 permissions:
   contents: read
 
-# Only a pull request's superseded runs are cancelled. A run on main is never
-# cancelled and never replaced: its commit's release waits for this workflow, and a
-# cancelled run would make the release fail its guard. A group allows one running
-# and one pending run, and a newer pending run replaces an older one, so a push to
-# main gets a group of its own (its commit hash).
+# Only a pull request's superseded runs are cancelled. A run for main (called by
+# release.yml, so the event is the caller's push) is never cancelled and never
+# replaced: a group allows one running and one pending run and a newer pending run
+# replaces an older one, so a push to main gets a group of its own (its commit hash).
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -34,9 +34,9 @@ jobs:
     name: Test, vet, race, exact coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -72,22 +72,22 @@ jobs:
     name: GoReleaser check and snapshot build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
           version: v2.18.2
           args: check
 
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
           version: v2.18.2

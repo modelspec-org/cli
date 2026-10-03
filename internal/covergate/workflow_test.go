@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,31 +16,71 @@ import (
 // These tests parse the repository's workflow files and assert on their
 // structure, so that the coverage gate cannot be made optional by an edit that a
 // text search would miss: a comment, an `if:`, a step that rewrites the profile,
-// a guard value set to the empty string. They are test code: the checkers below
+// a job that no longer waits for the gate. They are test code: the checkers below
 // are not part of the binary.
+//
+// They are a tripwire, not the control. They run in the pull request that changes
+// the workflows, so a change that edits them passes its own tests. The control is
+// a branch rule on main (see the README, "What stops a release without the gate").
 
 const (
 	testCommand = "go test -race -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./..."
 	gateCommand = "go run ./cmd/covergate cover.out"
 	ciName      = "CI"
+	testJobName = "Test, vet, race, exact coverage"
+	packJobName = "GoReleaser check and snapshot build"
 	cancelExpr  = "${{ github.event_name == 'pull_request' }}"
-	// A push to main gets a concurrency group of its own, so that a newer pending
-	// run can never replace its CI run; only pull requests share a group per ref.
-	ciGroup = "ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}"
+	// A run for main (called by release.yml, so with the caller's push event) gets
+	// a concurrency group of its own, so that a newer pending run can never replace
+	// it; only pull requests share a group per ref.
+	ciGroup      = "ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}"
+	releaseGroup = "release-${{ github.ref }}"
+	gateUses     = "./.github/workflows/ci.yml"
+	releaseIf    = "github.ref == 'refs/heads/main'"
+	sharedRef    = "strongo/cicd/.github/workflows/release.yml@5d96b1f3fbb3f12bb1e2762ff5ba54ccb9506504"
+	checkoutRef  = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+	setupGoRef   = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
+	goreleaseRef = "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94"
 )
+
+// pinned is every action a workflow may use: a full commit SHA, with the version
+// that commit is, which must stand in a comment after the reference. The shared
+// release workflow's v1.21.0 was verified with git ls-remote.
+var pinned = map[string]string{
+	sharedRef:    "v1.21.0",
+	checkoutRef:  "v7.0.1",
+	setupGoRef:   "v7.0.0",
+	goreleaseRef: "v7.2.3",
+}
+
+// fullSHA is what a pinned reference must end in.
+var fullSHA = regexp.MustCompile(`@[0-9a-f]{40}$`)
 
 // allowedWorkflows is every file that may exist under .github/workflows, each
 // with the reason it may. A new workflow file fails TestOnlyTheKnownWorkflows
 // until it is added here with a stated reason: a workflow that calls the shared
 // release workflow, or is named CI, could release without the gate.
 var allowedWorkflows = map[string]string{
-	"ci.yml":      "runs the exact coverage gate and the packaging checks; the only workflow named CI",
-	"release.yml": "releases from a push to main through the shared workflow, which waits for the CI workflow",
+	"ci.yml":      "runs the exact coverage gate and the packaging checks on pull requests, and is called by release.yml; the only workflow named CI",
+	"release.yml": "on a push to main calls ci.yml, then, only if it passed, the shared release workflow",
 }
 
-// releasePin is what the shared release workflow reference must end in: an exact
-// version tag, never a branch.
-var releasePin = regexp.MustCompile(`@v\d+\.\d+\.\d+$`)
+// the secrets release.yml forwards to the shared workflow, all optional.
+var releaseSecrets = obj{
+	"MACOS_SIGN_P12":      "${{ secrets.MACOS_SIGN_P12 }}",
+	"MACOS_SIGN_PASSWORD": "${{ secrets.MACOS_SIGN_PASSWORD }}",
+	"NOTARIZE_ISSUER_ID":  "${{ secrets.NOTARIZE_ISSUER_ID }}",
+	"NOTARIZE_KEY_ID":     "${{ secrets.NOTARIZE_KEY_ID }}",
+	"NOTARIZE_KEY":        "${{ secrets.NOTARIZE_KEY }}",
+}
+
+// the packaging steps of ci.yml, exactly: they may check and build, never release.
+var packagingSteps = []any{
+	obj{"uses": checkoutRef, "with": obj{"fetch-depth": 0}},
+	obj{"uses": setupGoRef, "with": obj{"go-version-file": "go.mod", "cache": true}},
+	obj{"uses": goreleaseRef, "with": obj{"distribution": "goreleaser", "version": "v2.18.2", "args": "check"}},
+	obj{"uses": goreleaseRef, "with": obj{"distribution": "goreleaser", "version": "v2.18.2", "args": "build --snapshot --clean"}},
+}
 
 type obj = map[string]any
 
@@ -117,6 +158,23 @@ func branches(trigger any) []string {
 	return out
 }
 
+// exactKeys reports a problem unless the mapping has exactly the keys wanted.
+func exactKeys(what string, o obj, want ...string) []string {
+	sort.Strings(want)
+	if got := keys(o); strings.Join(got, ",") != strings.Join(want, ",") {
+		return []string{fmt.Sprintf("%s must have exactly the keys %v, it has %v", what, want, got)}
+	}
+	return nil
+}
+
+// same reports a problem unless the value is deeply equal to the one wanted.
+func same(what string, got, want any) []string {
+	if !reflect.DeepEqual(got, want) {
+		return []string{fmt.Sprintf("%s must be %v, it is %v", what, want, got)}
+	}
+	return nil
+}
+
 // keys lists the keys of a mapping, sorted.
 func keys(v any) []string {
 	var out []string
@@ -127,50 +185,116 @@ func keys(v any) []string {
 	return out
 }
 
-// triggerProblems checks the triggers of a workflow. Both must run on pushes to
-// main, with nothing but the branch list on the push trigger (a paths filter
-// would let a main commit go without a CI run, and a tags list would run the
-// workflow on a tag). The release workflow has no other trigger at all: a
-// hand-pushed tag or a manual dispatch on a tag would release a commit that has
-// no CI run, which the shared release workflow's guard lets through after 180
-// seconds. CI needs pull_request, and may have others.
-func triggerProblems(what string, doc obj, isCI bool) []string {
-	on := asObj(doc["on"])
-	var problems []string
-	if got := branches(on["push"]); len(got) != 1 || got[0] != "main" {
-		problems = append(problems, fmt.Sprintf("%s must run on push to main only, has branches %v", what, got))
-	}
-	if got := keys(on["push"]); strings.Join(got, ",") != "branches" {
-		problems = append(problems, fmt.Sprintf("the push trigger of %s may carry only a branch list, it has %v (a paths or tags filter lets a commit go without a CI run)", what, got))
-	}
-	want := "push"
-	if isCI {
-		want = "pull_request,push"
-		if !has(on, "pull_request") {
-			problems = append(problems, what+" must run on pull requests")
+// usesOf lists every `uses` value in a workflow, in a job or a step.
+func usesOf(v any) []string {
+	var out []string
+	switch x := v.(type) {
+	case obj:
+		for k, e := range x {
+			if s, ok := e.(string); ok && k == "uses" {
+				out = append(out, s)
+			} else {
+				out = append(out, usesOf(e)...)
+			}
+		}
+	case []any:
+		for _, e := range x {
+			out = append(out, usesOf(e)...)
 		}
 	}
-	if got := strings.Join(keys(on), ","); got != want {
-		problems = append(problems, fmt.Sprintf("%s must have exactly the triggers %q (no tags and no workflow_dispatch anywhere: a release must always have a CI run to wait for), it has %q", what, want, got))
+	sort.Strings(out)
+	return out
+}
+
+// pinProblems checks every action a workflow uses: the one local workflow allowed
+// (only where allowLocal), or a full commit SHA from the pinned table with its
+// version in the comment after the reference.
+func pinProblems(what, text string, doc obj, allowLocal bool) []string {
+	var problems []string
+	seen := map[string]bool{}
+	for _, ref := range usesOf(doc["jobs"]) {
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		version, ok := pinned[ref]
+		switch {
+		case ref == gateUses && allowLocal:
+		case !ok:
+			problems = append(problems, fmt.Sprintf("%s uses %q, which is not one of the pinned actions (a full commit SHA from the pinned table)", what, ref))
+		case !fullSHA.MatchString(ref):
+			problems = append(problems, fmt.Sprintf("%s uses %q, which is not pinned to a full commit SHA", what, ref))
+		case strings.Count(text, "uses: "+ref) != strings.Count(text, "uses: "+ref+" # "+version+"\n"):
+			problems = append(problems, fmt.Sprintf("%s uses %q without the comment \"# %s\" after it", what, ref, version))
+		}
+	}
+	return problems
+}
+
+// forbiddenInCI is what no step of ci.yml may run or mention: it must not be able
+// to tag, publish or release, whatever job it is in.
+var forbiddenInCI = []string{"git tag", "git push", "gh release", "gh api", "goreleaser release", "goreleaser publish", "secrets.", "GITHUB_TOKEN"}
+
+// ciJobProblems checks every job of ci.yml: no job
+// has permissions of its own, calls a workflow, or runs anything that releases.
+func ciJobProblems(doc obj) []string {
+	var problems []string
+	jobs := asObj(doc["jobs"])
+	problems = append(problems, exactKeys("ci.yml jobs", jobs, "release-check", "test")...)
+	for _, name := range keys(jobs) {
+		job := asObj(jobs[name])
+		what := fmt.Sprintf("job %q", name)
+		for _, key := range []string{"permissions", "uses", "secrets", "needs", "container", "services", "environment"} {
+			if has(job, key) {
+				problems = append(problems, fmt.Sprintf("%s has %q: no job of ci.yml may have permissions of its own, call a workflow, or wait for another job", what, key))
+			}
+		}
+		if got := str(job["runs-on"]); got != "ubuntu-latest" {
+			problems = append(problems, fmt.Sprintf("%s must run on ubuntu-latest, not %q", what, got))
+		}
+		for _, bad := range forbiddenInCI {
+			if mentions(job, bad) {
+				problems = append(problems, fmt.Sprintf("%s mentions %q: ci.yml must not be able to tag, publish or release", what, bad))
+			}
+		}
+	}
+	return problems
+}
+
+// triggerProblems checks the triggers of a workflow, exactly: each has no other.
+// A paths filter or a tag list on a push, a dispatch or a schedule would let a
+// commit be released, or a tag be made, without the gate.
+func triggerProblems(what string, doc obj, want ...string) []string {
+	on := asObj(doc["on"])
+	problems := exactKeys(what+" triggers", on, want...)
+	for _, name := range want {
+		if name == "push" {
+			if got := branches(on["push"]); len(got) != 1 || got[0] != "main" {
+				problems = append(problems, fmt.Sprintf("%s must run on push to main only, has branches %v", what, got))
+			}
+			problems = append(problems, exactKeys("the push trigger of "+what, asObj(on["push"]), "branches")...)
+		} else if on[name] != nil {
+			problems = append(problems, fmt.Sprintf("the %s trigger of %s must be bare, with no filter, input or secret: %v", name, what, on[name]))
+		}
 	}
 	return problems
 }
 
 // topLevelProblems refuses what changes the environment of every job of a
 // workflow: a workflow-level env or defaults (a default shell can make every run
-// step execute nothing and succeed).
-func topLevelProblems(what string, doc obj) []string {
+// step execute nothing and succeed), and any permissions but the ones wanted.
+func topLevelProblems(what string, doc obj, permissions obj) []string {
 	var problems []string
 	for _, key := range []string{"env", "defaults"} {
 		if has(doc, key) {
 			problems = append(problems, fmt.Sprintf("%s has a workflow-level %q, which changes every step", what, key))
 		}
 	}
-	return problems
+	return append(problems, same(what+" permissions", asObj(doc["permissions"]), permissions)...)
 }
 
 // checkCI returns the problems in the CI workflow's text: the gate job and its
-// steps, in structure.
+// steps, in structure, and the other jobs.
 func checkCI(text string) []string {
 	doc, err := parse(text)
 	if err != nil {
@@ -178,25 +302,29 @@ func checkCI(text string) []string {
 	}
 	var problems []string
 	if str(doc["name"]) != ciName {
-		problems = append(problems, fmt.Sprintf("the workflow must be named %q, which the release waits for; it is %q", ciName, str(doc["name"])))
+		problems = append(problems, fmt.Sprintf("the workflow must be named %q; it is %q", ciName, str(doc["name"])))
 	}
-	problems = append(problems, triggerProblems("ci.yml", doc, true)...)
-	problems = append(problems, topLevelProblems("ci.yml", doc)...)
+	problems = append(problems, triggerProblems("ci.yml", doc, "pull_request", "workflow_call")...)
+	problems = append(problems, topLevelProblems("ci.yml", doc, obj{"contents": "read"})...)
+	problems = append(problems, pinProblems("ci.yml", text, doc, false)...)
 	if got := str(asObj(doc["concurrency"])["cancel-in-progress"]); got != cancelExpr {
-		problems = append(problems, fmt.Sprintf("cancel-in-progress must be %q so that a run on main is never cancelled, it is %q", cancelExpr, got))
+		problems = append(problems, fmt.Sprintf("cancel-in-progress must be %q so that a run for main is never cancelled, it is %q", cancelExpr, got))
 	}
 	if got := str(asObj(doc["concurrency"])["group"]); got != ciGroup {
-		problems = append(problems, fmt.Sprintf("the concurrency group must be %q so that a push to main never shares one (a pending run would be replaced), it is %q", ciGroup, got))
+		problems = append(problems, fmt.Sprintf("the concurrency group must be %q so that a run for main never shares one (a pending run would be replaced), it is %q", ciGroup, got))
 	}
+	problems = append(problems, ciJobProblems(doc)...)
+	pack := asObj(asObj(doc["jobs"])["release-check"])
+	problems = append(problems, same("the name of the packaging job", str(pack["name"]), packJobName)...)
+	problems = append(problems, same("the steps of the packaging job", pack["steps"], packagingSteps)...)
 	job := asObj(asObj(doc["jobs"])["test"])
 	if job == nil {
 		return append(problems, `ci.yml has no "test" job`)
 	}
+	problems = append(problems, same("the name of the test job", str(job["name"]), testJobName)...)
 	problems = append(problems, plain(`job "test"`, job, "needs", "uses", "with", "container", "services", "permissions")...)
-	if got := str(job["runs-on"]); got != "ubuntu-latest" {
-		problems = append(problems, fmt.Sprintf("the test job must run on ubuntu-latest, not %q", got))
-	}
 	steps := asList(job["steps"])
+	problems = append(problems, same("the first step of the test job", firstSteps(steps, 2), []any{obj{"uses": checkoutRef}, obj{"uses": setupGoRef, "with": obj{"go-version-file": "go.mod", "cache": true}}})...)
 	testAt, gateAt := -1, -1
 	for i, raw := range steps {
 		step := asObj(raw)
@@ -236,9 +364,17 @@ func checkCI(text string) []string {
 	return problems
 }
 
-// checkRelease returns the problems in the release workflow's text: it runs on
-// pushes to main, calls the shared release workflow, and passes the literal name
-// of the CI workflow as the workflow that must have succeeded.
+// firstSteps returns the first n steps, or all of them when there are fewer.
+func firstSteps(steps []any, n int) []any {
+	if len(steps) < n {
+		return steps
+	}
+	return steps[:n]
+}
+
+// checkRelease returns the problems in the release workflow's text: a push to
+// main, a job that calls the CI workflow, and a release job that needs it and
+// calls the shared release workflow, pinned, with nothing else.
 func checkRelease(ci, text string) []string {
 	doc, err := parse(text)
 	if err != nil {
@@ -248,33 +384,28 @@ func checkRelease(ci, text string) []string {
 	if err != nil {
 		return []string{"ci.yml does not parse: " + err.Error()}
 	}
-	problems := triggerProblems("release.yml", doc, false)
-	problems = append(problems, topLevelProblems("release.yml", doc)...)
+	problems := triggerProblems("release.yml", doc, "push")
+	problems = append(problems, topLevelProblems("release.yml", doc, obj{})...)
+	problems = append(problems, pinProblems("release.yml", text, doc, true)...)
 	if name := str(doc["name"]); name == "" || name == str(cidoc["name"]) {
-		problems = append(problems, fmt.Sprintf("release.yml must have a name of its own, not %q: the release waits for the workflow named %q, and a second workflow of that name could stand in for it", name, str(cidoc["name"])))
+		problems = append(problems, fmt.Sprintf("release.yml must have a name of its own, not %q: a second workflow named like the CI workflow could stand in for it", name))
 	}
+	conc := asObj(doc["concurrency"])
+	problems = append(problems, same("the concurrency group of release.yml", str(conc["group"]), releaseGroup)...)
+	problems = append(problems, same("cancel-in-progress of release.yml (a release is never cancelled)", conc["cancel-in-progress"], false)...)
 	jobs := asObj(doc["jobs"])
-	if len(jobs) != 1 {
-		problems = append(problems, fmt.Sprintf("release.yml must have exactly one job (the release, which goes through the guard); it has %v", keys(jobs)))
-	}
-	job := asObj(jobs["release"])
-	if job == nil {
-		return append(problems, `release.yml has no "release" job`)
-	}
-	for _, key := range []string{"if", "continue-on-error"} {
-		if has(job, key) {
-			problems = append(problems, fmt.Sprintf("the release job has %q; it must run on every push to main", key))
-		}
-	}
-	uses := str(job["uses"])
-	if !strings.HasPrefix(uses, "strongo/cicd/.github/workflows/release.yml@") {
-		problems = append(problems, fmt.Sprintf("the release job must call the shared release workflow, it uses %q", uses))
-	} else if !releasePin.MatchString(uses) {
-		problems = append(problems, fmt.Sprintf("the shared release workflow must be pinned to an exact version tag, it uses %q", uses))
-	}
-	if got := str(asObj(job["with"])["require_workflow_success"]); got != ciName || got != str(cidoc["name"]) {
-		problems = append(problems, fmt.Sprintf("require_workflow_success must be the literal %q, the name of the CI workflow; it is %q", ciName, got))
-	}
+	problems = append(problems, exactKeys("release.yml jobs", jobs, "gate", "release")...)
+	gate, release := asObj(jobs["gate"]), asObj(jobs["release"])
+	problems = append(problems, exactKeys(`job "gate"`, gate, "uses", "permissions")...)
+	problems = append(problems, same(`the "gate" job calls`, str(gate["uses"]), gateUses)...)
+	problems = append(problems, same(`the "gate" job permissions`, asObj(gate["permissions"]), obj{"contents": "read"})...)
+	problems = append(problems, exactKeys(`job "release"`, release, "needs", "if", "uses", "permissions", "with", "secrets")...)
+	problems = append(problems, same(`the "release" job needs`, release["needs"], "gate")...)
+	problems = append(problems, same(`the "release" job condition`, str(release["if"]), releaseIf)...)
+	problems = append(problems, same(`the "release" job calls`, str(release["uses"]), sharedRef)...)
+	problems = append(problems, same(`the "release" job permissions`, asObj(release["permissions"]), obj{"contents": "write"})...)
+	problems = append(problems, same(`the "release" job inputs`, asObj(release["with"]), obj{"go_version": "1.27.0", "allow_major_version_bump": false, "artifact_smoke_test_homebrew_cask": false})...)
+	problems = append(problems, same(`the "release" job secrets`, asObj(release["secrets"]), releaseSecrets)...)
 	return problems
 }
 
@@ -359,183 +490,146 @@ func edit(t *testing.T, text, old, new string) string {
 	return strings.Replace(text, old, new, 1)
 }
 
-// Each edit below leaves a text search green and must be a failing case here. The
-// first five are the ones the review of the first version found.
+// Each edit below leaves a text search green and must be a failing case here.
 func TestEditsThatWeakenTheGateAreCaught(t *testing.T) {
 	t.Parallel()
 	ci, release := readWorkflow(t, "ci.yml"), readWorkflow(t, "release.yml")
 	gateStep := "        run: " + gateCommand
 	testStep := "        run: " + testCommand
+	const testJob = "    name: " + testJobName + "\n"
+	const packJob = "    name: " + packJobName + "\n"
+	const triggers = "on:\n  workflow_call:\n  pull_request:\n"
+	const releaseJob = "  release:\n    needs: gate\n"
+	const sharedLine = "    uses: " + sharedRef + " # v1.21.0\n"
+	const pushTrigger = "    branches:\n      - main\n"
+	checkoutLine := "      - uses: " + checkoutRef + " # v7.0.1\n"
+	type mutation func(t *testing.T) (ciText, releaseText string)
+	inCI := func(old, new string) mutation {
+		return func(t *testing.T) (string, string) { return edit(t, ci, old, new), release }
+	}
+	inRelease := func(old, new string) mutation {
+		return func(t *testing.T) (string, string) { return ci, edit(t, release, old, new) }
+	}
 	tests := []struct {
 		name    string
-		mutate  func(t *testing.T) (ciText, releaseText string)
+		mutate  mutation
 		problem string
 	}{
-		{"1. if: false on the gate step", func(t *testing.T) (string, string) {
-			return edit(t, ci, gateStep, "        if: false\n"+gateStep), release
-		}, `step 8 has "if"`},
-		{"2. both run lines kept as comments, other commands run", func(t *testing.T) (string, string) {
+		// The gate job and its steps.
+		{"if: false on the gate step", inCI(gateStep, "        if: false\n"+gateStep), `step 8 has "if"`},
+		{"both run lines kept as comments, other commands run", func(t *testing.T) (string, string) {
 			c := edit(t, ci, testStep, "        # run: "+testCommand+"\n        run: go test ./pkg/...")
 			c = edit(t, c, gateStep, "        # run: "+gateCommand+"\n        run: echo skipped")
 			return c, release
 		}, "no step runs exactly"},
-		{"3. if: false on the whole test job", func(t *testing.T) (string, string) {
-			return edit(t, ci, "    name: Test, vet, race, exact coverage\n", "    name: Test, vet, race, exact coverage\n    if: false\n"), release
-		}, `job "test" has "if"`},
-		{"4. a step before the gate filters the profile", func(t *testing.T) (string, string) {
-			return edit(t, ci, "      - name: Coverage gate (every statement)\n", "      - name: Tidy the profile\n        run: grep -v ' 0$' cover.out > cover2.out && mv cover2.out cover.out\n\n      - name: Coverage gate (every statement)\n"), release
-		}, "touches the cover profile"},
-		{"5. the guard kept as a comment, the real input empty", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "      require_workflow_success: 'CI'", "      # require_workflow_success: 'CI'\n      require_workflow_success: ''")
-		}, "require_workflow_success must be the literal"},
-		{"continue-on-error on the gate step", func(t *testing.T) (string, string) {
-			return edit(t, ci, gateStep, "        continue-on-error: true\n"+gateStep), release
-		}, `"continue-on-error"`},
-		{"continue-on-error on the job", func(t *testing.T) (string, string) {
-			return edit(t, ci, "    name: Test, vet, race, exact coverage\n", "    name: Test, vet, race, exact coverage\n    continue-on-error: true\n"), release
-		}, `job "test" has "continue-on-error"`},
-		{"an env on the test step that narrows the run", func(t *testing.T) (string, string) {
-			return edit(t, ci, testStep, "        env:\n          GOFLAGS: -run=NoSuchTest\n"+testStep), release
-		}, `has "env"`},
-		{"a job-level env", func(t *testing.T) (string, string) {
-			return edit(t, ci, "    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v7\n\n      - uses: actions/setup-go@v7\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt", "    runs-on: ubuntu-latest\n    env:\n      GOFLAGS: -run=x\n    steps:\n      - uses: actions/checkout@v7\n\n      - uses: actions/setup-go@v7\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt"), release
-		}, `job "test" has "env"`},
-		{"a step that exports GOFLAGS for later steps", func(t *testing.T) (string, string) {
-			return edit(t, ci, "      - name: gofmt\n", "      - run: echo GOFLAGS=-run=x >> $GITHUB_ENV\n\n      - name: gofmt\n"), release
-		}, "sets the environment or the path of later steps"},
-		{"a step between test and gate", func(t *testing.T) (string, string) {
-			return edit(t, ci, "      - name: Coverage gate (every statement)\n", "      - run: echo between\n\n      - name: Coverage gate (every statement)\n"), release
-		}, "must directly follow"},
-		{"the gate step before the test step", func(t *testing.T) (string, string) {
-			c := edit(t, ci, "      - name: go test (race, coverage profile)\n        run: "+testCommand+"\n\n      - name: Coverage gate (every statement)\n        run: "+gateCommand+"\n", "      - name: Coverage gate (every statement)\n        run: "+gateCommand+"\n\n      - name: go test (race, coverage profile)\n        run: "+testCommand+"\n")
-			return c, release
-		}, "must directly follow"},
-		{"the gate step removed", func(t *testing.T) (string, string) {
-			return edit(t, ci, "      - name: Coverage gate (every statement)\n        run: "+gateCommand+"\n", ""), release
-		}, "no step runs exactly: " + gateCommand},
-		{"the test step removed", func(t *testing.T) (string, string) {
-			return edit(t, ci, "      - name: go test (race, coverage profile)\n        run: "+testCommand+"\n\n", ""), release
-		}, "no step runs exactly: " + testCommand},
-		{"the test narrowed to one package", func(t *testing.T) (string, string) {
-			return edit(t, ci, testCommand, "go test -race -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./pkg/..."), release
-		}, "no step runs exactly"},
-		{"the gate given an option", func(t *testing.T) (string, string) {
-			return edit(t, ci, gateStep, gateStep+" -min 90"), release
-		}, "no step runs exactly"},
-		{"the test command twice", func(t *testing.T) (string, string) {
-			return edit(t, ci, gateStep, gateStep+"\n      - run: "+testCommand), release
-		}, "the test command appears twice"},
-		{"the gate command twice", func(t *testing.T) (string, string) {
-			return edit(t, ci, gateStep, gateStep+"\n      - run: "+gateCommand), release
-		}, "the gate command appears twice"},
-		{"a working directory on the gate step", func(t *testing.T) (string, string) {
-			return edit(t, ci, gateStep, "        working-directory: cmd\n"+gateStep), release
-		}, `"working-directory"`},
-		{"a shell on the test step", func(t *testing.T) (string, string) {
-			return edit(t, ci, testStep, "        shell: bash {0} || true\n"+testStep), release
-		}, `"shell"`},
-		{"the job renamed", func(t *testing.T) (string, string) {
-			return edit(t, ci, "\n  test:\n", "\n  tests:\n"), release
-		}, `no "test" job`},
-		{"cancel-in-progress true", func(t *testing.T) (string, string) {
-			return edit(t, ci, "cancel-in-progress: "+cancelExpr, "cancel-in-progress: true"), release
-		}, "cancel-in-progress must be"},
-		{"no pull request trigger", func(t *testing.T) (string, string) {
-			return edit(t, ci, "  pull_request:\n", ""), release
-		}, "must run on pull requests"},
-		{"ci runs on other branches too", func(t *testing.T) (string, string) {
-			return edit(t, ci, "    branches: [main]", "    branches: [main, dev]"), release
-		}, "must run on push to main only"},
-		{"ci renamed so the release waits for nothing", func(t *testing.T) (string, string) {
-			return edit(t, ci, "name: CI\n", "name: Checks\n"), release
-		}, `must be named "CI"`},
-		{"the guard input removed", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "      require_workflow_success: 'CI'\n", "")
-		}, "require_workflow_success must be the literal"},
-		{"the guard names another workflow", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "require_workflow_success: 'CI'", "require_workflow_success: 'Go CI'")
-		}, "require_workflow_success must be the literal"},
-		{"the guard value built from an expression", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "require_workflow_success: 'CI'", "require_workflow_success: ${{ vars.GUARD }}")
-		}, "require_workflow_success must be the literal"},
-		{"release made conditional", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "  release:\n    # Pinned", "  release:\n    if: false\n    # Pinned")
-		}, `the release job has "if"`},
-		{"release continue-on-error", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "  release:\n    # Pinned", "  release:\n    continue-on-error: true\n    # Pinned")
-		}, `the release job has "continue-on-error"`},
-		{"release calls something else", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "uses: strongo/cicd/.github/workflows/release.yml@v1.21.0", "uses: ./.github/workflows/mine.yml")
-		}, "must call the shared release workflow"},
-		{"release on every branch", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n      - dev\n")
-		}, "must run on push to main only"},
-		{"a manual dispatch trigger on the release", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n  workflow_dispatch:\n")
-		}, "must have exactly the triggers"},
-		{"a tag trigger on the release", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n    tags:\n      - 'v*'\n")
-		}, "may carry only a branch list"},
-		{"a pull request trigger on the release", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n  pull_request:\n")
-		}, "must have exactly the triggers"},
-		{"a paths filter on the release push", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n    paths:\n      - 'pkg/**'\n")
-		}, "may carry only a branch list"},
-		{"a paths filter on the CI push", func(t *testing.T) (string, string) {
-			return edit(t, ci, "    branches: [main]\n", "    branches: [main]\n    paths: ['pkg/**']\n"), release
-		}, "may carry only a branch list"},
-		{"a tags trigger on CI push", func(t *testing.T) (string, string) {
-			return edit(t, ci, "    branches: [main]\n", "    branches: [main]\n    tags: ['v*']\n"), release
-		}, "may carry only a branch list"},
-		{"CI without a push trigger", func(t *testing.T) (string, string) {
-			return edit(t, ci, "  push:\n    branches: [main]\n", ""), release
-		}, "must run on push to main only"},
-		{"workflow-level defaults.run.shell makes every run step a no-op", func(t *testing.T) (string, string) {
-			return edit(t, ci, "permissions:\n  contents: read\n", "permissions:\n  contents: read\n\ndefaults:\n  run:\n    shell: \"sh -c 'exit 0' {0}\"\n"), release
-		}, `workflow-level "defaults"`},
-		{"workflow-level env GOFLAGS", func(t *testing.T) (string, string) {
-			return edit(t, ci, "permissions:\n  contents: read\n", "permissions:\n  contents: read\n\nenv:\n  GOFLAGS: -overlay=/tmp/x.json\n"), release
-		}, `workflow-level "env"`},
-		{"a step that adds a directory with its own go to GITHUB_PATH", func(t *testing.T) (string, string) {
-			return edit(t, ci, "      - name: gofmt\n", "      - run: echo /tmp/fake >> $GITHUB_PATH\n\n      - name: gofmt\n"), release
-		}, "sets the environment or the path of later steps"},
-		{"a second job in release.yml that skips the guard", func(t *testing.T) (string, string) {
-			return ci, release + "\n  other:\n    uses: strongo/cicd/.github/workflows/release.yml@v1.21.0\n    permissions:\n      contents: write\n"
-		}, "must have exactly one job"},
-		{"release.yml named CI", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "name: Release\n", "name: CI\n")
-		}, "must have a name of its own"},
-		{"release.yml without a name", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "name: Release\n", "")
-		}, "must have a name of its own"},
-		{"a container on the test job", func(t *testing.T) (string, string) {
-			return edit(t, ci, "    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v7\n\n      - uses: actions/setup-go@v7\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt", "    runs-on: ubuntu-latest\n    container: alpine\n    steps:\n      - uses: actions/checkout@v7\n\n      - uses: actions/setup-go@v7\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt"), release
-		}, `job "test" has "container"`},
-		{"services on the test job", func(t *testing.T) (string, string) {
-			return edit(t, ci, "    name: Test, vet, race, exact coverage\n", "    name: Test, vet, race, exact coverage\n    services:\n      x:\n        image: alpine\n"), release
-		}, `job "test" has "services"`},
-		{"the test job on a self-hosted runner", func(t *testing.T) (string, string) {
-			return edit(t, ci, "  test:\n    name: Test, vet, race, exact coverage\n    runs-on: ubuntu-latest", "  test:\n    name: Test, vet, race, exact coverage\n    runs-on: self-hosted"), release
-		}, "must run on ubuntu-latest"},
-		{"the shared workflow pinned to a branch", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "release.yml@v1.21.0", "release.yml@main")
-		}, "pinned to an exact version tag"},
-		{"the shared workflow pinned to a major tag", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "release.yml@v1.21.0", "release.yml@v1")
-		}, "pinned to an exact version tag"},
-		{"a workflow_dispatch trigger on CI", func(t *testing.T) (string, string) {
-			return edit(t, ci, "  pull_request:\n", "  pull_request:\n  workflow_dispatch:\n"), release
-		}, "must have exactly the triggers"},
-		{"a schedule trigger on CI", func(t *testing.T) (string, string) {
-			return edit(t, ci, "  pull_request:\n", "  pull_request:\n  schedule:\n    - cron: '0 0 * * *'\n"), release
-		}, "must have exactly the triggers"},
-		{"a concurrency group shared by pushes to main", func(t *testing.T) (string, string) {
-			return edit(t, ci, "github.event_name == 'pull_request' && github.ref || github.sha", "github.ref"), release
-		}, "the concurrency group must be"},
-		{"release job missing", func(t *testing.T) (string, string) {
-			return ci, edit(t, release, "\n  release:\n", "\n  publish:\n")
-		}, `no "release" job`},
+		{"if: false on the whole test job", inCI(testJob, testJob+"    if: false\n"), `job "test" has "if"`},
+		{"a step before the gate filters the profile", inCI("      - name: Coverage gate (every statement)\n", "      - name: Tidy the profile\n        run: grep -v ' 0$' cover.out > cover2.out && mv cover2.out cover.out\n\n      - name: Coverage gate (every statement)\n"), "touches the cover profile"},
+		{"continue-on-error on the gate step", inCI(gateStep, "        continue-on-error: true\n"+gateStep), `"continue-on-error"`},
+		{"continue-on-error on the job", inCI(testJob, testJob+"    continue-on-error: true\n"), `job "test" has "continue-on-error"`},
+		{"an env on the test step that narrows the run", inCI(testStep, "        env:\n          GOFLAGS: -run=NoSuchTest\n"+testStep), `has "env"`},
+		{"a job-level env", inCI(testJob+"    runs-on: ubuntu-latest\n", testJob+"    runs-on: ubuntu-latest\n    env:\n      GOFLAGS: -run=x\n"), `job "test" has "env"`},
+		{"a step that exports GOFLAGS for later steps", inCI("      - name: gofmt\n", "      - run: echo GOFLAGS=-run=x >> $GITHUB_ENV\n\n      - name: gofmt\n"), "sets the environment or the path of later steps"},
+		{"a step that adds a directory with its own go to GITHUB_PATH", inCI("      - name: gofmt\n", "      - run: echo /tmp/fake >> $GITHUB_PATH\n\n      - name: gofmt\n"), "sets the environment or the path of later steps"},
+		{"a step between test and gate", inCI("      - name: Coverage gate (every statement)\n", "      - run: echo between\n\n      - name: Coverage gate (every statement)\n"), "must directly follow"},
+		{"the gate step before the test step", inCI("      - name: go test (race, coverage profile)\n        run: "+testCommand+"\n\n      - name: Coverage gate (every statement)\n        run: "+gateCommand+"\n", "      - name: Coverage gate (every statement)\n        run: "+gateCommand+"\n\n      - name: go test (race, coverage profile)\n        run: "+testCommand+"\n"), "must directly follow"},
+		{"the gate step removed", inCI("      - name: Coverage gate (every statement)\n        run: "+gateCommand+"\n", ""), "no step runs exactly: " + gateCommand},
+		{"the test step removed", inCI("      - name: go test (race, coverage profile)\n        run: "+testCommand+"\n\n", ""), "no step runs exactly: " + testCommand},
+		{"the test narrowed to one package", inCI(testCommand, "go test -race -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./pkg/..."), "no step runs exactly"},
+		{"the gate given an option", inCI(gateStep, gateStep+" -min 90"), "no step runs exactly"},
+		{"the test command twice", inCI(gateStep, gateStep+"\n      - run: "+testCommand), "the test command appears twice"},
+		{"the gate command twice", inCI(gateStep, gateStep+"\n      - run: "+gateCommand), "the gate command appears twice"},
+		{"a working directory on the gate step", inCI(gateStep, "        working-directory: cmd\n"+gateStep), `"working-directory"`},
+		{"a shell on the test step", inCI(testStep, "        shell: bash {0} || true\n"+testStep), `"shell"`},
+		{"the test job renamed", inCI("\n  test:\n", "\n  tests:\n"), "ci.yml jobs must have exactly the keys"},
+		{"the test job's name changed, so the required check is another", inCI(testJob, "    name: Tests\n"), "the name of the test job must be"},
+		{"a container on the test job", inCI(testJob+"    runs-on: ubuntu-latest\n", testJob+"    runs-on: ubuntu-latest\n    container: alpine\n"), `job "test" has "container"`},
+		{"services on the test job", inCI(testJob, testJob+"    services:\n      x:\n        image: alpine\n"), `job "test" has "services"`},
+		{"the test job on a self-hosted runner", inCI(testJob+"    runs-on: ubuntu-latest", testJob+"    runs-on: self-hosted"), "must run on ubuntu-latest"},
+		{"another ref on the test job's checkout", inCI(checkoutLine+"\n      - uses: "+setupGoRef+" # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt", checkoutLine+"        with:\n          ref: v0.0.1\n\n      - uses: "+setupGoRef+" # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt"), "the first step of the test job must be"},
+		{"another setup action on the test job", inCI("      - uses: "+setupGoRef+" # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt", "      - uses: "+setupGoRef+" # v7.0.0\n        with:\n          go-version: '1.20'\n\n      - name: gofmt"), "the first step of the test job must be"},
+
+		// The triggers of ci.yml.
+		{"no pull request trigger", inCI(triggers, "on:\n  workflow_call:\n"), "ci.yml triggers must have exactly the keys"},
+		{"ci runs on a push as well, so main would run the gate twice and a hand push would run it alone", inCI(triggers, "on:\n  workflow_call:\n  pull_request:\n  push:\n    branches: [main]\n"), "ci.yml triggers must have exactly the keys"},
+		{"ci cannot be called", inCI(triggers, "on:\n  pull_request:\n"), "ci.yml triggers must have exactly the keys"},
+		{"a manual dispatch on ci", inCI(triggers, triggers+"  workflow_dispatch:\n"), "ci.yml triggers must have exactly the keys"},
+		{"a schedule on ci", inCI(triggers, triggers+"  schedule:\n    - cron: '0 0 * * *'\n"), "ci.yml triggers must have exactly the keys"},
+		{"a paths filter on the pull request trigger", inCI(triggers, "on:\n  workflow_call:\n  pull_request:\n    paths: ['pkg/**']\n"), "the pull_request trigger of ci.yml must be bare"},
+		{"an input on workflow_call", inCI(triggers, "on:\n  workflow_call:\n    inputs:\n      skip:\n        type: boolean\n  pull_request:\n"), "the workflow_call trigger of ci.yml must be bare"},
+		{"ci renamed", inCI("name: CI\n", "name: Checks\n"), `the workflow must be named "CI"`},
+		{"cancel-in-progress true", inCI("cancel-in-progress: "+cancelExpr, "cancel-in-progress: true"), "cancel-in-progress must be"},
+		{"a concurrency group shared by runs for main", inCI("github.event_name == 'pull_request' && github.ref || github.sha", "github.ref"), "the concurrency group must be"},
+		{"workflow-level defaults.run.shell makes every run step a no-op", inCI("permissions:\n  contents: read\n", "permissions:\n  contents: read\n\ndefaults:\n  run:\n    shell: \"sh -c 'exit 0' {0}\"\n"), `workflow-level "defaults"`},
+		{"workflow-level env GOFLAGS", inCI("permissions:\n  contents: read\n", "permissions:\n  contents: read\n\nenv:\n  GOFLAGS: -overlay=/tmp/x.json\n"), `workflow-level "env"`},
+		{"write permissions at the top of ci", inCI("permissions:\n  contents: read\n", "permissions:\n  contents: write\n"), "ci.yml permissions must be"},
+		{"no permissions at the top of ci", inCI("permissions:\n  contents: read\n\n", ""), "ci.yml permissions must be"},
+
+		// The other jobs of ci.yml may not release.
+		{"the packaging job with contents: write", inCI(packJob, packJob+"    permissions:\n      contents: write\n"), `has "permissions"`},
+		{"the packaging job tags the commit", inCI("      - uses: "+setupGoRef+" # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - uses: "+goreleaseRef+" # v7.2.3\n        with:\n          distribution: goreleaser\n          version: v2.18.2\n          args: check\n", "      - uses: "+setupGoRef+" # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - run: git tag v9.9.9 && git push origin v9.9.9\n\n      - uses: "+goreleaseRef+" # v7.2.3\n        with:\n          distribution: goreleaser\n          version: v2.18.2\n          args: check\n"), `mentions "git tag"`},
+		{"the packaging job releases", inCI("          args: build --snapshot --clean", "          args: release --clean"), "the steps of the packaging job must be"},
+		{"the packaging job releases through gh", inCI("          args: build --snapshot --clean", "          args: build --snapshot --clean\n      - run: gh release create v9 --generate-notes"), `mentions "gh release"`},
+		{"a third job that calls the shared release workflow", func(t *testing.T) (string, string) {
+			return ci + "\n  publish:\n    uses: " + sharedRef + " # v1.21.0\n    permissions:\n      contents: write\n", release
+		}, "ci.yml jobs must have exactly the keys"},
+		{"a third job that runs gh release", func(t *testing.T) (string, string) {
+			return ci + "\n  publish:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh release create v9\n", release
+		}, "ci.yml jobs must have exactly the keys"},
+		{"the packaging job waits for another", inCI(packJob, packJob+"    needs: test\n"), `has "needs"`},
+		{"the packaging job on a self-hosted runner", inCI(packJob+"    runs-on: ubuntu-latest", packJob+"    runs-on: self-hosted"), "must run on ubuntu-latest"},
+		{"the packaging job's checkout of another ref", inCI("          fetch-depth: 0\n", "          fetch-depth: 0\n          ref: v0.0.1\n"), "the steps of the packaging job must be"},
+		{"the packaging job's name changed, so the required check is another", inCI(packJob, "    name: Packaging\n"), "the name of the packaging job must be"},
+		{"the packaging job uses a secret", inCI("          args: check\n", "          args: check\n        env:\n          TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"), `mentions "secrets."`},
+
+		// The pins.
+		{"an action pinned to a tag", inCI(checkoutRef+" # v7.0.1\n        with:\n          fetch-depth: 0", "actions/checkout@v7 # v7.0.1\n        with:\n          fetch-depth: 0"), "which is not one of the pinned actions"},
+		{"an action pinned to another commit", inCI("uses: "+setupGoRef+" # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt", "uses: actions/setup-go@0000000000000000000000000000000000000000 # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: true\n\n      - name: gofmt"), "which is not one of the pinned actions"},
+		{"a pinned action with the wrong version in the comment", inCI(checkoutRef+" # v7.0.1\n        with:\n          fetch-depth: 0", checkoutRef+" # v7.0.0\n        with:\n          fetch-depth: 0"), `without the comment "# v7.0.1"`},
+		{"a pinned action with no version comment", inCI(checkoutRef+" # v7.0.1\n        with:\n          fetch-depth: 0", checkoutRef+"\n        with:\n          fetch-depth: 0"), `without the comment "# v7.0.1"`},
+		{"an action that is not in the table", inCI("      - name: gofmt\n", "      - uses: some/action@3d3c42e5aac5ba805825da76410c181273ba90b1\n\n      - name: gofmt\n"), "which is not one of the pinned actions"},
+		{"the shared workflow pinned to its tag", inRelease(sharedRef+" # v1.21.0", "strongo/cicd/.github/workflows/release.yml@v1.21.0 # v1.21.0"), "which is not one of the pinned actions"},
+		{"the shared workflow pinned to a branch", inRelease(sharedRef+" # v1.21.0", "strongo/cicd/.github/workflows/release.yml@main"), "which is not one of the pinned actions"},
+		{"the shared workflow pinned to another commit", inRelease(sharedRef+" # v1.21.0", "strongo/cicd/.github/workflows/release.yml@0000000000000000000000000000000000000000 # v1.21.0"), "which is not one of the pinned actions"},
+		{"the shared workflow without its version comment", inRelease(sharedRef+" # v1.21.0", sharedRef), `without the comment "# v1.21.0"`},
+
+		// release.yml: the shape that makes the gate and the release one run.
+		{"the release job does not need the gate", inRelease(releaseJob, "  release:\n"), `job "release" must have exactly the keys`},
+		{"the release job needs another job", inRelease(releaseJob, "  release:\n    needs: other\n"), `the "release" job needs must be gate`},
+		{"the release job needs the gate and a list", inRelease(releaseJob, "  release:\n    needs: [gate, gate]\n"), `the "release" job needs must be gate`},
+		{"the release job is conditional on something else", inRelease("    if: "+releaseIf+"\n", "    if: always()\n"), `the "release" job condition must be`},
+		{"the release job runs whatever the gate did", inRelease("    if: "+releaseIf+"\n", "    if: ${{ always() && github.ref == 'refs/heads/main' }}\n"), `the "release" job condition must be`},
+		{"the release job without a condition", inRelease("    if: "+releaseIf+"\n", ""), `job "release" must have exactly the keys`},
+		{"the gate job removed", inRelease("  gate:\n    uses: "+gateUses+"\n    permissions:\n      contents: read\n\n", ""), "release.yml jobs must have exactly the keys"},
+		{"the gate job calls something else", inRelease("uses: "+gateUses, "uses: ./.github/workflows/mine.yml"), `the "gate" job calls must be`},
+		{"the gate job made conditional", inRelease("  gate:\n", "  gate:\n    if: false\n"), `job "gate" must have exactly the keys`},
+		{"the gate job allowed to fail", inRelease("  gate:\n", "  gate:\n    continue-on-error: true\n"), `job "gate" must have exactly the keys`},
+		{"the gate job with write permissions", inRelease("  gate:\n    uses: "+gateUses+"\n    permissions:\n      contents: read\n", "  gate:\n    uses: "+gateUses+"\n    permissions:\n      contents: write\n"), `the "gate" job permissions must be`},
+		{"the release job allowed to fail", inRelease(releaseJob, releaseJob+"    continue-on-error: true\n"), `job "release" must have exactly the keys`},
+		{"the shared workflow told to wait for CI as well", inRelease("      allow_major_version_bump: false\n", "      allow_major_version_bump: false\n      require_workflow_success: 'CI'\n"), `the "release" job inputs must be`},
+		{"another input on the release", inRelease("      allow_major_version_bump: false\n", "      allow_major_version_bump: true\n"), `the "release" job inputs must be`},
+		{"the release job with actions: read", inRelease("      contents: write\n", "      contents: write\n      actions: read\n"), `the "release" job permissions must be`},
+		{"a secret dropped", inRelease("      NOTARIZE_KEY: ${{ secrets.NOTARIZE_KEY }}\n", ""), `the "release" job secrets must be`},
+		{"a secret that is another secret", inRelease("NOTARIZE_KEY: ${{ secrets.NOTARIZE_KEY }}", "NOTARIZE_KEY: ${{ secrets.OTHER }}"), `the "release" job secrets must be`},
+		{"secrets: inherit", inRelease("    secrets:\n      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}\n      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}\n      NOTARIZE_ISSUER_ID: ${{ secrets.NOTARIZE_ISSUER_ID }}\n      NOTARIZE_KEY_ID: ${{ secrets.NOTARIZE_KEY_ID }}\n      NOTARIZE_KEY: ${{ secrets.NOTARIZE_KEY }}\n", "    secrets: inherit\n"), `the "release" job secrets must be`},
+		{"the release job calls something else", inRelease(sharedLine, "    uses: ./.github/workflows/mine.yml\n"), "which is not one of the pinned actions"},
+		{"a third job in release.yml that skips the gate", func(t *testing.T) (string, string) {
+			return ci, release + "\n  other:\n    uses: " + sharedRef + " # v1.21.0\n    permissions:\n      contents: write\n"
+		}, "release.yml jobs must have exactly the keys"},
+		{"release job renamed", inRelease("\n  release:\n", "\n  publish:\n"), "release.yml jobs must have exactly the keys"},
+		{"release on every branch", inRelease(pushTrigger, pushTrigger+"      - dev\n"), "must run on push to main only"},
+		{"a manual dispatch trigger on the release", inRelease(pushTrigger, pushTrigger+"  workflow_dispatch:\n"), "release.yml triggers must have exactly the keys"},
+		{"a tag trigger on the release", inRelease(pushTrigger, pushTrigger+"    tags:\n      - 'v*'\n"), "the push trigger of release.yml must have exactly the keys"},
+		{"a pull request trigger on the release", inRelease(pushTrigger, pushTrigger+"  pull_request:\n"), "release.yml triggers must have exactly the keys"},
+		{"a paths filter on the release push", inRelease(pushTrigger, pushTrigger+"    paths:\n      - 'pkg/**'\n"), "the push trigger of release.yml must have exactly the keys"},
+		{"release.yml without its push trigger", inRelease("on:\n  push:\n    branches:\n      - main\n", "on:\n  workflow_call:\n"), "release.yml triggers must have exactly the keys"},
+		{"release.yml named CI", inRelease("name: Release\n", "name: CI\n"), "must have a name of its own"},
+		{"release.yml without a name", inRelease("name: Release\n", ""), "must have a name of its own"},
+		{"a release that can be cancelled", inRelease("  cancel-in-progress: false\n", "  cancel-in-progress: true\n"), "cancel-in-progress of release.yml"},
+		{"a release with no concurrency control", inRelease("  cancel-in-progress: false\n", ""), "cancel-in-progress of release.yml"},
+		{"a release concurrency group of another name", inRelease("group: release-${{ github.ref }}", "group: other"), "the concurrency group of release.yml"},
+		{"workflow-level permissions on the release", inRelease("permissions: {}\n", "permissions:\n  contents: write\n"), "release.yml permissions must be"},
+		{"workflow-level env on the release", inRelease("permissions: {}\n", "permissions: {}\n\nenv:\n  GOFLAGS: -x\n"), `workflow-level "env"`},
+		{"workflow-level defaults on the release", inRelease("permissions: {}\n", "permissions: {}\n\ndefaults:\n  run:\n    shell: 'true {0}'\n"), `workflow-level "defaults"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -552,6 +646,32 @@ func TestEditsThatWeakenTheGateAreCaught(t *testing.T) {
 				t.Fatalf("problems = %v, want one containing %q", problems, tc.problem)
 			}
 		})
+	}
+}
+
+// The pinned table itself: full commit SHAs only, each with a version.
+func TestPinnedActionsAreFullSHAs(t *testing.T) {
+	t.Parallel()
+	for ref, version := range pinned {
+		if !fullSHA.MatchString(ref) || !regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(version) {
+			t.Errorf("pinned %q %q is not a full SHA and an exact version", ref, version)
+		}
+	}
+	// The workflows use the whole table, and nothing outside it.
+	var used []string
+	for _, name := range []string{"ci.yml", "release.yml"} {
+		doc, err := parse(readWorkflow(t, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ref := range usesOf(doc["jobs"]) {
+			if ref != gateUses && !contains(used, ref) {
+				used = append(used, ref)
+			}
+		}
+	}
+	if len(used) != len(pinned) {
+		t.Errorf("the workflows use %v; the table has %d entries", used, len(pinned))
 	}
 }
 

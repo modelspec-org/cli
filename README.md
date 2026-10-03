@@ -338,30 +338,33 @@ DIRECTORY_DIR=/path/to/clone-of-openvaultdb-directory node scripts/regen-golden.
 
 ## Releases
 
-Every release is made by a push to `main`, and a release waits for the coverage gate. The release
-workflow (`release.yml`) calls the shared `strongo/cicd` release workflow (pinned at `v1.21.0`), which
-tags the commit and publishes the archives and the checksums file. It has no other trigger: no tag
-trigger and no manual dispatch, and `ci.yml` has none of those either, so a hand-pushed tag releases
-nothing. The shared workflow's guard waits for the `CI` workflow's run for the commit being released and
-refuses to tag or publish unless it succeeded; it continues without waiting only when it finds no run
-for the commit after 180 seconds, and `ci.yml` runs on every push to `main` with no path filter, so a
-push to `main` always has a run to wait for. Pushes to `main` are never cancelled by a newer push
-(`ci.yml`'s concurrency group is per commit for them and per branch for pull requests), so every
-released commit has a finished run.
+Every release is made by a push to `main`, and a release runs only after the coverage gate has passed
+for that commit, in the same workflow run. `release.yml` (the only workflow that runs on a push) has two
+jobs: `gate` calls `ci.yml` (formatting, vet, module tidiness, the tests with the race detector, the exact
+coverage gate, and the GoReleaser configuration and snapshot build), and `release`, which has
+`needs: gate` and `if: github.ref == 'refs/heads/main'`, calls the shared `strongo/cicd` release
+workflow. That workflow tags the commit from its conventional commits (a push of only `docs:`, `chore:`
+or `ci:` commits cuts nothing) and publishes the archives and the checksums file. `ci.yml` has no push
+trigger (it runs on pull requests and when called), so a push to `main` runs the gate once, and there is
+nothing for the shared workflow to wait for: its `require_workflow_success` option, which waits for a
+workflow's run and continues without it after 180 seconds, is not used. There is no tag trigger and no
+manual dispatch, so a hand-pushed tag releases nothing.
 
-Recovery, **as read from the shared workflow's source at `v1.21.0` and not exercised here**:
+The shared workflow and every action are pinned to a full commit SHA with the version in a comment
+(`strongo/cicd` v1.21.0 is `5d96b1f3fbb3`; `git ls-remote https://github.com/strongo/cicd refs/tags/v1.21.0`
+shows it).
 
-- *The gate is red* (`CI` failed for the commit): the release job fails at "Refusing to release",
-  before any tag. Re-running the failed `CI` run clears it (the newest run for the commit decides);
-  otherwise fix on `main` and the next push is released.
+Recovery, **as read from the shared workflow's source at that commit and not exercised here**:
+
+- *The gate is red* (`gate` failed in the push's run): `release` does not run, so there is no tag and
+  nothing is published. Fix on `main`; the next push runs the gate and, if green, releases. Re-running
+  the failed jobs of the same run is also possible when the cause was transient.
 - *The release failed after the tag was pushed* (the tag is pushed before the archives are built): a
-  re-run of the release run finds the tag already on the commit, computes no bump and ends green with a
+  re-run of the run finds the tag already on the commit, computes no bump and ends green with a
   notice, "No release published this run", without publishing. To retry that release, delete the tag
-  on the remote by hand and re-run the release run; or leave it and let the next `feat:` or `fix:`
-  commit cut the next version.
-- A push that has only `docs:`, `chore:` or `ci:` commits since the last tag cuts no release, by design.
-
-`internal/covergate`'s tests pin the triggers of both workflows, as well as the gate itself.
+  on the remote by hand and re-run the run; or leave it and let the next `feat:` or `fix:` commit cut the
+  next version.
+- A push with only `docs:`, `chore:` or `ci:` commits since the last tag cuts no release, by design.
 
 ## Development
 
@@ -372,9 +375,12 @@ scripts/fuzz.sh 120    # HCL and JSON reader fuzzing, outside the default run an
 ```
 
 The coverage gate is exact: it fails unless every statement of every package, including `cmd/`,
-is covered. It has no threshold, flag or environment variable to lower it. Everything the commands
-touch (filesystem, output streams, build information, the update source) is injected, so the tests run
-in memory with no subprocess and no network.
+is covered. It has no threshold, flag or environment variable to lower it. It also lists the module's
+packages as `go list ./...` does (from the files, with no subprocess) and fails if a package that has
+statements is absent from the profile or contributes none to it, so a package whose tests never ran (a
+`TestMain` that exits 0) cannot vanish from the count. Everything the commands touch (filesystem, output
+streams, build information, the update source) is injected, so the tests run in memory with no subprocess
+and no network.
 
 ### What stops a release without the gate
 
@@ -383,22 +389,32 @@ The tests in `internal/covergate` parse `.github/workflows` and fail if:
 - the gate job or its two steps become conditional or able to fail silently, stop running exactly the
   test and gate commands one after the other, run in a `container` or with `services`, or if anything
   touches the cover profile between them or sets `GOFLAGS`, `GITHUB_ENV` or `GITHUB_PATH`;
-- either workflow gets a workflow-level `env` or `defaults` (a default shell can turn every `run` step
-  into a no-op), a trigger on a tag or a manual dispatch, or a `paths` filter on a push (`release.yml`
-  has no trigger but a push to `main`);
-- `release.yml` stops requiring the `CI` workflow, has a second job, or calls anything but the shared
-  release workflow pinned to an exact version tag (not a branch; it is not pinned to a commit);
+- `release.yml` stops being exactly two jobs, `gate` (calling `./.github/workflows/ci.yml`, with
+  `contents: read`) and `release` (`needs: gate`, `if: github.ref == 'refs/heads/main'`, calling the shared
+  workflow, with `contents: write`, the three inputs and the five optional secrets it has now, no
+  `require_workflow_success`), or its concurrency stops being `cancel-in-progress: false`;
+- the triggers are not exactly a push to `main` for `release.yml` and `pull_request` plus a bare
+  `workflow_call` for `ci.yml` (no tag, dispatch, schedule or `paths` filter anywhere);
+- either workflow gets a workflow-level `env` or `defaults`, or other `permissions` than `release.yml: {}` and
+  `ci.yml: contents: read`;
+- any job of `ci.yml` other than the two it has gets `permissions`, `uses`, `needs`, a `container` or
+  `services`, runs anything that tags, pushes, calls `gh`, runs `goreleaser release` or mentions a
+  secret, or the packaging job's steps differ in any way from the four it has (checkout, setup-go,
+  `goreleaser check`, `goreleaser build --snapshot --clean`);
+- any action, or the shared workflow, is not a full commit SHA from the table in the test, with its version in
+  the comment after it;
 - a second workflow is named `CI`, or any file other than `ci.yml` and `release.yml` is under
   `.github/workflows` (a new workflow has to be added to an explicit allow-list with its reason);
 - any Go file has a build constraint, so nothing can hide from the gate.
 
-**These tests are a tripwire, not the control.** They run in the same pull request as the change they
-guard, so a change that edits them, or a workflow they do not parse, passes its own tests. The real control
-is a branch rule (a repository ruleset) on `main` that requires a pull request and the two checks of `ci.yml`,
+**These tests are a tripwire, not the control.** They run in the pull request that changes the workflows, so
+a change that edits them, or a workflow they do not parse, passes its own tests. The real control is a branch
+rule (a repository ruleset) on `main` that requires a pull request and the two checks of `ci.yml`,
 `Test, vet, race, exact coverage` and `GoReleaser check and snapshot build`, up to date with `main`, and allows
 no direct push, force push or deletion, with no bypass list. It is a repository setting, not a file, and nothing
 in this repository can set it (nor was it set by the change that wrote this text). Until it is set, `main` is only
-as safe as the people who can push to it.
+as safe as the people who can push to it. (On a push to `main` the same checks appear as `gate / …` inside the
+release run; the rule needs the plain names, which pull requests report.)
 
 ## Licence
 
