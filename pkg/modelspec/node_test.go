@@ -202,3 +202,26 @@ func TestParseNodeReportsRepeatedKeys(t *testing.T) {
 		t.Fatalf("Dups = %v", n.Dups)
 	}
 }
+
+// The line of a syntax error is the line of the byte that could not be read, and
+// never line 0, even when nothing could be read at all.
+func TestSyntaxErrorLines(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		src  string
+		line int
+	}{
+		{"", 1}, {"   ", 1}, {"}", 1}, {"\n\n}", 3}, {"{\n  \"a\": ]\n}", 2}, {"{\"a\":\n", 2},
+	} {
+		_, err := ParseNode([]byte(tc.src))
+		se, ok := err.(*syntaxError)
+		if !ok || se.line != tc.line {
+			t.Errorf("%q: error %v, line %d, want line %d", tc.src, err, func() int {
+				if ok {
+					return se.line
+				}
+				return -1
+			}(), tc.line)
+		}
+	}
+}

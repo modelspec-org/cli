@@ -1,6 +1,7 @@
 package modelspec
 
 import (
+	"math/big"
 	"strings"
 	"testing"
 
@@ -151,5 +152,41 @@ func TestModuleNameFromFile(t *testing.T) {
 		if got := moduleNameFromFile(in); got != want {
 			t.Errorf("moduleNameFromFile(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Numbers are written as their shortest decimal, and a negative zero is zero: the
+// same number in two spellings is the same value (so `[-0, 0]` repeats a value).
+func TestNumberText(t *testing.T) {
+	t.Parallel()
+	for src, want := range map[string]string{
+		"0": "0", "-0": "0", "-00": "0", "-0.0": "0", "-0e0": "0", "0.0": "0", "00": "0",
+		"1": "1", "-1": "-1", "007": "7", "1.5": "1.5", "-1.5": "-1.5", "1.50": "1.5", "1e3": "1000", "-1e3": "-1000", "1e-3": "0.001", "2.5e2": "250",
+		"9223372036854775807": "9223372036854775807", "-9223372036854775808": "-9223372036854775808",
+		"9223372036854775808": "9223372036854775808", "-9223372036854775809": "-9223372036854775809",
+		"123456789012345678901234567890": "123456789012345678901234567890", "0.1": "0.1", "1e400": "1" + strings.Repeat("0", 400),
+	} {
+		m, fs := ParseHCL("a"+hclExt, []byte("entity \"A\" {\n  key = []\n  x = "+src+"\n}\n"))
+		if len(fs) != 0 || len(m.Concepts) != 1 {
+			t.Errorf("%s: findings %v", src, fs)
+			continue
+		}
+		a, _ := m.Concepts[0].Attr("x")
+		if a.Value.Type != NodeNumber || a.Value.Str != want {
+			t.Errorf("%s: read as %q, want %q", src, a.Value.Str, want)
+		}
+	}
+	// Both spellings of zero are one value.
+	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [-0, 0]\n}\n"}), `duplicate value "0"`)
+	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [1, 1.0]\n}\n"}), `duplicate value`) // 1.0 is the integer 1
+	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [-1, 1]\n}\n"}))
+	// The helper alone.
+	for f, want := range map[float64]string{0: "0", -0.5: "-0.5", 3: "3", 1e15: "1000000000000000"} {
+		if got := numberText(big.NewFloat(f)); got != want {
+			t.Errorf("numberText(%v) = %q, want %q", f, got, want)
+		}
+	}
+	if got := numberText(new(big.Float).Neg(big.NewFloat(0))); got != "0" {
+		t.Errorf("numberText(-0) = %q", got)
 	}
 }
