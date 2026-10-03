@@ -75,29 +75,51 @@ type unit struct {
 	aliases map[string]bool // other names the module's own references may use: a twin's module.name
 	models  []*Model
 	broken  bool // some file of the module could not be read
+	idx     *unitIndex
 }
 
-func (u *unit) find(kind Kind, name string) *Concept {
+// unitIndex finds the concepts of a unit by kind and name, and the kind of a
+// name in the entity/component/enum scope, in one pass over the unit. Looking a
+// concept up used to scan every concept of every file, once for each reference.
+type unitIndex struct {
+	byKind map[Kind]map[string]*Concept
+	trio   map[string]Kind
+}
+
+// index builds the unit's index on first use. The first declaration of a name
+// wins, as the scan it replaced found the first.
+func (u *unit) index() *unitIndex {
+	if u.idx != nil {
+		return u.idx
+	}
+	idx := &unitIndex{byKind: map[Kind]map[string]*Concept{}, trio: map[string]Kind{}}
 	for _, m := range u.models {
 		for _, c := range m.Concepts {
-			if c.Kind == kind && c.Name == name {
-				return c
+			if idx.byKind[c.Kind] == nil {
+				idx.byKind[c.Kind] = map[string]*Concept{}
+			}
+			if _, seen := idx.byKind[c.Kind][c.Name]; !seen {
+				idx.byKind[c.Kind][c.Name] = c
+			}
+			if c.Kind == KindEntity || c.Kind == KindComponent || c.Kind == KindEnum {
+				if _, seen := idx.trio[c.Name]; !seen {
+					idx.trio[c.Name] = c.Kind
+				}
 			}
 		}
 	}
-	return nil
+	u.idx = idx
+	return idx
+}
+
+func (u *unit) find(kind Kind, name string) *Concept {
+	return u.index().byKind[kind][name]
 }
 
 // trioKind returns the kind of the entity, component or enum with the name.
 func (u *unit) trioKind(name string) (Kind, bool) {
-	for _, m := range u.models {
-		for _, c := range m.Concepts {
-			if c.Name == name && (c.Kind == KindEntity || c.Kind == KindComponent || c.Kind == KindEnum) {
-				return c.Kind, true
-			}
-		}
-	}
-	return "", false
+	kind, ok := u.index().trio[name]
+	return kind, ok
 }
 
 // Check applies the semantic rules of the profile in opts to the models and
@@ -111,7 +133,7 @@ func (u *unit) trioKind(name string) (Kind, bool) {
 // its own but is not a second source for the name. Broken models are skipped, and
 // references into their modules are not reported.
 func Check(models []*Model, opts Options) []Finding {
-	c := &checker{opts: opts, byName: map[string][]*unit{}}
+	c := &checker{opts: opts, byName: map[string][]*unit{}, props: map[*Concept]*propSet{}, memberSets: map[*Concept]map[string]bool{}}
 	groups := map[string]*unit{}
 	var order []*unit
 	for _, m := range models {
@@ -139,10 +161,12 @@ func Check(models []*Model, opts Options) []Finding {
 }
 
 type checker struct {
-	opts     Options
-	byName   map[string][]*unit
-	findings []Finding
-	cur      *Model
+	opts       Options
+	byName     map[string][]*unit
+	findings   []Finding
+	cur        *Model
+	props      map[*Concept]*propSet
+	memberSets map[*Concept]map[string]bool // see memberSet
 }
 
 func (c *checker) add(line int, rule string, sev Severity, format string, args ...any) {
@@ -367,48 +391,102 @@ func (c *checker) entity(u *unit, k *Concept) {
 	if len(names) == 0 {
 		c.errorf(key.Line, RuleKey, "%s has an empty key", who)
 	}
-	known, complete := c.propertyNames(u, k)
+	known := c.propertyNames(u, k)
 	for _, n := range names {
-		if !known[n] && complete {
+		if known.complete && !known.has(n) {
 			c.errorf(key.Line, RuleKey, "%s key %q is not a property of the entity (or of a component it uses)", who, n)
 		}
 	}
 }
 
-// propertyNames are the entity's own properties plus the fields of the
-// components it uses, which may be in the module's other files or in another
-// module (decision 0014). complete is false when some used component could not
-// be read, so a name's absence proves nothing.
-func (c *checker) propertyNames(u *unit, k *Concept) (names map[string]bool, complete bool) {
-	names = map[string]bool{}
-	for _, mem := range k.Members {
-		names[mem.Name] = true
+// propSet answers whether a name is a property of an entity: one of its own, or
+// a field of a component it uses (which may be in the module's other files or in
+// another module, decision 0014). complete is false when some used component
+// could not be read, so a name's absence proves nothing.
+//
+// The names of a component's fields are kept once for the component, and not
+// copied into every entity that uses it. Lookups go through the used components
+// one by one until that would cost more than copying their fields into one set,
+// which is then built once; so the work for an entity is at most about the lesser
+// of (lookups x used components) and the fields of the components it uses.
+type propSet struct {
+	own      map[string]bool
+	used     []map[string]bool
+	fields   int
+	lookups  int
+	union    map[string]bool
+	complete bool
+}
+
+func (p *propSet) has(name string) bool {
+	if p.own[name] {
+		return true
 	}
+	if p.union == nil {
+		if p.lookups++; p.lookups*len(p.used) <= p.fields+len(p.used) {
+			for _, set := range p.used {
+				if set[name] {
+					return true
+				}
+			}
+			return false
+		}
+		p.union = make(map[string]bool, p.fields)
+		for _, set := range p.used {
+			for n := range set {
+				p.union[n] = true
+			}
+		}
+	}
+	return p.union[name]
+}
+
+// memberSet is the set of the names of a concept's members, built once.
+func (c *checker) memberSet(k *Concept) map[string]bool {
+	if set, ok := c.memberSets[k]; ok {
+		return set
+	}
+	set := make(map[string]bool, len(k.Members))
+	for _, mem := range k.Members {
+		set[mem.Name] = true
+	}
+	c.memberSets[k] = set
+	return set
+}
+
+// propertyNames returns the properties of the entity k of unit u, built once for
+// each entity.
+func (c *checker) propertyNames(u *unit, k *Concept) *propSet {
+	if p, ok := c.props[k]; ok {
+		return p
+	}
+	p := &propSet{own: c.memberSet(k), complete: true}
+	c.props[k] = p
 	use, ok := k.Attr("use")
 	if !ok {
-		return names, true
+		return p
 	}
 	used, ok := use.Value.stringList()
 	if !ok {
-		return names, false
+		p.complete = false
+		return p
 	}
-	complete = true
 	for _, n := range used {
 		target, name, problem := c.lookup(u, n)
 		if problem != "" || target == nil {
-			complete = false
+			p.complete = false
 			continue
 		}
 		comp := target.find(KindComponent, name)
 		if comp == nil {
-			complete = false
+			p.complete = false
 			continue
 		}
-		for _, f := range comp.Members {
-			names[f.Name] = true
-		}
+		set := c.memberSet(comp)
+		p.used = append(p.used, set)
+		p.fields += len(set)
 	}
-	return names, complete
+	return p
 }
 
 // members checks the properties of an entity or the fields of a component or
@@ -572,7 +650,7 @@ func (c *checker) bind(u *unit, a *Attr, who string) {
 		c.errorf(a.Line, RuleReference, "%s bind %q: no entity %q in module %q", who, a.Value.Str, name, target.name)
 		return
 	}
-	if known, complete := c.propertyNames(target, ent); complete && !known[prop] {
+	if known := c.propertyNames(target, ent); known.complete && !known.has(prop) {
 		c.errorf(a.Line, RuleReference, "%s bind %q: entity %q has no property %q (or component field of that name)", who, a.Value.Str, name, prop)
 	}
 }
@@ -615,22 +693,14 @@ func (c *checker) recordset(u *unit, k *Concept) {
 	}
 	if key, ok := k.Attr("key"); ok {
 		if names, ok := key.Value.stringList(); ok {
+			columns := c.memberSet(k)
 			for _, n := range names {
-				if !hasMember(k, n) {
+				if !columns[n] {
 					c.errorf(key.Line, RuleKey, "recordset %q key %q is not one of its columns", k.Name, n)
 				}
 			}
 		}
 	}
-}
-
-func hasMember(k *Concept, name string) bool {
-	for _, mem := range k.Members {
-		if mem.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // ---- the publish profile

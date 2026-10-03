@@ -775,3 +775,93 @@ func TestNamesThatDifferOnlyByCase(t *testing.T) {
 		})
 	}
 }
+
+// An entity's properties come from its own and from the components it uses.
+// Lookups go through the used components one by one, and through one merged set
+// once there have been enough of them; both must give the same answers.
+func TestPropertyLookupsThroughUsedComponents(t *testing.T) {
+	t.Parallel()
+	comp := func(name string, fields ...string) string {
+		out := "component \"" + name + "\" {\n"
+		for _, f := range fields {
+			out += "  field \"" + f + "\" {\n    type = \"int\"\n  }\n"
+		}
+		return out + "}\n"
+	}
+	components := comp("A", "a1", "a2") + comp("B", "b1") + comp("C", "c1", "c2", "c3")
+	entity := func(keys string) string {
+		return "entity \"E\" {\n  use = [\"A\", \"B\", \"C\"]\n  key = [" + keys + "]\n  property \"own\" {\n    type = \"int\"\n  }\n}\n"
+	}
+	// One lookup, then several: the first are answered component by component, the
+	// later ones from the merged set.
+	expect(t, run(map[string]string{"m" + hclExt: components + entity(`"own"`)}))
+	expect(t, run(map[string]string{"m" + hclExt: components + entity(`"a1", "b1", "c3", "own", "a2", "c1", "c2"`)}))
+	expect(t, run(map[string]string{"m" + hclExt: components + entity(`"a1", "nope", "b1", "c3", "a2", "missing", "c1"`)}),
+		`key "nope" is not a property`, `key "missing" is not a property`)
+	// A bind is a lookup too: many against one entity, answered the same way.
+	binds := ""
+	for _, f := range []string{"a1", "b1", "c2", "own", "a2", "c3", "c1", "zz"} {
+		binds += "  field \"f_" + f + "\" {\n    bind = \"E." + f + "\"\n  }\n"
+	}
+	expect(t, run(map[string]string{"m" + hclExt: components + entity(`"own"`) + "collection \"c\" {\n  kind = \"editable\"\n" + binds + "}\n"}),
+		`bind "E.zz": entity "E" has no property "zz"`)
+}
+
+// The strategy behind an entity's property lookups, which gives the same answers
+// either way, is as designed: an entity's properties are built once, the fields of
+// each used component are counted, and the merged set is built only when the
+// lookups through the used components would cost more than building it.
+func TestPropSetStrategy(t *testing.T) {
+	t.Parallel()
+	src := "component \"A\" {\n  field \"a1\" {\n    type = \"int\"\n  }\n  field \"a2\" {\n    type = \"int\"\n  }\n}\n" +
+		"component \"B\" {\n  field \"b1\" {\n    type = \"int\"\n  }\n}\n" +
+		"entity \"E\" {\n  use = [\"A\", \"nomodule.X\", \"B\", \"A\", \"Missing\", \"B\"]\n  key = [\"own\"]\n  property \"own\" {\n    type = \"int\"\n  }\n}\n" +
+		"entity \"F\" {\n  use = [\"A\", \"B\"]\n  key = [\"own\"]\n}\n" +
+		"component \"A2\" {\n  field \"a1\" {\n    type = \"int\"\n  }\n  field \"a2\" {\n    type = \"int\"\n  }\n}\n" +
+		"entity \"G\" {\n  use = [\"A\", \"A2\"]\n  key = []\n}\n"
+	m, fs := ParseHCL("a"+hclExt, []byte(src))
+	if len(fs) != 0 {
+		t.Fatal(fs)
+	}
+	u := &unit{name: "a", models: []*Model{m}}
+	c := &checker{byName: map[string][]*unit{"a": {u}}, props: map[*Concept]*propSet{}, memberSets: map[*Concept]map[string]bool{}}
+	entity := u.find(KindEntity, "E")
+	p := c.propertyNames(u, entity)
+	if c.propertyNames(u, entity) != p {
+		t.Error("an entity's properties are built more than once")
+	}
+	// Two of the six used names are a component twice, one is of an unknown module and one is missing (so the set is not complete).
+	if p.complete || len(p.used) != 4 || p.fields != 2+1+2+1 || !p.own["own"] || len(p.own) != 1 {
+		t.Fatalf("complete %v, used %d, fields %d, own %v", p.complete, len(p.used), p.fields, p.own)
+	}
+	// Four used components of six fields: lookups go through them while
+	// lookups x 4 components <= 6 fields + 4, that is for the first two, and the
+	// merged set is built by the third.
+	for i, name := range []string{"a1", "b1"} {
+		if !p.has(name) || p.union != nil {
+			t.Fatalf("lookup %d of %q: merged set built %v, it is built only from the 3rd lookup", i+1, name, p.union != nil)
+		}
+	}
+	if p.has("nope") || p.union == nil || len(p.union) != 3 {
+		t.Fatalf("the 3rd lookup builds the merged set once, with the 3 names of the used components: %v", p.union)
+	}
+	if !p.has("own") || p.has("zzz") {
+		t.Error("answers changed once the merged set was built")
+	}
+	// The merged set is built when the lookups cost strictly more: two components of two fields
+	// each give 3 lookups at 6 = 4 + 2, and the 4th builds it.
+	two := c.propertyNames(u, u.find(KindEntity, "G"))
+	for i := 1; i <= 3; i++ {
+		if two.has("zz") || two.union != nil {
+			t.Fatalf("G: lookup %d: merged set built %v, it is built by the 4th", i, two.union != nil)
+		}
+	}
+	if two.has("zz") || two.union == nil || !two.has("a1") {
+		t.Fatalf("G: the 4th lookup builds the merged set: %v", two.union)
+	}
+	// With no component to look through, nothing is built.
+	plain := c.propertyNames(u, u.find(KindEntity, "F"))
+	if !plain.complete || len(plain.used) != 2 || plain.fields != 3 || plain.has("a1") != true || plain.union != nil {
+		t.Fatalf("F: %+v", plain)
+	}
+}
