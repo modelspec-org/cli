@@ -86,6 +86,14 @@ func memOpen(profile string) Open {
 	}
 }
 
+const twoPackages = "mode: set\nm/a/x.go:1.1,2.2 3 1\nm/b/y.go:1.1,2.2 2 4\n"
+
+func pkg(path string, statements bool) Package { return Package{Path: path, HasStatements: statements} }
+
+func listing(pkgs ...Package) Packages {
+	return func() ([]Package, error) { return pkgs, nil }
+}
+
 func TestRun(t *testing.T) {
 	t.Parallel()
 	var big strings.Builder
@@ -102,23 +110,38 @@ func TestRun(t *testing.T) {
 		wantCode   int
 		wantStdout string
 		wantStderr string
+		pkgs       Packages // nil: the module has no package with statements
 	}{
-		{"pass", []string{"cover.out"}, memOpen("mode: set\na.go:1.1,2.2 4 1\n"), 0, "coverage gate passed: 4 of 4", ""},
-		{"fail by one statement", []string{"cover.out"}, memOpen(hundredAndOne), 1, "coverage gate FAILED: 9999 of 10000 statements covered (1 uncovered)", ""},
-		{"no args", nil, memOpen(""), 2, "", "usage: covergate"},
-		{"two args", []string{"cover.out", "x"}, memOpen(""), 2, "", "usage: covergate"},
-		{"threshold flag is refused", []string{"-threshold=50", "cover.out"}, memOpen("mode: set\na.go:1.1,2.2 1 0\n"), 2, "", "takes no options"},
-		{"single flag is refused", []string{"--min=1"}, memOpen("mode: set\na.go:1.1,2.2 1 0\n"), 2, "", "takes no options"},
-		{"open error", []string{"missing.out"}, memOpen(""), 2, "", "no such profile missing.out"},
-		{"parse error", []string{"cover.out"}, memOpen("mode: set\nbroken\n"), 2, "", "cover.out: line 2"},
-		{"empty profile fails", []string{"cover.out"}, memOpen("mode: set\n"), 1, "FAILED: 0 of 0", ""},
-		{"read error", []string{"cover.out"}, func(string) (io.ReadCloser, error) { return io.NopCloser(errReader{}), nil }, 2, "", "read failed"},
+		{"pass", []string{"cover.out"}, memOpen("mode: set\na.go:1.1,2.2 4 1\n"), 0, "coverage gate passed: 4 of 4", "", nil},
+		{"fail by one statement", []string{"cover.out"}, memOpen(hundredAndOne), 1, "coverage gate FAILED: 9999 of 10000 statements covered (1 uncovered)", "", nil},
+		{"no args", nil, memOpen(""), 2, "", "usage: covergate", nil},
+		{"two args", []string{"cover.out", "x"}, memOpen(""), 2, "", "usage: covergate", nil},
+		{"threshold flag is refused", []string{"-threshold=50", "cover.out"}, memOpen("mode: set\na.go:1.1,2.2 1 0\n"), 2, "", "takes no options", nil},
+		{"single flag is refused", []string{"--min=1"}, memOpen("mode: set\na.go:1.1,2.2 1 0\n"), 2, "", "takes no options", nil},
+		{"open error", []string{"missing.out"}, memOpen(""), 2, "", "no such profile missing.out", nil},
+		{"parse error", []string{"cover.out"}, memOpen("mode: set\nbroken\n"), 2, "", "cover.out: line 2", nil},
+		{"empty profile fails", []string{"cover.out"}, memOpen("mode: set\n"), 1, "FAILED: 0 of 0", "", nil},
+		{"read error", []string{"cover.out"}, func(string) (io.ReadCloser, error) { return io.NopCloser(errReader{}), nil }, 2, "", "read failed", nil},
+		// A package with statements must be in the profile with some. A test binary
+		// whose TestMain exits 0 before running, or a profile written without a
+		// package, must not let the package vanish from the count while the rest
+		// is fully covered.
+		{"every package with statements is in the profile", []string{"cover.out"}, memOpen(twoPackages), 0, "coverage gate passed: 5 of 5", "", listing(pkg("m/a", true), pkg("m/b", true), pkg("m/c", false))},
+		{"a package vanished from the profile", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\n"), 1, "coverage gate FAILED: package m/b has statements and is not in the cover profile", "", listing(pkg("m/a", true), pkg("m/b", true))},
+		{"a package contributes no statements", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\nm/b/y.go:1.1,2.2 0 1\n"), 1, "package m/b has statements and contributes none to the cover profile", "", listing(pkg("m/a", true), pkg("m/b", true))},
+		{"a package with no statements may be absent", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\n"), 0, "passed: 3 of 3", "", listing(pkg("m/a", true), pkg("m/consts", false))},
+		{"a vanished package and an uncovered statement are both reported", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\nm/a/x.go:3.1,4.2 1 0\n"), 1, "package m/b has statements and is not in the cover profile", "", listing(pkg("m/a", true), pkg("m/b", true))},
+		{"the package list cannot be read", []string{"cover.out"}, memOpen(twoPackages), 2, "", "no go.mod", func() ([]Package, error) { return nil, errors.New("no go.mod") }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var out, errb bytes.Buffer
-			code := Run(tc.args, &out, &errb, tc.open)
+			pkgs := tc.pkgs
+			if pkgs == nil {
+				pkgs = listing()
+			}
+			code := Run(tc.args, &out, &errb, tc.open, pkgs)
 			if code != tc.wantCode {
 				t.Fatalf("exit code = %d, want %d (stdout %q, stderr %q)", code, tc.wantCode, out.String(), errb.String())
 			}
@@ -149,5 +172,127 @@ func TestOSOpen(t *testing.T) {
 	}
 	if _, err := OSOpen(filepath.Join(t.TempDir(), "absent")); err == nil {
 		t.Fatal("OSOpen of a missing file succeeded")
+	}
+}
+
+func TestParseByPackage(t *testing.T) {
+	t.Parallel()
+	res, per, err := ParseByPackage(strings.NewReader("mode: atomic\nm/a/x.go:1.1,2.2 3 1\nm/a/y.go:1.1,2.2 2 0\nm/a/b/z.go:1.1,2.2 4 1\nm/a/x.go:1.1,2.2 3 5\nplain.go:1.1,2.2 1 1\n"))
+	if err != nil || res != (Result{8, 10}) {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	want := map[string]int{"m/a": 5, "m/a/b": 4, ".": 1}
+	if len(per) != len(want) {
+		t.Fatalf("per package = %v, want %v", per, want)
+	}
+	for k, v := range want {
+		if per[k] != v {
+			t.Errorf("per package = %v, want %v", per, want)
+		}
+	}
+	if _, _, err := ParseByPackage(strings.NewReader("mode: set\nbroken\n")); err == nil {
+		t.Error("a broken profile was accepted")
+	}
+}
+
+func TestMissing(t *testing.T) {
+	t.Parallel()
+	got := Missing([]Package{pkg("m/a", true), pkg("m/b", true), pkg("m/c", true), pkg("m/d", false)}, map[string]int{"m/a": 3, "m/c": 0, "m/d": 0, "m/other": 5})
+	if len(got) != 2 || !strings.Contains(got[0], "m/b has statements and is not in") || !strings.Contains(got[1], "m/c has statements and contributes none") {
+		t.Fatalf("Missing = %v", got)
+	}
+}
+
+// write creates the files of a small module in a temporary directory.
+func write(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for name, content := range files {
+		full := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// OSPackages lists what `go list ./...` would: Go files for this platform, not
+// testdata, hidden or underscore directories, nested modules.
+func TestOSPackages(t *testing.T) {
+	t.Parallel()
+	root := write(t, map[string]string{
+		"go.mod":                 "module example.com/m\n\ngo 1.27\n",
+		"main.go":                "package m\n\nfunc F() int {\n\treturn 1\n}\n",
+		"consts/c.go":            "package consts\n\nconst X = 1\n\nvar Y = func() {}\n\nfunc G()\n",
+		"empty/e.go":             "package empty\n\ntype T struct{}\n\nfunc (T) M() {}\n",
+		"onlytests/x_test.go":    "package onlytests\n",
+		"testdata/t.go":          "package t\n\nfunc F() { println() }\n",
+		".hidden/h.go":           "package h\n\nfunc F() { println() }\n",
+		"_skip/s.go":             "package s\n\nfunc F() { println() }\n",
+		"nested/go.mod":          "module example.com/nested\n",
+		"nested/n.go":            "package nested\n\nfunc F() { println() }\n",
+		"deep/er/d.go":           "package er\n\nfunc F() {\n\tprintln()\n}\n",
+		"constrained/c.go":       "package constrained\n\nfunc F() { println() }\n",
+		"constrained/other_x.go": "//go:build never_ever\n\npackage constrained\n\nfunc H() { println() }\n",
+		"notes/readme.md":        "not go\n",
+	})
+	got, err := OSPackages(root)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, p := range got {
+		names = append(names, fmt.Sprintf("%s:%v", p.Path, p.HasStatements))
+	}
+	want := "example.com/m:true example.com/m/constrained:true example.com/m/consts:false example.com/m/deep/er:true example.com/m/empty:false example.com/m/onlytests:false"
+	if strings.Join(names, " ") != want {
+		t.Fatalf("packages = %v\nwant %s", names, want)
+	}
+}
+
+func TestOSPackagesErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"no go.mod", map[string]string{"a.go": "package a\n"}, "go.mod"},
+		{"no module line", map[string]string{"go.mod": "go 1.27\n"}, "no module line"},
+		{"two packages in one directory", map[string]string{"go.mod": "module m\n", "a.go": "package a\n", "b.go": "package b\n"}, "found packages"},
+		{"a Go file that does not parse", map[string]string{"go.mod": "module m\n", "a.go": "package a\n\nfunc {\n"}, "a.go"},
+	} {
+		if _, err := OSPackages(write(t, tc.files))(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want containing %q", tc.name, err, tc.want)
+		}
+	}
+	// A directory that cannot be read: the walk reports it.
+	if _, err := OSPackages(filepath.Join(t.TempDir(), "absent"))(); err == nil {
+		t.Error("a missing root was accepted")
+	}
+}
+
+// The module's own packages: every one that has statements is one the gate
+// requires, so a package added to the module without tests cannot be left out.
+func TestOSPackagesOfThisModule(t *testing.T) {
+	t.Parallel()
+	got, err := OSPackages(filepath.Join("..", ".."))()
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, p := range got {
+		have[p.Path] = p.HasStatements
+	}
+	for _, name := range []string{"cmd/covergate", "cmd/modelspec", "internal/cli", "internal/covergate", "pkg/modelspec"} {
+		if !have["github.com/modelspec-org/cli/"+name] {
+			t.Errorf("package %s is not listed with statements: %v", name, have)
+		}
+	}
+	if has, listed := have["github.com/modelspec-org/cli/scripts/fuzz"]; !listed || has {
+		t.Errorf("the test-only package scripts/fuzz: listed %v, statements %v", listed, has)
 	}
 }

@@ -10,6 +10,10 @@ import (
 
 var exit = os.Exit
 
+// packages lists the module's packages, which the profile must account for; the
+// gate runs in the module root.
+var packages = covergate.OSPackages(".")
+
 func main() {
-	exit(covergate.Run(os.Args[1:], os.Stdout, os.Stderr, covergate.OSOpen))
+	exit(covergate.Run(os.Args[1:], os.Stdout, os.Stderr, covergate.OSOpen, packages))
 }

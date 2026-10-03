@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -37,6 +38,13 @@ type block struct {
 // several test binaries) counts once, and counts as covered if any listing
 // covered it.
 func Parse(r io.Reader) (Result, error) {
+	res, _, err := ParseByPackage(r)
+	return res, err
+}
+
+// ParseByPackage is Parse that also returns the number of statements the profile
+// holds for each package, named by import path (the directory of a block's file).
+func ParseByPackage(r io.Reader) (Result, map[string]int, error) {
 	blocks := map[string]block{}
 	var order []string
 	sc := bufio.NewScanner(r)
@@ -50,15 +58,15 @@ func Parse(r io.Reader) (Result, error) {
 		}
 		fields := strings.Fields(text)
 		if len(fields) != 3 {
-			return Result{}, fmt.Errorf("line %d: want \"<block> <statements> <count>\", got %q", line, text)
+			return Result{}, nil, fmt.Errorf("line %d: want \"<block> <statements> <count>\", got %q", line, text)
 		}
 		stmts, err := strconv.Atoi(fields[1])
 		if err != nil || stmts < 0 {
-			return Result{}, fmt.Errorf("line %d: bad statement count %q", line, fields[1])
+			return Result{}, nil, fmt.Errorf("line %d: bad statement count %q", line, fields[1])
 		}
 		count, err := strconv.Atoi(fields[2])
 		if err != nil || count < 0 {
-			return Result{}, fmt.Errorf("line %d: bad execution count %q", line, fields[2])
+			return Result{}, nil, fmt.Errorf("line %d: bad execution count %q", line, fields[2])
 		}
 		b, seen := blocks[fields[0]]
 		if !seen {
@@ -69,17 +77,20 @@ func Parse(r io.Reader) (Result, error) {
 		blocks[fields[0]] = b
 	}
 	if err := sc.Err(); err != nil {
-		return Result{}, err
+		return Result{}, nil, err
 	}
 	var res Result
+	perPackage := map[string]int{}
 	for _, key := range order {
 		b := blocks[key]
 		res.Total += b.stmts
 		if b.covered {
 			res.Covered += b.stmts
 		}
+		file, _, _ := strings.Cut(key, ":")
+		perPackage[path.Dir(file)] += b.stmts
 	}
-	return res, nil
+	return res, perPackage, nil
 }
 
 // Open opens the named cover profile. Run takes it as a parameter so tests can
@@ -92,10 +103,11 @@ func OSOpen(name string) (io.ReadCloser, error) {
 }
 
 // Run checks the profile named by args, which must be exactly one path. It
-// returns the process exit code: 0 when every statement is covered, 1 when any
-// is not, 2 on a usage or I/O error. Anything else on the command line,
+// returns the process exit code: 0 when every statement is covered and every
+// package of the module that has statements is in the profile with some, 1 when
+// not, 2 on a usage or I/O error. Anything else on the command line,
 // including a flag, is a usage error: the gate takes no options.
-func Run(args []string, stdout, stderr io.Writer, open Open) int {
+func Run(args []string, stdout, stderr io.Writer, open Open, packages Packages) int {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 		fmt.Fprintln(stderr, "usage: covergate <cover profile>  (the gate takes no options: every statement must be covered)")
 		return 2
@@ -106,13 +118,26 @@ func Run(args []string, stdout, stderr io.Writer, open Open) int {
 		return 2
 	}
 	defer f.Close()
-	res, err := Parse(f)
+	res, perPackage, err := ParseByPackage(f)
 	if err != nil {
 		fmt.Fprintf(stderr, "covergate: %s: %v\n", args[0], err)
 		return 2
 	}
+	pkgs, err := packages()
+	if err != nil {
+		fmt.Fprintf(stderr, "covergate: %v\n", err)
+		return 2
+	}
+	failed := false
+	for _, m := range Missing(pkgs, perPackage) {
+		fmt.Fprintf(stdout, "coverage gate FAILED: %s\n", m)
+		failed = true
+	}
 	if !res.Complete() {
 		fmt.Fprintf(stdout, "coverage gate FAILED: %d of %d statements covered (%d uncovered)\n", res.Covered, res.Total, res.Total-res.Covered)
+		failed = true
+	}
+	if failed {
 		return 1
 	}
 	fmt.Fprintf(stdout, "coverage gate passed: %d of %d statements covered\n", res.Covered, res.Total)
