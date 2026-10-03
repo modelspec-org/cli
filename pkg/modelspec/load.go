@@ -481,5 +481,6 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	res.Files = len(sources)
 	res.Findings = append(append(d.findings, parse...), Check(models, Options{Profile: opts.Profile})...)
 	SortFindings(res.Findings)
+	res.Findings = capFindings(res.Findings)
 	return res, nil
 }

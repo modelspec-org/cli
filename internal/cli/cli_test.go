@@ -12,6 +12,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/modelspec-org/cli/pkg/modelspec"
 	"github.com/strongo/buildinfo"
 	"github.com/strongo/cli-helpers/selfupdate"
 )
@@ -290,6 +291,25 @@ func TestLintChecksTheWholeModule(t *testing.T) {
 	h.env.Stdout = &failWriter{}
 	if code := h.run("lint", layoutPath("sales", "entities.hcl")); code != 2 || !strings.Contains(h.errb.String(), "write failed") {
 		t.Fatalf("note write: exit %d, stderr %q", code, h.errb)
+	}
+}
+
+// A file with a great many mistakes lists a bounded number of them, says how many
+// more there were, and exits as it would without the limit.
+func TestLintListsAtMostTheLimit(t *testing.T) {
+	t.Parallel()
+	vals := strings.Repeat(`"v", `, 4000) + `"v"`
+	h := newHarness(map[string]string{"a.modelspec.hcl": "enum \"E\" {\n  values = [" + vals + "]\n}\n"})
+	if code := h.run("lint"); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	lines := strings.Split(strings.TrimSpace(h.out.String()), "\n")
+	if len(lines) != modelspec.MaxFindings+2 || !strings.Contains(h.out.String(), "3000 more findings (3000 errors, 0 warnings) are not listed") || !strings.HasPrefix(lines[len(lines)-1], "failed: 1 file checked, 1001 errors") {
+		t.Fatalf("%d lines; first %q, last %q", len(lines), lines[0], lines[len(lines)-1])
+	}
+	h = newHarness(map[string]string{"a.modelspec.hcl": "enum \"E\" {\n  values = [" + vals + "]\n}\n"})
+	if code := h.run("lint", "--format", "json"); code != 1 || strings.Count(h.out.String(), `"rule": "enum-values"`) != modelspec.MaxFindings {
+		t.Fatalf("json: exit %d, %d findings", code, strings.Count(h.out.String(), `"rule": "enum-values"`))
 	}
 }
 

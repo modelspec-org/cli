@@ -156,21 +156,20 @@ func Check(models []*Model, opts Options) []Finding {
 	for _, u := range order {
 		c.unit(u)
 	}
-	SortFindings(c.findings)
-	return c.findings
+	return c.result()
 }
 
 type checker struct {
-	opts       Options
-	byName     map[string][]*unit
-	findings   []Finding
+	opts   Options
+	byName map[string][]*unit
+	findingList
 	cur        *Model
 	props      map[*Concept]*propSet
 	memberSets map[*Concept]map[string]bool // see memberSet
 }
 
 func (c *checker) add(line int, rule string, sev Severity, format string, args ...any) {
-	c.findings = append(c.findings, Finding{File: c.cur.File, Line: line, Rule: rule, Severity: sev, Message: fmt.Sprintf(format, args...)})
+	c.put(Finding{File: c.cur.File, Line: line, Rule: rule, Severity: sev, Message: fmt.Sprintf(format, args...)})
 }
 
 func (c *checker) errorf(line int, rule, format string, args ...any) {

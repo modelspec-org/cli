@@ -39,8 +39,7 @@ func ParseHCL(file string, src []byte) (*Model, []Finding) {
 			}
 			p.add(diagLine(d), RuleSyntax, d.Summary)
 		}
-		SortFindings(p.findings)
-		return m, p.findings
+		return m, p.result()
 	}
 	// ParseConfig always yields an *hclsyntax.Body.
 	body := parsed.Body.(*hclsyntax.Body)
@@ -51,8 +50,7 @@ func ParseHCL(file string, src []byte) (*Model, []Finding) {
 	for _, blk := range body.Blocks {
 		p.topBlock(blk)
 	}
-	SortFindings(p.findings)
-	return m, p.findings
+	return m, p.result()
 }
 
 func diagLine(d *hcl.Diagnostic) int {
@@ -63,13 +61,13 @@ func diagLine(d *hcl.Diagnostic) int {
 }
 
 type hclReader struct {
-	m        *Model
-	findings []Finding
+	m *Model
+	findingList
 	heredocs map[int]bool // where, in the parsed source, a heredoc begins: see parserInput
 }
 
 func (p *hclReader) add(line int, rule, msg string) {
-	p.findings = append(p.findings, Finding{File: p.m.File, Line: line, Rule: rule, Severity: SeverityError, Message: msg})
+	p.put(Finding{File: p.m.File, Line: line, Rule: rule, Severity: SeverityError, Message: msg})
 }
 
 // sortedAttrNames returns attribute names in source order.

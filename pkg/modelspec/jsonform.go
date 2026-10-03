@@ -24,16 +24,16 @@ var jsonGroups = []struct {
 }
 
 type jsonReader struct {
-	m        *Model
-	findings []Finding
+	m *Model
+	findingList
 }
 
 func (p *jsonReader) add(line int, rule, msg string) {
-	p.findings = append(p.findings, Finding{File: p.m.File, Line: line, Rule: rule, Severity: SeverityError, Message: msg})
+	p.put(Finding{File: p.m.File, Line: line, Rule: rule, Severity: SeverityError, Message: msg})
 }
 
 func (p *jsonReader) warn(line int, rule, msg string) {
-	p.findings = append(p.findings, Finding{File: p.m.File, Line: line, Rule: rule, Severity: SeverityWarning, Message: msg})
+	p.put(Finding{File: p.m.File, Line: line, Rule: rule, Severity: SeverityWarning, Message: msg})
 }
 
 // ParseJSON reads the JSON interchange form of a model (spec/json-format.md):
@@ -59,20 +59,19 @@ func ParseJSON(file string, src []byte) (*Model, []Finding) {
 		} else {
 			p.add(se.line, RuleSyntax, "not valid JSON: "+se.msg)
 		}
-		return m, p.findings
+		return m, p.result()
 	}
 	if root.Type != NodeObject {
 		m.Broken = true
 		p.add(root.Line, RuleShape, fmt.Sprintf("a ModelSpec JSON document must be an object, not %s", root.typeName()))
-		return m, p.findings
+		return m, p.result()
 	}
 	m.Root = root
 	for _, d := range root.Dups {
 		p.add(d.Line, RuleDuplicate, fmt.Sprintf("duplicate key %q in one object; names are unique, and JSON readers disagree on which of two equal keys wins", d.Key))
 	}
 	p.top(root)
-	SortFindings(p.findings)
-	return m, p.findings
+	return m, p.result()
 }
 
 func (p *jsonReader) top(root *Node) {
