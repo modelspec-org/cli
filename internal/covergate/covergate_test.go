@@ -29,10 +29,14 @@ func TestParse(t *testing.T) {
 		{"mode only", "mode: set\n", Result{0, 0}, ""},
 		{"empty", "", Result{0, 0}, ""},
 		{"wrong field count", "mode: set\na.go:1.1,2.2 3\n", Result{}, "line 2"},
-		{"bad statement count", "mode: set\na.go:1.1,2.2 x 1\n", Result{}, "bad statement count"},
-		{"negative statement count", "mode: set\na.go:1.1,2.2 -1 1\n", Result{}, "bad statement count"},
-		{"bad execution count", "mode: set\na.go:1.1,2.2 1 y\n", Result{}, "bad execution count"},
-		{"negative execution count", "mode: set\na.go:1.1,2.2 1 -2\n", Result{}, "bad execution count"},
+		{"bad statement count", "mode: set\na.go:1.1,2.2 x 1\n", Result{}, `bad statement count "x"`},
+		{"negative statement count", "mode: set\na.go:1.1,2.2 -1 1\n", Result{}, `bad statement count "-1"`},
+		{"bad execution count", "mode: set\na.go:1.1,2.2 1 y\n", Result{}, `bad execution count "y"`},
+		{"negative execution count", "mode: set\na.go:1.1,2.2 1 -2\n", Result{}, `bad execution count "-2"`},
+		{"a profile with no mode line counts its first line", "a.go:1.1,2.2 2 0\na.go:3.1,4.2 1 1\n", Result{1, 3}, ""},
+		{"a mode line anywhere but the first is not a block", "a.go:1.1,2.2 2 1\nmode: set\n", Result{}, "line 2"},
+		{"a long line under the limit", "mode: set\na.go:1.1,2.2" + strings.Repeat(" ", 1048000) + "2 1\n", Result{2, 2}, ""},
+		{"a line over the limit", "mode: set\na.go:1.1,2.2" + strings.Repeat(" ", 1048700) + "2 1\n", Result{}, "token too long"},
 		{"line too long", "mode: set\n" + strings.Repeat("x", 2<<20) + "\n", Result{}, "token too long"},
 	}
 	for _, tc := range tests {
@@ -130,6 +134,7 @@ func TestRun(t *testing.T) {
 		{"a package vanished from the profile", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\n"), 1, "coverage gate FAILED: package m/b has statements and is not in the cover profile", "", listing(pkg("m/a", true), pkg("m/b", true))},
 		{"a package contributes no statements", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\nm/b/y.go:1.1,2.2 0 1\n"), 1, "package m/b has statements and contributes none to the cover profile", "", listing(pkg("m/a", true), pkg("m/b", true))},
 		{"a package with no statements may be absent", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\n"), 0, "passed: 3 of 3", "", listing(pkg("m/a", true), pkg("m/consts", false))},
+		{"a TestMain in a package that is fully covered", []string{"cover.out"}, memOpen(twoPackages), 1, "coverage gate FAILED: m/a/x_test.go declares TestMain, which can hide a failing test", "", listing(Package{Path: "m/a", HasStatements: true, TestMains: []string{"m/a/x_test.go"}}, pkg("m/b", true))},
 		{"a vanished package and an uncovered statement are both reported", []string{"cover.out"}, memOpen("mode: set\nm/a/x.go:1.1,2.2 3 1\nm/a/x.go:3.1,4.2 1 0\n"), 1, "package m/b has statements and is not in the cover profile", "", listing(pkg("m/a", true), pkg("m/b", true))},
 		{"the package list cannot be read", []string{"cover.out"}, memOpen(twoPackages), 2, "", "no go.mod", func() ([]Package, error) { return nil, errors.New("no go.mod") }},
 	}
@@ -197,8 +202,8 @@ func TestParseByPackage(t *testing.T) {
 
 func TestMissing(t *testing.T) {
 	t.Parallel()
-	got := Missing([]Package{pkg("m/a", true), pkg("m/b", true), pkg("m/c", true), pkg("m/d", false)}, map[string]int{"m/a": 3, "m/c": 0, "m/d": 0, "m/other": 5})
-	if len(got) != 2 || !strings.Contains(got[0], "m/b has statements and is not in") || !strings.Contains(got[1], "m/c has statements and contributes none") {
+	got := Missing([]Package{pkg("m/a", true), pkg("m/b", true), pkg("m/c", true), pkg("m/d", false), {Path: "m/e", TestMains: []string{"m/e/e_test.go"}}}, map[string]int{"m/a": 3, "m/c": 0, "m/d": 0, "m/other": 5})
+	if len(got) != 3 || !strings.Contains(got[0], "m/b has statements and is not in") || !strings.Contains(got[1], "m/c has statements and contributes none") || !strings.Contains(got[2], "m/e/e_test.go declares TestMain") {
 		t.Fatalf("Missing = %v", got)
 	}
 }
@@ -238,6 +243,17 @@ func TestOSPackages(t *testing.T) {
 		"constrained/c.go":       "package constrained\n\nfunc F() { println() }\n",
 		"constrained/other_x.go": "//go:build never_ever\n\npackage constrained\n\nfunc H() { println() }\n",
 		"notes/readme.md":        "not go\n",
+		// A package whose first file has statements and whose last has none, and the
+		// package inside a nested module, which is the other module's.
+		"mixed/a.go":         "package mixed\n\nfunc F() int {\n\treturn 1\n}\n",
+		"mixed/z.go":         "package mixed\n\nconst X = 1\n",
+		"nested/sub/deep.go": "package deep\n\nfunc F() { println() }\n",
+		// A TestMain, in either form, in a test of the package or an external one.
+		"tm/a.go":      "package tm\n\nfunc F() int {\n\treturn 1\n}\n",
+		"tm/a_test.go": "package tm\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) {\n\tm.Run()\n\tos.Exit(0)\n}\n",
+		"tm/b_test.go": "package tm_test\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) { os.Exit(m.Run()) }\n",
+		"tm/c_test.go": "package tm\n\nimport \"testing\"\n\ntype T struct{}\n\nfunc (T) TestMain(m *testing.M) {}\n\nfunc TestOther(t *testing.T) {}\n\nvar TestMainValue = 1\n",
+		"tm/main_x.go": "package tm\n\nfunc TestMain() {}\n",
 	})
 	got, err := OSPackages(root)()
 	if err != nil {
@@ -247,9 +263,20 @@ func TestOSPackages(t *testing.T) {
 	for _, p := range got {
 		names = append(names, fmt.Sprintf("%s:%v", p.Path, p.HasStatements))
 	}
-	want := "example.com/m:true example.com/m/constrained:true example.com/m/consts:false example.com/m/deep/er:true example.com/m/empty:false example.com/m/onlytests:false"
+	want := "example.com/m:true example.com/m/constrained:true example.com/m/consts:false example.com/m/deep/er:true example.com/m/empty:false example.com/m/mixed:true example.com/m/onlytests:false example.com/m/tm:true"
 	if strings.Join(names, " ") != want {
 		t.Fatalf("packages = %v\nwant %s", names, want)
+	}
+	// The files that declare a TestMain are named: a method, a variable and a
+	// function of a non-test file with that name are not one.
+	for _, p := range got {
+		wantMains := ""
+		if p.Path == "example.com/m/tm" {
+			wantMains = "example.com/m/tm/a_test.go example.com/m/tm/b_test.go"
+		}
+		if gotMains := strings.Join(p.TestMains, " "); gotMains != wantMains {
+			t.Errorf("%s declares TestMain in %q, want %q", p.Path, gotMains, wantMains)
+		}
 	}
 }
 
@@ -264,6 +291,8 @@ func TestOSPackagesErrors(t *testing.T) {
 		{"no module line", map[string]string{"go.mod": "go 1.27\n"}, "no module line"},
 		{"two packages in one directory", map[string]string{"go.mod": "module m\n", "a.go": "package a\n", "b.go": "package b\n"}, "found packages"},
 		{"a Go file that does not parse", map[string]string{"go.mod": "module m\n", "a.go": "package a\n\nfunc {\n"}, "a.go"},
+		{"a test file that does not parse", map[string]string{"go.mod": "module m\n", "a.go": "package a\n", "a_test.go": "package a\n\nfunc {\n"}, "a_test.go"},
+		{"an external test file that does not parse", map[string]string{"go.mod": "module m\n", "a.go": "package a\n", "a_test.go": "package a_test\n\nfunc {\n"}, "a_test.go"},
 	} {
 		if _, err := OSPackages(write(t, tc.files))(); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: error = %v, want containing %q", tc.name, err, tc.want)
