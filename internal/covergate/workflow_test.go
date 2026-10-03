@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -99,16 +100,37 @@ func branches(trigger any) []string {
 	return out
 }
 
-// triggerProblems checks that a workflow runs on pushes to main (and, for CI, on
-// pull requests).
-func triggerProblems(what string, doc obj, pullRequest bool) []string {
+// keys lists the keys of a mapping, sorted.
+func keys(v any) []string {
+	var out []string
+	for k := range asObj(v) {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// triggerProblems checks the triggers of a workflow. Both must run on pushes to
+// main, with nothing but the branch list on the push trigger (a paths filter
+// would let a main commit go without a CI run, and a tags list would run the
+// workflow on a tag). The release workflow has no other trigger at all: a
+// hand-pushed tag or a manual dispatch on a tag would release a commit that has
+// no CI run, which the shared release workflow's guard lets through after 180
+// seconds. CI needs pull_request, and may have others.
+func triggerProblems(what string, doc obj, isCI bool) []string {
 	on := asObj(doc["on"])
 	var problems []string
 	if got := branches(on["push"]); len(got) != 1 || got[0] != "main" {
 		problems = append(problems, fmt.Sprintf("%s must run on push to main only, has branches %v", what, got))
 	}
-	if pullRequest && !has(on, "pull_request") {
+	if got := keys(on["push"]); strings.Join(got, ",") != "branches" {
+		problems = append(problems, fmt.Sprintf("the push trigger of %s may carry only a branch list, it has %v (a paths or tags filter lets a commit go without a CI run)", what, got))
+	}
+	if isCI && !has(on, "pull_request") {
 		problems = append(problems, what+" must run on pull requests")
+	}
+	if !isCI && strings.Join(keys(on), ",") != "push" {
+		problems = append(problems, fmt.Sprintf("%s must have no trigger but a push to main (no tags, no workflow_dispatch: a release must always have a CI run to wait for), it has %v", what, keys(on)))
 	}
 	return problems
 }
@@ -344,6 +366,27 @@ func TestEditsThatWeakenTheGateAreCaught(t *testing.T) {
 		}, "must call the shared release workflow"},
 		{"release on every branch", func(t *testing.T) (string, string) {
 			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n      - dev\n")
+		}, "must run on push to main only"},
+		{"a manual dispatch trigger on the release", func(t *testing.T) (string, string) {
+			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n  workflow_dispatch:\n")
+		}, "must have no trigger but a push to main"},
+		{"a tag trigger on the release", func(t *testing.T) (string, string) {
+			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n    tags:\n      - 'v*'\n")
+		}, "may carry only a branch list"},
+		{"a pull request trigger on the release", func(t *testing.T) (string, string) {
+			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n  pull_request:\n")
+		}, "must have no trigger but a push to main"},
+		{"a paths filter on the release push", func(t *testing.T) (string, string) {
+			return ci, edit(t, release, "    branches:\n      - main\n", "    branches:\n      - main\n    paths:\n      - 'pkg/**'\n")
+		}, "may carry only a branch list"},
+		{"a paths filter on the CI push", func(t *testing.T) (string, string) {
+			return edit(t, ci, "    branches: [main]\n", "    branches: [main]\n    paths: ['pkg/**']\n"), release
+		}, "may carry only a branch list"},
+		{"a tags trigger on CI push", func(t *testing.T) (string, string) {
+			return edit(t, ci, "    branches: [main]\n", "    branches: [main]\n    tags: ['v*']\n"), release
+		}, "may carry only a branch list"},
+		{"CI without a push trigger", func(t *testing.T) (string, string) {
+			return edit(t, ci, "  push:\n    branches: [main]\n", ""), release
 		}, "must run on push to main only"},
 		{"release job missing", func(t *testing.T) (string, string) {
 			return ci, edit(t, release, "\n  release:\n", "\n  publish:\n")

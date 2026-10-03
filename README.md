@@ -262,6 +262,17 @@ node scripts/regen-golden.mjs specscore
 DIRECTORY_DIR=/path/to/clone-of-openvaultdb-directory node scripts/regen-golden.mjs directory
 ```
 
+## Releases
+
+Every release is made by a push to `main`, and a release waits for the coverage gate. The release
+workflow (`release.yml`) calls the shared `strongo/cicd` release workflow, which tags the commit and
+publishes the archives and the checksums file. It has no other trigger: no tag trigger and no manual
+dispatch, so a hand-pushed tag releases nothing. The shared workflow's guard waits for the `CI`
+workflow's run for the commit being released and refuses to tag or publish unless it succeeded; it
+continues without waiting only when it finds no run for the commit after 180 seconds, and `ci.yml`
+runs on every push to `main` with no path filter, so a push to `main` always has a run to wait for.
+`internal/covergate`'s tests pin the triggers of both workflows, as well as the gate itself.
+
 ## Development
 
 ```sh

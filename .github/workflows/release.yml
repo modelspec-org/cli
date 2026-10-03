@@ -20,11 +20,16 @@ name: Release
 # modelspec is pre-1.0: allow_major_version_bump stays false, so a `feat!:` is
 # capped to a minor bump. Cut v1.0.0 deliberately, by changing that input.
 
+# The only trigger is a push to main: no tag trigger and no manual dispatch. The
+# shared workflow's guard waits for the CI run of the commit being released, but
+# it continues after 180 seconds when it finds none, which is what a hand-pushed
+# tag, or a dispatch on a tag, would give it. ci.yml runs on every push to main
+# with no path filter, so a release made by a push to main always has its CI run
+# to wait for. internal/covergate's tests pin both facts.
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 # The job below sets the permissions it needs; nothing else gets any.
 permissions: {}

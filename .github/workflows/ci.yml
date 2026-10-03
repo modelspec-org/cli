@@ -10,6 +10,8 @@ name: CI
 # fail without failing the job, stop running exactly these two commands one after
 # the other, or if anything touches the cover profile in between.
 
+# The push trigger has no path filter on purpose: every push to main gets a run
+# of this workflow, which is what the release of that commit waits for.
 on:
   push:
     branches: [main]
