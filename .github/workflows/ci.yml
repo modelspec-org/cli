@@ -1,0 +1,59 @@
+name: CI
+
+# One job for the gates that need only Go: formatting, vet, module tidiness,
+# the tests with the race detector, and the exact coverage gate. Packaging checks
+# live in the second job (added with .goreleaser.yml).
+#
+# The coverage gate is `go run ./cmd/covergate cover.out`. It has no threshold to
+# set: it fails unless every statement is covered. internal/covergate's tests
+# fail if this file ever changes how the gate is run.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test, vet, race, exact coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          set -eu
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "::error::gofmt found unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go mod tidy -diff
+        run: go mod tidy -diff
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (race, coverage profile)
+        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./...
+
+      - name: Coverage gate (every statement)
+        run: go run ./cmd/covergate cover.out
