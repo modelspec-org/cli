@@ -55,11 +55,14 @@ modelspec lint --profile publish --format json models/ | jq .
 
 Each path is a file or a directory. A directory is searched recursively for
 `*.modelspec.hcl` and `*.modelspec.json` (and, inside a SpecScore `models/` directory,
-for any `*.hcl`). Hidden directories and `node_modules` are skipped. Symbolic links to
-files are followed; symbolic links to directories are not. A file reached by two names
-(a relative and an absolute path, a symbolic link) is read once. A dangling symbolic link
-found in a search is a warning and the run goes on; named on the command line it is an
-error.
+for any `*.hcl`). Hidden directories and `node_modules` are skipped. **A search follows no
+symbolic link**, to a directory or to a file (a repository can hold a link to `/dev/zero`, or to a
+file outside it, and `lint .` on someone else's branch must not read it): a link that would have
+been a model file is a warning that names it, and so is a model file that is not a regular file (a
+named pipe, a device); the run goes on. A file named on the command line may be a symbolic link to a
+regular file and is read through; one that is not a regular file (a device, a pipe, a directory, or
+a link to one) is an error, exit 2, whose message says what it is. A file reached by two names (a
+relative and an absolute path, a symbolic link named on the command line) is read once.
 
 Text output, sorted by file, line and rule, then a summary:
 
@@ -240,7 +243,7 @@ Brackets, quotes and operators inside strings, heredocs and comments are text, s
 | size of one source file, of any file a command reads (the JSON operand of `export --check` too) | 1 MiB (`MaxInputBytes`) | refused before it is read (the size is from the file's metadata) and, whatever the metadata says, at most one byte over the limit is read, so a file that grows or never ends is bounded too; only a regular file is read (a device, a pipe or a directory is an error, exit 2, and a symbolic link is followed only when named on the command line); not valid UTF-8 is refused before it is parsed. `export` refuses to write a JSON twin over the limit (exit 1, nothing written, and the message says why), since `lint` would refuse it. Reason: the lexer holds every token at once, about 420 to 470 MiB at the peak for each MB of one-byte tokens, so 1 MiB keeps one file under 500 MiB; Chinook's model is under 8 KB and the largest corpus file is 30 KB, and a module is a set of files, each under the limit |
 | nesting of braces, brackets, quoted strings and heredocs (JSON: arrays and objects) | 64 levels (`MaxDepth`) | `limit` finding; counted from tokens, so brackets in strings and comments do not count |
 | lines of one heredoc | 1,000 (`MaxHeredocLines`) | `limit` finding naming the number of lines; `$` and `%` in a query do not change the count |
-| one number literal (JSON the same) | 40 characters, not counting a sign (`MaxNumberLength`), and an exponent of at most 100 either way (`MaxNumberExponent`) | `limit` finding that says how many characters or which exponent, and the limit. Stricter than the standard, which sets none: see "Numbers and names" |
+| one number literal (JSON the same) | 40 characters, not counting a sign (`MaxNumberLength`), and, written as digits (no trailing zeros) times a power of ten, an exponent of at most 100 either way (`MaxNumberExponent`) | `limit` finding that says how many characters or which exponent, and the limit. Stricter than the standard, which sets none: see "Numbers and names" |
 | one name: a block label, an identifier, the value of `type`, `entity`, `component`, `enum` or `kind`, an item of `key` or `use` (JSON: every object key, and the same strings) | 255 bytes as written (`MaxNameLength`) | `limit` finding that says how many bytes and the limit. Stricter than the standard, which states no length |
 | one finding's message | 1,024 bytes (`MaxMessageBytes`); a piece of the user's text in it, 255 (`MaxEchoBytes`) | cut, with a marker that says how long it was |
 | syntax errors, non-literal tokens, or numbers and names over their limits shown for one file | 50 (`MaxSyntaxFindings`) | the rest are not listed; one finding says so |
@@ -271,7 +274,7 @@ their escapes, a backslash before every kind of character, carriage returns and 
 themselves: whatever the library refuses the CLI refuses, and whatever the library reads the CLI reads to the
 same value (374 were read by both, with the same value, and 426 were refused by both); there is no
 known input on which they differ. Over the corpus and 5.8 million valid files of an earlier review the values
-were identical; that is a measurement, not a proof. A string of 2 million `$a` (4 MiB) takes about 1.3 seconds.
+were identical; that is a measurement, not a proof. A string of 520,000 `$a` (1 MiB) takes 0.3 seconds.
 
 **The checker is linear too.** A reference used to be found by scanning every concept of the module, and an
 entity's properties rebuilt for every `bind` that named it: valid models of 4 MB took minutes (see the table
@@ -288,57 +291,86 @@ grows with the exponent: `values = [1e10000000]`, 37 bytes, took 12 seconds and 
 4.19 million digits took 12 seconds; two integers that differ after the 154th digit were read as equal; a name of
 2 million characters was repeated in every finding that mentioned it. So `modelspec` bounds the token and
 not the behaviour after it, in `precheck`, from the lexer's tokens, before the parser runs (and in the JSON reader
-as it reads): a number of at most 40 characters and an exponent of at most 100 either way, so every number that is
-accepted is read exactly (40 digits need 133 bits) and two accepted numbers are equal exactly when they are the
-same value, however they are spelled; and a name of at most 255 bytes. The standard sets neither limit, and a
+as it reads): a number of at most 40 characters and, written as digits (without trailing zeros) times a power of
+ten, an exponent of at most 100 either way, so every number that is accepted is read exactly (40 digits need 133
+bits); and a name of at most 255 bytes. The standard sets neither limit, and a
 model that exceeds one is valid by the standard and refused here, with a `limit` finding that says what was
 counted and the limit. Where databases limit an identifier it is between 63 and 128 bytes, so 255 leaves room; no number in a real model comes near
 40 characters or 1e100. The JSON form has the same two limits (every object key and the same name strings are
 names), so a model and its twin are refused alike. Text that is not a name (a `pattern`, a `format`, a `query`, a
 `source`, an enum value) is limited only by the size of the file; whatever of it a message repeats is cut.
 
-**Time and memory, measured.** `modelspec lint` of the inputs below, every one within the 4 MiB limit, on a
-laptop shared with other work (load average 9 to 13, so the figures are upper bounds), at this head. Before and
-after, in seconds (before: measured at the heads where the input was first slow; peak resident memory of the
-run after):
+**One form for a number.** Writing a number with a fraction or a negative exponent used to cost 20 to 35
+microseconds (the library prints a 512-bit value as the shortest decimal), so a megabyte of `1e-99,` took 5.7
+seconds; and a number had no single form (`-0` was 0 in HCL and stayed `-0` in JSON, JSON kept `1e2` and `1.0` as
+written, and `1e41` to `1e100` were exported as integers of 42 to 101 digits that `lint` then refused). One
+function now turns the text of an accepted number into its canonical form by string arithmetic, with no floating
+point, and both readers, the comparison of equal values (duplicate enum values), the comparison of a JSON copy
+with its HCL and `export` all use it. A number is read as digits times a power of ten; the canonical form is
+`0` for zero (no sign), the plain decimal when it has at most 40 characters, and otherwise the digits, an `e` and
+the exponent: `1`, `1.0`, `1e0` and `10e-1` are `1`; `-0` is `0`; `1e+100` is `1e100`; `1e40` is `1e40` and
+`1e39` is a 1 and 39 zeros; `0.5` is `0.5` and `15e-50` is `15e-50`. `export` writes that form, so a model
+exported and read back is the same model and is within the limits it was read under. JSON numbers are the same:
+`1e2` and `1.0` are the integers 100 and 1 there too. The one change this brings to what `export` wrote is for a
+number of more than 40 characters as an integer or decimal, which it used to write in full and now writes with an
+exponent; none in the corpus, the standard's examples or Chinook changes a byte.
 
-| Input (all within the limit) | Before | After | Peak memory |
+**Time and memory, measured.** `modelspec lint` of the inputs below, every one within the 1 MiB limit, at the head of
+this change, on a laptop shared with other work (load average 2.8 to 4.2, so the figures are upper bounds; the peak
+is the process's resident memory). The first table is the shapes that were once slow, the second what the limits and
+the reader refuse:
+
+| Input (all within the limit) | Time | Peak memory |
+| --- | --- | --- |
+| `pattern = "` + `$a` x 200,000 + `"` (400 KB) | 0.11 s | 150 MiB |
+| `$${` x 349,000 (1 MiB) | 0.17 s | 160 MiB |
+| `$a` x 520,000 (1 MiB) | 0.29 s | 380 MiB |
+| one `pattern` of 1,040,000 letters | 0.07 s | 23 MiB |
+| one entity of 10,000 properties and a collection of 14,000 fields bound to them (1.0 MB, HCL) | 0.13 s | 168 MiB |
+| the same in JSON, 15,000 properties and 20,000 binds (1.0 MB) | 0.02 s | 44 MiB |
+| 15,000 components and a `use` list of 70,000 names (1.0 MB) | 0.16 s | 176 MiB |
+| an enum of 200,000 repeats of one value (1.0 MB) | 0.25 s (1,001 findings, 91 KB) | 326 MiB |
+| 520 heredocs of 999 lines (1.0 MB) | 0.22 s | 216 MiB |
+| a label of 1 million `$` (1.0 MB), refused by the name limit | 0.10 s | 379 MiB |
+| a name of 200,000 bytes and 200 properties of unknown type (208 KB), refused | 0.00 s, 134 bytes | 14 MiB |
+
+A list of numbers, `enum "E" { values = [ ... ] }`, by size (seconds and peak memory; before is the previous head,
+which printed each number as the shortest decimal of its 512 bits, after is the canonical form):
+
+| The list holds | 250 KB | 500 KB | 1 MB |
 | --- | --- | --- | --- |
-| `pattern = "` + `$a` x 200,000 + `"` (400 KB) | 25 | 0.12 | 136 MiB |
-| the same with `$${` x 200,000 (600 KB) | 7.9 | 0.11 | 91 MiB |
-| `$a` x 524,000 (1 MiB) | 162 | 0.31 | 416 MiB |
-| `$${` x 1,390,000 (4 MiB) | 412 | 0.73 | 568 MiB |
-| `$a` x 2,090,000 (4 MiB) | not finished in 450 | 1.25 | 1,407 MiB |
-| one entity of 40,000 properties and a collection of 55,000 fields bound to them (4.1 MB, HCL) | 83 | 0.54 | 611 MiB |
-| the same in JSON, 60,000 properties and 80,000 binds (4.1 MB) | 206 | 0.14 | 120 MiB |
-| 60,000 components and a `use` list of 280,000 names (4.1 MB) | 32 | 0.70 | 613 MiB |
-| an enum of 225,000 repeats of one value (1.1 MB) | | 0.32 (1,001 findings, 91 KB) | 397 MiB |
-| 2,080 heredocs of 999 lines (2.1 MB) | | 0.96 | 902 MiB |
-| `values = [1e10000000]` (37 bytes) | 12.2, lints clean | refused, 0.00 | 13 MiB |
-| `max_len = 1e4000000` | 2.8, lints clean | refused, 0.00 | 13 MiB |
-| an integer of 4,190,000 digits (4.19 MB) | 12.5, lints clean | refused, 0.12 | 22 MiB |
-| a name of 200,000 bytes and 200 properties of unknown type (208 KB) | 0.20, 40 MB of findings, 96 MiB | refused, 0.01, 131 bytes | 14 MiB |
-| a name of 2,000,000 bytes and 1,000 properties of unknown type (2 MB) | 3.9 GiB at its peak and 1,907 MiB of findings (a reviewer's figures; not re-run, too large to run here) | refused, 0.07, 131 bytes | 22 MiB |
-| a label of 4 million `$` (4 MB) | 1.5 | refused, 0.44 | 1,557 MiB |
+| `1e-99,` before | 1.43 s, 59 MiB | 2.86 s, 102 MiB | 5.94 s, 198 MiB |
+| `1e-99,` after | 0.06 s, 55 MiB | 0.13 s, 96 MiB | 0.28 s, 194 MiB |
+| `0.1,` before | 1.04 s, 84 MiB | 2.06 s, 135 MiB | 4.32 s, 241 MiB |
+| `0.1,` after | 0.06 s, 75 MiB | 0.12 s, 138 MiB | 0.24 s, 230 MiB |
+| `9e99,` before | 0.34 s, 67 MiB | 0.68 s, 118 MiB | 1.35 s, 232 MiB |
+| `9e99,` after | 0.07 s, 65 MiB | 0.14 s, 112 MiB | 0.30 s, 215 MiB |
+| `1e100,` before | 0.29 s, 60 MiB | 0.55 s, 101 MiB | 1.21 s, 198 MiB |
+| `1e100,` after | 0.06 s, 56 MiB | 0.13 s, 96 MiB | 0.27 s, 185 MiB |
 
-The slowest is 1.25 seconds (`$a` repeated to 4 MiB), then 1.0 (the heredocs). The last row shows what is not
-bounded: the lexer holds every token of a file at once, and 4 million tokens take about 1.5 GiB before the
-name limit is applied; the 4 MiB file limit is what bounds that. These are 16 inputs, not every input, and no
-time or memory is proved: the HCL library could have other paths that are slower than linear, and a new version
-of it needs the fuzz run below and these inputs again. A directory of such files takes the sum.
+The slowest input measured is 0.30 seconds, and the largest peak 380 MiB: the lexer holds every token of a file at
+once, so memory is linear in the number of tokens, about 420 to 470 MiB for each MB of one-byte tokens (the limit
+of 1 MiB is what bounds that, and what bounded it at 1.7 to 1.9 GiB when it was 4 MiB). (`values` takes integers, so a list of fractions is a finding for each item, and each number is still read and
+written, which is the cost measured.) These are measurements of the inputs
+listed, not every input, and no time or memory is proved: the HCL library could have other paths that are slower
+than linear, and a new version of it needs the fuzz run below and these inputs again. A directory of such files
+takes the sum.
 
 **What is and is not proved.** The checks are a test of the tokens, so nothing recursive in the HCL parser
 is reachable except the nesting of braces and brackets, which is bounded. There is a test that runs
-`ParseHCL` with the process stack limited to 4 MiB on 5,000 repeats of every construct that made the parser
+`ParseHCL` with the process stack limited to 4 MiB on 3,000 repeats of every construct that made the parser
 recurse (it fails by overflowing the stack if the pre-parse refusal is removed), and one input for each
 refused token. A new version of the `hcl` library, which could add tokens or recursion, needs
 `scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
 crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
-lints clean, and one input costs a bounded amount of work: at most 4 MiB plus 2,000 bytes allocated for each
-byte of input, counted by the allocator and not by time, and under ten seconds; an input over the budget fails
-the run like a crash. `scripts/fuzz.sh` reads the fuzzer's own progress lines, prints the executions and the
-rate in the first and in the last fifth of each run, and fails when no execution happened in the last fifth or the
-rate there fell below a tenth of the first. The fuzz targets are skipped in `go test` and are not in the coverage
+lints clean, and one input costs a bounded amount of work: at most 4 MiB plus 1,000 bytes allocated for each
+byte of input, counted by the allocator and not by time, and a watchdog ends the process, which the fuzzer reports
+as a failing input, if one input is still running after ten seconds: while it runs, not after it returns). A
+whole run that stalls is judged by `scripts/fuzz.sh` through `cmd/fuzzjudge` (`internal/fuzzjudge`, with table tests
+over synthetic logs): it fails when nothing ran for 30 seconds anywhere in the run, including its end, or when the
+rate of the second half fell below 30% of the first. The fuzzer's own pauses (12 to 18 seconds with no execution)
+and a rate that halves from one half to the other (seen in real runs) pass. A stall of one input in one worker of
+several leaves most of the rate, so it is the watchdog that catches it, not the judge. The fuzz targets are skipped in `go test` and are not in the coverage
 gate.
 
 ## Export
@@ -363,14 +395,19 @@ recordset columns as an ordered array with `name` first). The output of `export`
 datatug/chinookdb's `model/chinook.modelspec.hcl` is byte-identical to its committed
 `model/chinook.modelspec.json`.
 
+Numbers are written in their canonical form (see "One form for a number"): `1.0` and `1e0` are `1`, `-0` is `0`, and
+a number that would need more than 40 characters as a plain decimal is written as digits and an exponent (`1e41`),
+which `lint` reads back; so are the numbers of a JSON file when it is read, and `--check` compares them in that form.
+
 `--check` compares documents, not bytes: whitespace does not count, but **the order of keys in
 objects and of items in arrays does** (the Directory compares a model with its registered copy
 the same way). The module identity is read from the committed file unless `--module-*` flags are
 given. `--out` cannot be combined with `--check`.
 
-Every file a command reads has the 4 MiB limit, the committed JSON that `--check` reads too (one over it is
-refused without being read, exit 1). `export` refuses to write a JSON twin over the limit, since `lint` would refuse
-it: valid HCL of 3.6 to 4.1 MB can export to 4.9 to 6.9 MB (1.3 to 1.7 times the size). It exits 1, writes nothing,
+Every file a command reads has the 1 MiB limit, the committed JSON that `--check` reads too (one over it is
+refused without being read, exit 1), and every one is read through one reader that refuses what is not a regular
+file (exit 2) and reads at most one byte over the limit. `export` refuses to write a JSON twin over the limit, since `lint` would refuse
+it: valid HCL of 0.7 to 1.0 MB can export to 1.2 to 1.7 MB (1.3 to 1.7 times the size). It exits 1, writes nothing,
 and says why.
 
 ### Open points
