@@ -59,14 +59,18 @@ for any `*.hcl`). Hidden directories and `node_modules` are skipped. **A search 
 symbolic link**, to a directory or to a file (a repository can hold a link to `/dev/zero`, or to a
 file outside it, and `lint .` on someone else's branch must not read it): a link that would have
 been a model file is an **error** (rule `skipped-file`, exit 1, under both profiles) that names it,
-and so is a model file that is not a regular file (a named pipe, a device). It is an error, not a
+and so is a model file that is not a regular file (a named pipe, a device), and so is a SpecScore
+models directory (`…/modules/<id>/models`) that is a link to a directory, which is named in the same
+way: the models in it were not searched, so the module `<id>` is not checked (a link to a directory
+anywhere else is passed over, as it has no model files that a search would have looked for). It is an error, not a
 warning, because the run did not check what it was asked to: a warning would let an invalid model
 reached through a link pass, and let `export` write half a module. The module the file belongs to is
 not checked further, so what the missing file would have answered is not reported as an unresolved
 reference; the other modules of the run are checked, and `export` and `export --check` refuse the
-module (exit 1, the finding on standard error). Replace the link with the file, or name it on the
-command line. A file named on the command line may be a symbolic link to a
-regular file and is read through; one that is not a regular file (a device, a pipe, a directory, or
+module (exit 1, the finding on standard error). Replace the link with the file (or the directory), or name it on the
+command line, before or after the directory that holds it, or with a second `--module` for the same
+module: a file that is named is read, whatever else in the run would have skipped it. A file named on
+the command line may be a symbolic link to a regular file and is read through; one that is not a regular file (a device, a pipe, a directory, or
 a link to one) is an error, exit 2, whose message says what it is. A file reached by two names (a
 relative and an absolute path, a symbolic link named on the command line) is read once.
 
@@ -136,7 +140,9 @@ files, and a reference resolves against the whole module.
 2. **SpecScore layout.** Every `*.hcl` file directly inside `…/modules/<id>/models/` belongs to
    module `<id>`, whatever the files are called. The layout is detected from the path of each
    file as given or found (symbolic links are not resolved first), with no need for the
-   directory to be searched: a single file named on the command line is enough.
+   directory to be searched: a single file named on the command line is enough. A search does
+   not enter a `models` directory that is a symbolic link (it is a `skipped-file` error, see
+   Lint); named on the command line, the link is entered and its files belong to module `<id>`.
 3. **Standalone.** `<name>.modelspec.hcl` is module `<name>` by itself. A JSON file is module
    `module.name`, or its file name without `.modelspec.json` when it has none.
 
@@ -176,7 +182,7 @@ Both forms, on the same typed model:
 | `name-form` | a concept name contains no dot (decision 0014), and no concept, property or field name is empty or blank (nothing could refer to it). Nothing else is required of a name: `Order-Item` is valid |
 | `name-case` | warning: two names of one scope that differ only by case (`User` and `user`; a collision on a case-insensitive store). Not an error, because the standard keeps names case-sensitive |
 | `stale-twin` | warning: a JSON twin is not what its HCL exports to |
-| `skipped-file` | error, both profiles: a search found a model-named file that is not a regular file (a symbolic link, a named pipe, a device) and did not read it. The finding names the path and what it is, and the way out: replace the link with the file, or name it on the command line. The module the file belongs to is not checked at all in that run (no reference, twin or other finding is reported from a partial load), and `export` and `export --check` refuse it; other modules in the run are checked as usual |
+| `skipped-file` | error, both profiles: a search found a model-named file that is not a regular file (a symbolic link, a named pipe, a device), or a SpecScore `models` directory that is a symbolic link to a directory, and did not read it. The finding names the path and what it is, and the way out: replace the link with the file or the directory, or name it on the command line. The module the file belongs to is not checked at all in that run (no reference, twin or other finding is reported from a partial load, and none from another module into it, whether the module is a layout module, a `--module` assignment or a standalone file that is itself the link), and `export` and `export --check` refuse it; other modules in the run are checked as usual |
 | `enum-values` | an enum has at least one value and no repeats, also for an inline `enum = [...]`. Values are strings or integers (decision 0013: an enum constrains a string or an int property) |
 | `unknown-type` | `type` is one of the ModelSpec types |
 | `attribute` | only supported attributes, with values of the right type |
@@ -223,6 +229,10 @@ and "do not use dynamic HCL expressions or functions". A reference to another mo
   commas, newlines and comments between items; a bare word (a reference) is read and refused with the
   message that it must be a literal.
 
+A heredoc keeps its final line break, so a one-line heredoc (`type = <<EOT`, `string`, `EOT`) is the value
+`"string\n"` and never a valid name. The finding about a name (a type, a reference, a key, a `kind`) in an HCL file
+that ends with a line break says so and says to write a quoted string.
+
 **What is refused before parsing.** The HCL parser is recursive, and a stack overflow in Go is fatal, so
 the source is lexed first (the lexer does not recurse) and refused, without being parsed, if it holds any
 token a literal cannot contain. That closes the whole class instead of the recursive constructs one by one.
@@ -254,7 +264,7 @@ Brackets, quotes and operators inside strings, heredocs and comments are text, s
 | one name: a block label, an identifier, the value of `type`, `entity`, `component`, `enum` or `kind`, an item of `key` or `use` (JSON: every object key, and the same strings) | 255 bytes as written (`MaxNameLength`) | `limit` finding that says how many bytes and the limit. Stricter than the standard, which states no length |
 | one finding's message | 1,024 bytes (`MaxMessageBytes`); a piece of the user's text in it, 255 (`MaxEchoBytes`) | cut, with a marker that says how long it was |
 | syntax errors, non-literal tokens, or numbers and names over their limits shown for one file | 50 (`MaxSyntaxFindings`) | the rest are not listed; one finding says so |
-| findings kept by one reader, one check and one run | 1,000 (`MaxFindings`) | the rest are counted, not kept: one more finding says how many were left out, with how many were errors and how many warnings. Errors are kept in preference to warnings (an error takes the place of a listed warning), so an error is dropped only when more than 1,000 errors were found, and then the finding is an error, so the exit code is what it would be with no limit. A `skipped-file` error (a module that was not checked) is kept ahead of every other finding, and if more than 1,000 were found the summary says how many of those not listed are skipped files. The output stays sorted. The summary line's counts (`N errors`) are of the findings listed, the last finding's text has the rest. The limit is in the library, so memory is bounded too |
+| findings kept by one reader, one check and one run | 1,000 (`MaxFindings`) | the rest are counted, not kept: one more finding says how many were left out, with how many were errors and how many warnings. Errors are kept in preference to warnings (an error takes the place of a listed warning), so an error is dropped only when more than 1,000 errors were found, and then the finding is an error, so the exit code is what it would be with no limit. A `skipped-file` error (a module that was not checked) is kept ahead of every other finding, and if more than 1,000 were found the summary says how many of those not listed are skipped files. The line that counts what one reader or check left out stands for those findings: when a run's list drops it, or a `skipped-file` error takes its place, the summary counts all of them and not one. The output stays sorted. The summary line's counts (`N errors`) are of the findings listed, the last finding's text has the rest. The limit is in the library, so memory is bounded too |
 
 **Output is bounded.** One run lists at most 1,001 findings (the 1,000 kept and the one that counts the
 rest), each at most 1,024 bytes of message, plus its path, line number, severity and rule (at most 64 bytes
@@ -378,15 +388,19 @@ recurse (it fails by overflowing the stack if the pre-parse refusal is removed),
 refused token. A new version of the `hcl` library, which could add tokens or recursion, needs
 `scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
 crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
-lints clean, and one input costs a bounded amount of work: at most 4 MiB plus 1,000 bytes allocated for each
+lints clean, and one input costs a bounded amount of work (the reading, the checks, the export, the read of the
+export and the comparison all count): at most 4 MiB plus 1,000 bytes allocated for each
 byte of input, counted by the allocator and not by time, and a watchdog ends the process, which the fuzzer reports
 as a failing input, if one input is still running after ten seconds: while it runs, not after it returns). `scripts/fuzz.sh`
 runs the fuzzer with `-fuzzminimizetime 5s`: by default it minimises a new input for up to a minute, with no execution
 reported (30 to 42 seconds of nothing, with two workers), which no judge can tell from a stall. A
 whole run that stalls is judged by `scripts/fuzz.sh` through `cmd/fuzzjudge` (`internal/fuzzjudge`, with table tests
-over synthetic logs): it fails when nothing ran for 30 seconds anywhere in the run, including its end, or when the
-rate of the second half fell below 30% of the first. The fuzzer's own pauses (12 to 18 seconds with no execution)
-and a rate that halves from one half to the other (seen in real runs) pass. A stall of one input in one worker of
+over synthetic logs): it fails when nothing ran for 30 seconds anywhere in the run, including its end, when the
+rate of the second half fell below 30% of the first, or when the share of the second half that was idle (stretches
+between progress lines with no execution) is more than 50 points above the first half's (a run that pauses for 24
+seconds at a time and runs at full rate between the pauses has no stall and a healthy median rate, and is mostly
+idle). The fuzzer's own pauses (12 to 18 seconds with no execution), the same pauses in both halves, and a rate that
+halves from one half to the other (seen in real runs) pass. A stall of one input in one worker of
 several leaves most of the rate, so it is the watchdog that catches it, not the judge. The fuzz targets are skipped in `go test` and are not in the coverage
 gate.
 
@@ -404,7 +418,9 @@ modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.jso
 whole), and refuses a file with errors (exit 1, the findings for that file on standard error);
 `--check` refuses an invalid model too, so a check cannot pass on one. It exports any `.hcl` file of a
 layout module, whatever it is called, and refuses a JSON file given as the source. A file that refers to other modules needs them supplied with
-`--module <name>=<path>` (they are used to resolve references and are not exported).
+`--module <name>=<path>` (they are used to resolve references and are not exported). When such a module has a file that was
+found and not read (`skipped-file`), references into it were not checked: the export is the model's own and is written as
+before (exit 0), and standard error has that module's `skipped-file` finding and a note that says so.
 
 The JSON follows `spec/json-format.md`: `modelspec`, `module`, then components, enums,
 entities, collections, recordsets (concepts in source order, attributes in source order,
@@ -426,6 +442,14 @@ regular file is refused (exit 2, nothing written, and the message says what it i
 regular file, which would send the write elsewhere), a named pipe (which would wait for a reader), a directory, a
 device. `/dev/null` is a device, so `--out /dev/null` is refused; write to standard output and redirect it
 (`export ... > /dev/null`). A path that does not exist, and a regular file, are written as before.
+
+`--out` is not one of the inputs: the path of the model itself (however it is spelled, or reached by a hard
+link), or of a file read as a source through `--module`, is refused (exit 2, nothing written), because it would
+replace the model with its JSON. The JSON copy beside the model is not an input; that is what `export` is for.
+The file is written through a temporary file in the same directory (`.modelspec-<random>.tmp`, created
+exclusively and removed when anything fails) and renamed over the path, so a link put at the path between the
+check and the write is replaced and not followed, and an interrupted run leaves the old file whole. The directory
+must be one a file can be created in, and a replaced file keeps its permission bits as far as the umask allows.
 
 Every file a command reads has the 1 MiB limit, the committed JSON that `--check` reads too (one over it is
 refused without being read, exit 1), and every one is read through one reader that refuses what is not a regular

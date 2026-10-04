@@ -14,7 +14,9 @@
 # A run that stalls does not pass either: the fuzzer's progress lines go through
 # cmd/fuzzjudge (internal/fuzzjudge, with its tests), which prints the executions and
 # the rate in each half of the run, and fails when nothing ran for 30 seconds or the
-# rate of the second half fell below 30% of the first. One input that takes ten
+# rate of the second half fell below 30% of the first, or the share of the second half
+# that was idle (no execution between progress lines) is more than 50 points above the
+# first half's. One input that takes ten
 # seconds is stopped while it runs, by the watchdog in scripts/fuzz/fuzz_test.go.
 #
 # -fuzzminimizetime 5s: by default the fuzzer minimises a new input for up to a

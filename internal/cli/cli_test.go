@@ -1149,3 +1149,86 @@ func TestExportRefusalNamesTheAssignedModule(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, h.errb)
 	}
 }
+
+// The refusal lists the skipped files of the module that was exported and no others: a
+// second module supplied with --module has a skipped file of its own, and neither its path
+// nor its finding is printed.
+func TestExportRefusalListsOnlyTheExportedModulesSkippedFiles(t *testing.T) {
+	t.Parallel()
+	const dir = "spec/modules/shop/models/"
+	h := newHarness(map[string]string{dir + "order.hcl": goodHCL, "real/customer.hcl": goodHCL, "ctx/x.modelspec.hcl": coreHCL, "real/y.hcl": goodHCL})
+	h.fsys.MapFS[dir+"customer.hcl"] = &fstest.MapFile{Data: []byte("../../../../real/customer.hcl"), Mode: fs.ModeSymlink}
+	h.fsys.MapFS["ctx/y.modelspec.hcl"] = &fstest.MapFile{Data: []byte("../real/y.hcl"), Mode: fs.ModeSymlink}
+	code := h.run(append([]string{"export", "--module", "core=ctx", dir + "order.hcl"}, exportID...)...)
+	if code != 1 || !strings.Contains(h.errb.String(), "module shop has 1 file(s) found and not read ("+dir+"customer.hcl)") || strings.Contains(h.errb.String(), "y.modelspec.hcl") {
+		t.Fatalf("exit %d, stderr %q", code, h.errb)
+	}
+}
+
+// A module that refers into one that was not read whole (a link in its directory, supplied
+// with --module) is exported as before, exit 0 and the same document, and standard error
+// says what was not checked: the skipped-file finding of every such file, and once for the
+// module that references into it were not checked.
+func TestExportSaysWhenReferencesIntoAnIncompleteModuleWereNotChecked(t *testing.T) {
+	t.Parallel()
+	app := "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    entity = \"core.Nothing\"\n  }\n}\n"
+	files := map[string]string{"app/app.modelspec.hcl": app, "core/space.hcl": coreHCL, "real/y.hcl": coreHCL, "real/z.hcl": coreHCL}
+	args := append([]string{"export", "app/app.modelspec.hcl", "--module", "core=core"}, exportID...)
+	whole := newHarness(files)
+	if code := whole.run(args...); code != 1 || !strings.Contains(whole.errb.String(), `unknown entity "Nothing" in module "core"`) {
+		t.Fatalf("core whole: exit %d, stderr %q", code, whole.errb)
+	}
+	h := newHarness(files)
+	h.fsys.MapFS["core/y.hcl"] = &fstest.MapFile{Data: []byte("../real/y.hcl"), Mode: fs.ModeSymlink}
+	h.fsys.MapFS["core/z.hcl"] = &fstest.MapFile{Data: []byte("../real/z.hcl"), Mode: fs.ModeSymlink}
+	code := h.run(args...)
+	stderr := h.errb.String()
+	if code != 0 || !strings.Contains(h.out.String(), `"entity": "core.Nothing"`) ||
+		!strings.Contains(stderr, "core/y.hcl: error: is a symbolic link") || !strings.Contains(stderr, "core/z.hcl: error: is a symbolic link") ||
+		strings.Count(stderr, "references into it were not checked") != 1 || !strings.Contains(stderr, "note: module core was not read whole") {
+		t.Fatalf("core incomplete: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// export --check says the same and still approves the document.
+	committed := h.out.String()
+	h = newHarness(files)
+	h.fsys.MapFS["core/y.hcl"] = &fstest.MapFile{Data: []byte("../real/y.hcl"), Mode: fs.ModeSymlink}
+	h.fsys.MapFS["committed.json"] = &fstest.MapFile{Data: []byte(committed)}
+	if code := h.run("export", "--check", "--module", "core=core", "app/app.modelspec.hcl", "committed.json"); code != 0 || !strings.Contains(h.errb.String(), "references into it were not checked") || !strings.HasPrefix(h.out.String(), "ok:") {
+		t.Fatalf("export --check: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// Nothing to say when every module was read whole.
+	if whole = newHarness(map[string]string{"app/app.modelspec.hcl": goodHCL}); whole.run(append([]string{"export", "app/app.modelspec.hcl"}, exportID...)...) != 0 || whole.errb.Len() != 0 {
+		t.Fatalf("no skipped file: stderr %q", whole.errb)
+	}
+}
+
+// --out is not one of the inputs: writing the model's own file, however it is spelled, or a
+// file supplied with --module, would replace a source with its JSON. It is refused, exit 2,
+// and nothing is written. The JSON copy beside the model is an output, not a source.
+func TestExportOutRefusesAnInput(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"m/booking.modelspec.hcl": bookingHCL, "shared/core.hcl": coreHCL, "shared/more.hcl": "enum \"E\" {\n  values = [\"x\"]\n}\n", "m/booking.modelspec.json": "{}"}
+	for _, tc := range []struct {
+		name string
+		out  string
+		want string
+	}{
+		{"the model", "m/booking.modelspec.hcl", "--out m/booking.modelspec.hcl is the input m/booking.modelspec.hcl"},
+		{"the model, spelled otherwise", "./m/../m/booking.modelspec.hcl", "is the input m/booking.modelspec.hcl"},
+		{"a file supplied with --module", "shared/core.hcl", "is the input shared/core.hcl"},
+		{"a file of a directory supplied with --module", "shared/more.hcl", "is the input shared/more.hcl"},
+	} {
+		h := newHarness(files)
+		code := h.run(append([]string{"export", "m/booking.modelspec.hcl", "--module", "core=shared", "--out", tc.out}, exportID...)...)
+		if code != 2 || len(h.fsys.written) != 0 || h.out.Len() != 0 || !strings.Contains(h.errb.String(), tc.want) || !strings.Contains(h.errb.String(), "replace") {
+			t.Errorf("%s: exit %d, written %v, stderr %q", tc.name, code, h.fsys.written, h.errb)
+		}
+	}
+	// The copy beside the model, and a path that is nothing yet, are written.
+	for _, out := range []string{"m/booking.modelspec.json", "m/new.json"} {
+		h := newHarness(files)
+		if code := h.run(append([]string{"export", "m/booking.modelspec.hcl", "--module", "core=shared", "--out", out}, exportID...)...); code != 0 || len(h.fsys.written[out]) == 0 {
+			t.Errorf("--out %s: exit %d, written %v, stderr %q", out, code, h.fsys.written, h.errb)
+		}
+	}
+}

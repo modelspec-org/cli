@@ -33,6 +33,10 @@ func ParseProfile(s string) (Profile, error) {
 // Options configures Check.
 type Options struct {
 	Profile Profile // "" means ProfileDefault
+	// Unread names the modules that have a file which was found and not read (Lint's
+	// skipped files). A module of that name that is not among the models is known and
+	// cannot be checked, so a reference into it is not reported as an unknown module.
+	Unread []string
 }
 
 func (o Options) publish() bool { return o.Profile == ProfilePublish }

@@ -156,6 +156,11 @@ func runCheck(models []*Model, opts Options) *checker {
 		u.models = append(u.models, m)
 		u.broken = u.broken || m.Broken || m.Incomplete
 	}
+	for _, name := range opts.Unread {
+		if len(c.byName[name]) == 0 {
+			c.byName[name] = []*unit{{name: name, broken: true}}
+		}
+	}
 	for _, u := range order {
 		c.unit(u)
 	}
@@ -189,13 +194,26 @@ func (c *checker) steps() (concepts, members, probes int) {
 	return concepts, c.builds, probes
 }
 
+// heredocHint is added to a finding about a name that ends with a line break, in an HCL
+// file: only a heredoc keeps one, and a one-line heredoc is easy to take for a string.
+const heredocHint = " (the name ends with a line break; HCL keeps the final line break of a heredoc, so a heredoc is never a valid name: write it as a quoted string)"
+
+// nameRules are the rules whose findings echo a name: a type, a reference, a key, a kind.
+var nameRules = map[string]bool{RuleType: true, RuleReference: true, RuleKey: true, RuleCollection: true}
+
 func (c *checker) add(line int, rule string, sev Severity, format string, args ...any) {
+	lineBreak := false
 	for i, a := range args {
 		if text, ok := a.(string); ok {
+			lineBreak = lineBreak || strings.HasSuffix(text, "\n")
 			args[i] = clipText(text, MaxEchoBytes)
 		}
 	}
-	c.put(Finding{File: c.cur.File, Line: line, Rule: rule, Severity: sev, Message: fmt.Sprintf(format, args...)})
+	message := fmt.Sprintf(format, args...)
+	if lineBreak && nameRules[rule] && c.cur.Form == FormHCL {
+		message += heredocHint
+	}
+	c.put(Finding{File: c.cur.File, Line: line, Rule: rule, Severity: sev, Message: message})
 }
 
 func (c *checker) errorf(line int, rule, format string, args ...any) {

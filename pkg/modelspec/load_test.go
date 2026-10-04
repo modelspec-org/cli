@@ -1114,3 +1114,303 @@ func TestOnlyTheAffectedModuleIsNotChecked(t *testing.T) {
 		only(lint(fsys, "models"), "models/a.modelspec.hcl: error: is ")
 	}
 }
+
+// A file named on the command line is read, whatever else in the run would have skipped it:
+// naming a link after its directory behaves as naming it before, for paths and for --module
+// assignments, and what cannot be read at all is an error in either order.
+func TestANamedLinkIsReadInEitherOrder(t *testing.T) {
+	t.Parallel()
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
+	link := layout("shop", "customer.hcl")
+	tree := func(kind string) *memFS {
+		fsys := newMemFS(map[string]string{layout("shop", "order.hcl"): order})
+		skippedKinds[kind](fsys, link, customer)
+		return fsys
+	}
+	lint := func(fsys *memFS, paths []string, modules ...Assignment) (Result, error) {
+		return Lint(fsys, paths, LintOptions{Modules: modules})
+	}
+	for _, paths := range [][]string{{link, "."}, {".", link}, {link, "spec"}, {"spec", link}} {
+		res, err := lint(tree("a link to a regular file"), paths)
+		if err != nil || len(res.Findings) != 0 || res.Files != 2 || len(res.Skipped) != 0 {
+			t.Errorf("%v: %d files, findings %v, skipped %d, %v", paths, res.Files, res.Findings, len(res.Skipped), err)
+		}
+	}
+	// The same through --module, in either order of the two assignments.
+	fsys := newMemFS(map[string]string{"core/space.hcl": customer})
+	skippedKinds["a link to a regular file"](fsys, "core/customer.hcl", customer)
+	dir, file := Assignment{Module: "core", Path: "core"}, Assignment{Module: "core", Path: "core/customer.hcl"}
+	for _, assign := range [][]Assignment{{file, dir}, {dir, file}} {
+		res, err := lint(fsys, nil, assign...)
+		if err != nil || res.Files != 2 || len(res.Skipped) != 0 {
+			t.Errorf("%v: %d files, skipped %d, %v", assign, res.Files, len(res.Skipped), err)
+		}
+		// Both files declare Customer: read, so the module says so; nothing was left unread.
+		if len(res.Findings) != 1 || res.Findings[0].Rule != RuleDuplicate {
+			t.Errorf("%v: findings %v", assign, res.Findings)
+		}
+	}
+	// A path that cannot be read is an error whichever comes first, and a link that is not named is still skipped.
+	for _, kind := range []string{"a named pipe", "a device", "a dangling link"} {
+		for _, paths := range [][]string{{link, "."}, {".", link}} {
+			var notRegular *NotRegularError
+			_, err := lint(tree(kind), paths)
+			if err == nil || kind != "a dangling link" && !errors.As(err, &notRegular) {
+				t.Errorf("%s, %v: %v", kind, paths, err)
+			}
+		}
+		if res, err := lint(tree(kind), []string{"."}); err != nil || len(res.Skipped) != 1 {
+			t.Errorf("%s: not named: %d skipped, %v", kind, len(res.Skipped), err)
+		}
+	}
+}
+
+// Only the skipped-file error is reported for a module that was not read whole, and no
+// finding from another module into it: a directory given both as a path and to --module
+// (the file was first met in the search that has no module name), and a standalone module
+// that is itself the file that was not read, whatever its form.
+func TestPartlyLoadedModulesReportOnlyTheSkippedFile(t *testing.T) {
+	t.Parallel()
+	space := "entity \"Space\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	app := "entity \"App\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"core.Customer\"\n  }\n}\n"
+	for kind, make := range skippedKinds {
+		// A directory as a path and with --module: core.hcl is read only as part of the assignment.
+		fsys := newMemFS(map[string]string{"core/core.hcl": space, "app/app.modelspec.hcl": app})
+		make(fsys, "core/customer.modelspec.hcl", customer)
+		res, err := Lint(fsys, []string{"core", "app"}, LintOptions{Modules: []Assignment{{Module: "core", Path: "core"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, f := range res.Findings {
+			got = append(got, f.String())
+		}
+		expect(t, got, "core/customer.modelspec.hcl: error: is ")
+		if len(res.Skipped) != 1 || res.Skipped[0].Module != "core" {
+			t.Errorf("%s: skipped %+v, want one found under module core", kind, res.Skipped)
+		}
+		// A standalone module that is the file not read, as HCL or as JSON.
+		for suffix, content := range map[string]string{HCLSuffix: customer, JSONSuffix: doc(jEntities)} {
+			fsys = newMemFS(map[string]string{"app.modelspec.hcl": app})
+			make(fsys, "core"+suffix, content)
+			res, err = Lint(fsys, []string{"."}, LintOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = got[:0]
+			for _, f := range res.Findings {
+				got = append(got, f.String())
+			}
+			expect(t, got, "core"+suffix+": error: is ")
+		}
+	}
+}
+
+// A models directory that is itself a link is not searched, and says so: an error that
+// names the directory (rule skipped-file, both profiles), with the module of the directory
+// not checked and no reference into it reported, and the way out the same as for a file:
+// naming it on the command line, before or after the directory above it. A link named models
+// elsewhere, one that is not to a directory, and a real directory are not touched.
+func TestAModelsDirectoryThatIsALinkIsAnError(t *testing.T) {
+	t.Parallel()
+	shopModels := layout("shop", "")
+	shopModels = shopModels[:len(shopModels)-1] // spec/graph/modules/shop/models
+	invalid := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	app := "entity \"App\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"shop.Bad\"\n  }\n}\n"
+	tree := func() *memFS {
+		fsys := newMemFS(map[string]string{"elsewhere/shop/bad.hcl": invalid, "app.modelspec.hcl": app, "other.modelspec.hcl": invalid})
+		fsys.MapFS[shopModels] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
+		fsys.links[shopModels] = "elsewhere/shop"
+		return fsys
+	}
+	lint := func(profile Profile, paths ...string) (Result, []string) {
+		res, err := Lint(tree(), paths, LintOptions{Profile: profile})
+		if err != nil {
+			t.Fatalf("%v: %v", paths, err)
+		}
+		var out []string
+		for _, f := range res.Findings {
+			out = append(out, f.String())
+		}
+		return res, out
+	}
+	// Searched: the directory is named by the error, its model is not read, the module is not
+	// reported as unknown to the model that refers into it, and the other model of the run is checked.
+	res, got := lint(ProfileDefault, ".")
+	expect(t, got, shopModels+": error: is a symbolic link to a directory, which a search does not follow", "other.modelspec.hcl:2: error: entity \"Bad\" key")
+	if len(res.Skipped) != 1 || res.Skipped[0].Finding.Rule != RuleSkipped || res.Skipped[0].Finding.File != shopModels {
+		t.Errorf("skipped %+v", res.Skipped)
+	}
+	// An error under the publish profile too.
+	if res, _ := lint(ProfilePublish, "."); len(res.Skipped) != 1 || !HasErrors(res.Findings) {
+		t.Errorf("publish: skipped %d, findings %v", len(res.Skipped), res.Findings)
+	}
+	// Named, before or after the directory above it, the link is entered and its model is read.
+	keyOfBad := layout("shop", "bad.hcl") + ":2: error: entity \"Bad\" key"
+	_, got = lint(ProfileDefault, shopModels)
+	expect(t, got, keyOfBad)
+	for _, paths := range [][]string{{shopModels, "."}, {".", shopModels}} {
+		res, got := lint(ProfileDefault, paths...)
+		expect(t, got, keyOfBad, "other.modelspec.hcl:2: error: entity \"Bad\" key")
+		if len(res.Skipped) != 0 {
+			t.Errorf("%v: %d skipped", paths, len(res.Skipped))
+		}
+	}
+	// Not a models directory, or nothing to search: no finding.
+	quiet := newMemFS(map[string]string{"ok.modelspec.hcl": okEntity, "elsewhere/x.hcl": okEntity, "docs/real/models/ok.modelspec.hcl": okEntity})
+	quiet.MapFS["docs/models"] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
+	quiet.links["docs/models"] = "elsewhere" // named models, but not under modules/<id>
+	quiet.MapFS[layout("a", "")[:len(layout("a", ""))-1]] = &fstest.MapFile{Data: []byte("x")}
+	quiet.links[layout("a", "")[:len(layout("a", ""))-1]] = "ok.modelspec.hcl" // a link to a file
+	quiet.links[layout("b", "")[:len(layout("b", ""))-1]] = ""                 // a dangling one
+	if res, err := Lint(quiet, []string{"."}, LintOptions{}); err != nil || len(res.Findings) != 0 || len(res.Skipped) != 0 {
+		t.Errorf("findings %v, skipped %d, %v", res.Findings, len(res.Skipped), err)
+	}
+}
+
+// On the operating system's file system: a models directory that is a link, searched, and
+// named.
+func TestAModelsDirectoryThatIsALinkOnTheRealFileSystem(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	modules := filepath.Join(dir, "spec", "modules", "shop")
+	for _, d := range []string{real, modules} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(real, "bad.hcl"), []byte("entity \"Bad\" {\n  key = [\"nope\"]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(modules, "models")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	for _, profile := range []Profile{ProfileDefault, ProfilePublish} {
+		res, err := Lint(OSFS{}, []string{dir}, LintOptions{Profile: profile})
+		if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleSkipped || res.Findings[0].File != link || !strings.Contains(res.Findings[0].Message, "a symbolic link to a directory") {
+			t.Fatalf("%s: findings %v, %v", profile, res.Findings, err)
+		}
+		res, err = Lint(OSFS{}, []string{link, dir}, LintOptions{Profile: profile})
+		if err != nil || len(res.Skipped) != 0 || len(res.Findings) == 0 || res.Findings[0].Rule == RuleSkipped {
+			t.Fatalf("%s, named: findings %v, %v", profile, res.Findings, err)
+		}
+	}
+}
+
+// OSFS.WriteFile writes through a temporary file in the same directory, created exclusively,
+// and a rename, so that what is at the name is replaced and never followed, and a temporary
+// file does not stay.
+func TestOSFSWriteFileReplacesThroughATemporaryFile(t *testing.T) {
+	t.Parallel()
+	listing := func(dir string) string {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return strings.Join(names, " ")
+	}
+	read := func(name string) string {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	// A new file and an existing one: the content is the new data, nothing else is left, and a replaced file keeps its permissions.
+	dir := t.TempDir()
+	file := filepath.Join(dir, "out.json")
+	if err := (OSFS{}).WriteFile(file, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(file); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&^0o644 != 0 {
+		t.Fatalf("a new file: %v, %v", info, err)
+	}
+	if err := os.Chmod(file, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (OSFS{}).WriteFile(file, []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(file); err != nil || read(file) != "second" || info.Mode().Perm() != 0o600 || listing(dir) != "out.json" {
+		t.Fatalf("a replaced file: %q, %v, listing %q", read(file), info.Mode(), listing(dir))
+	}
+	// A link at the name is replaced, and what it pointed to is left as it was: a link swapped in after a check cannot redirect the write.
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	if err := (OSFS{}).WriteFile(link, []byte("through"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || !info.Mode().IsRegular() || read(link) != "through" || read(victim) != "mine" {
+		t.Fatalf("a link at the name: %v, %q, victim %q", info, read(link), read(victim))
+	}
+	// The temporary file is created exclusively: one that is already there, or a link planted at its name, is not written through, and is left alone.
+	fixed := OSFS{tempName: func() string { return ".planted" }}
+	if err := os.WriteFile(filepath.Join(dir, ".planted"), []byte("planted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixed.WriteFile(file, []byte("x"), 0o644); !errors.Is(err, fs.ErrExist) || read(filepath.Join(dir, ".planted")) != "planted" || read(file) != "second" {
+		t.Fatalf("a temporary file that exists: %v, %q, %q", err, read(filepath.Join(dir, ".planted")), read(file))
+	}
+	if err := os.Remove(filepath.Join(dir, ".planted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dir, ".planted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixed.WriteFile(file, []byte("x"), 0o644); !errors.Is(err, fs.ErrExist) || read(victim) != "mine" {
+		t.Fatalf("a link at the temporary name: %v, victim %q", err, read(victim))
+	}
+	// A failure leaves nothing behind: the name is a directory (the rename fails), or its directory is not there.
+	other := t.TempDir()
+	if err := os.Mkdir(filepath.Join(other, "out.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (OSFS{}).WriteFile(filepath.Join(other, "out.json"), []byte("x"), 0o644); err == nil || listing(other) != "out.json" {
+		t.Fatalf("a directory at the name: %v, listing %q", err, listing(other))
+	}
+	if err := (OSFS{}).WriteFile(filepath.Join(dir, "no", "such", "out.json"), []byte("x"), 0o644); err == nil {
+		t.Fatal("a directory that is not there: no error")
+	}
+}
+
+// writeAndClose reports a failed write and a failed close, and closes in every case.
+func TestWriteAndClose(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("write failed")
+	closeErr := errors.New("close failed")
+	for name, tc := range map[string]struct {
+		w    *fakeWriter
+		want error
+	}{
+		"both succeed": {&fakeWriter{}, nil},
+		"write fails":  {&fakeWriter{writeErr: boom}, boom},
+		"close fails":  {&fakeWriter{closeErr: closeErr}, closeErr},
+		"both fail":    {&fakeWriter{writeErr: boom, closeErr: closeErr}, boom},
+	} {
+		if err := writeAndClose(tc.w, []byte("data")); !errors.Is(err, tc.want) && err != tc.want || !tc.w.closed {
+			t.Errorf("%s: %v, closed %v", name, err, tc.w.closed)
+		}
+	}
+}
+
+type fakeWriter struct {
+	writeErr, closeErr error
+	closed             bool
+}
+
+func (f *fakeWriter) Write(p []byte) (int, error) { return len(p), f.writeErr }
+func (f *fakeWriter) Close() error                { f.closed = true; return f.closeErr }

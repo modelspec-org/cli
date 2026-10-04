@@ -41,8 +41,9 @@ func lintCommand(env *Env) *cobra.Command {
 		Long: `Check ModelSpec models in HCL (*.modelspec.hcl) and JSON (*.modelspec.json).
 
 Each path is a file or a directory; a directory is searched recursively
-(hidden directories and node_modules are skipped; symbolic links to files are
-followed, links to directories are not). With no path, lint checks the current
+(hidden directories and node_modules are skipped; a search follows no symbolic
+link, and a model file or a SpecScore models directory that is one is a skipped-file
+error: name it on the command line to read it). With no path, lint checks the current
 directory. A file reached by two names is read once.
 
 Modules. A module is a set of files, and the module is the unit of checking: if

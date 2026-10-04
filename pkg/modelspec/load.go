@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +23,9 @@ type FS interface {
 	// Stat follows symbolic links; Lstat does not.
 	Stat(name string) (fs.FileInfo, error)
 	Lstat(name string) (fs.FileInfo, error)
+	// WriteFile replaces the file name with data, through a temporary file in the same
+	// directory (created exclusively, removed on failure) and a rename, so that what is
+	// at name is replaced and never followed, and a reader never sees half a file.
 	WriteFile(name string, data []byte, perm fs.FileMode) error
 	// Abs returns the absolute form of a path, cleaned, with symbolic links left
 	// as they are: the path as the file was given or found. The SpecScore layout
@@ -140,7 +144,8 @@ func ReadSource(fsys FS, name string) ([]byte, error) {
 
 // OSFS is the operating system's filesystem. The zero value is ready to use.
 type OSFS struct {
-	getwd func() (string, error) // os.Getwd when nil; a seam for tests
+	getwd    func() (string, error) // os.Getwd when nil; a seam for tests
+	tempName func() string          // the name of WriteFile's temporary file, random when nil; a seam for tests
 }
 
 // Open opens without waiting: opening a named pipe for reading otherwise blocks
@@ -151,8 +156,44 @@ func (OSFS) Open(name string) (fs.File, error) {
 func (OSFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
 func (OSFS) Stat(name string) (fs.FileInfo, error)      { return os.Stat(name) }
 func (OSFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) }
-func (OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
-	return os.WriteFile(name, data, perm)
+
+// WriteFile writes data to a temporary file in the directory of name, created with
+// O_EXCL (a name that exists, a link planted at it included, is an error and is left
+// alone), and renames it over name. A rename replaces a link at name and does not follow
+// it, so a link put there after a check cannot redirect the write. A file that is replaced
+// keeps its permission bits (as far as the umask allows); the temporary file is removed
+// when anything fails.
+func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	if info, err := os.Lstat(name); err == nil && info.Mode().IsRegular() {
+		perm = info.Mode().Perm()
+	}
+	tempName := o.tempName
+	if tempName == nil {
+		tempName = func() string { return fmt.Sprintf(".modelspec-%016x.tmp", rand.Uint64()) }
+	}
+	temp := filepath.Join(filepath.Dir(name), tempName())
+	f, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	err = writeAndClose(f, data)
+	if err == nil {
+		err = os.Rename(temp, name)
+	}
+	if err != nil {
+		os.Remove(temp)
+	}
+	return err
+}
+
+// writeAndClose writes data and closes w, whether or not the write worked, and returns the
+// first error.
+func writeAndClose(w io.WriteCloser, data []byte) error {
+	_, err := w.Write(data)
+	if closeErr := w.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 func (OSFS) SameFile(a, b fs.FileInfo) bool { return os.SameFile(a, b) }
 func (o OSFS) Abs(name string) (string, error) {
@@ -186,6 +227,22 @@ func layoutDir(abs string) (id, dir string, ok bool) {
 		return "", "", false
 	}
 	return parts[n-3], strings.Join(parts[:n-1], "/"), true
+}
+
+// isModelsDir reports whether an absolute path is the models directory of a layout
+// module: …/modules/<id>/models.
+func isModelsDir(abs string) bool {
+	_, _, ok := layoutDir(abs + "/x")
+	return ok
+}
+
+// skippedLayout is layoutDir for a skipped path: the models directory a skipped file is
+// in, or the directory itself when that is what was skipped.
+func skippedLayout(abs string) (id, dir string, ok bool) {
+	if id, dir, ok = layoutDir(abs); ok {
+		return id, dir, true
+	}
+	return layoutDir(abs + "/x")
 }
 
 // layoutModule is layoutDir for an HCL file: any .hcl file there is a model of
@@ -283,6 +340,8 @@ func (d *discovery) addPath(p string, anyHCL bool) error {
 		return err
 	}
 	if info.IsDir() {
+		d.seen[abs] = true // a models directory that is a link, named, is not met again as one
+		d.unskip(abs)
 		return d.walk(p, anyHCL)
 	}
 	if !isModel(p, abs, anyHCL) {
@@ -292,8 +351,30 @@ func (d *discovery) addPath(p string, anyHCL bool) error {
 	if err := notRegular(d.fsys, p, info); err != nil {
 		return err
 	}
+	d.unskip(abs) // named, so read, whether or not a search met it before
 	d.add(Source{Path: filepath.Clean(p), Abs: abs}, info)
 	return nil
+}
+
+// unskip withdraws the skip of a file that is then named on the command line: the
+// finding and the note of it. Named after its directory, a link is read as it is named
+// before it.
+func (d *discovery) unskip(abs string) {
+	kept := d.skipped[:0]
+	for _, s := range d.skipped {
+		if s.source.Abs != abs {
+			kept = append(kept, s)
+			continue
+		}
+		delete(d.warned, s.Finding.File+s.Finding.Message)
+		for i, f := range d.findings {
+			if f == s.Finding {
+				d.findings = append(d.findings[:i], d.findings[i+1:]...)
+				break
+			}
+		}
+	}
+	d.skipped = kept
 }
 
 func (d *discovery) walk(dir string, anyHCL bool) error {
@@ -324,16 +405,29 @@ func (d *discovery) warn(file, message string) {
 	}
 }
 
-// skip records a model-named file that a search does not read, once: an error
-// (rule skipped-file), because the run did not check what it was asked to, and a
-// note of the file, whose module is not checked (markIncomplete).
-func (d *discovery) skip(s Source, what string) {
-	message := "is " + what + ", which a search does not read, so this file was not checked and neither is its module; replace it with the file, or name it on the command line"
+// The rest of the message of a skipped-file finding, for a file and for a directory.
+const (
+	notReadFile   = ", which a search does not read, so this file was not checked and neither is its module; replace it with the file, or name it on the command line"
+	notEnteredDir = ", which a search does not follow, so the models in it were not checked and neither is their module; replace it with the directory, or name it on the command line"
+)
+
+// skip records a model-named file, or a models directory, that a search does not read,
+// once: an error (rule skipped-file), because the run did not check what it was asked
+// to, and a note of it, whose module is not checked (markIncomplete).
+func (d *discovery) skip(s Source, message string) {
 	if !d.warned[s.Path+message] {
 		d.warned[s.Path+message] = true
 		f := Finding{File: s.Path, Rule: RuleSkipped, Severity: SeverityError, Message: message}
 		d.findings = append(d.findings, f)
 		d.skipped = append(d.skipped, SkippedFile{Finding: f, Module: d.module, source: s})
+		return
+	}
+	// Met again, as a file of a --module assignment after a path met it without one: it
+	// belongs to that module too, and the module is not checked.
+	for i := range d.skipped {
+		if d.skipped[i].source.Abs == s.Abs && d.skipped[i].Module == "" {
+			d.skipped[i].Module = d.module
+		}
 	}
 }
 
@@ -353,15 +447,22 @@ func (d *discovery) found(full, name string, anyHCL bool) bool {
 		d.warn(full, "cannot be read, so the file was not checked: "+err.Error())
 		return false
 	}
+	if info.Mode()&fs.ModeSymlink != 0 && !d.seen[abs] && isModelsDir(abs) {
+		// The models directory of a layout module that is a link: a search does not follow it.
+		if target, err := d.fsys.Stat(full); err == nil && target.IsDir() {
+			d.skip(Source{Path: full, Abs: abs}, "is a symbolic link to a directory"+notEnteredDir)
+		}
+		return false
+	}
 	if d.seen[abs] || !isModel(name, abs, anyHCL) {
 		return false // met already (a link named on the command line, then met in its directory)
 	}
 	switch {
 	case info.Mode()&fs.ModeSymlink != 0:
-		d.skip(Source{Path: full, Abs: abs}, "a symbolic link")
+		d.skip(Source{Path: full, Abs: abs}, "is a symbolic link"+notReadFile)
 		return false
 	case !info.Mode().IsRegular():
-		d.skip(Source{Path: full, Abs: abs}, fileKind(info.Mode()))
+		d.skip(Source{Path: full, Abs: abs}, "is "+fileKind(info.Mode())+notReadFile)
 		return false
 	}
 	return d.add(Source{Path: full, Abs: abs}, info)
@@ -554,7 +655,7 @@ func Load(fsys FS, files []Source, assign []Assignment) ([]*Model, []Finding, er
 func markIncomplete(models []*Model, files []Source, skips []SkippedFile, explicit map[string]string) {
 	for k := range skips {
 		s := &skips[k]
-		_, layout, inLayout := layoutDir(s.source.Abs)
+		_, layout, inLayout := skippedLayout(s.source.Abs)
 		stem := strings.TrimSuffix(strings.TrimSuffix(s.source.Abs, HCLSuffix), JSONSuffix)
 		for i, f := range files {
 			_, fileLayout, fileInLayout := layoutDir(f.Abs)
@@ -565,6 +666,19 @@ func markIncomplete(models []*Model, files []Source, skips []SkippedFile, explic
 			}
 		}
 	}
+}
+
+// skippedModule is the name of the module a skipped file belongs to: the --module name
+// it was found under, the id of the layout module whose models directory it is in, or the
+// name its file gives a standalone module.
+func skippedModule(s SkippedFile) string {
+	if s.Module != "" {
+		return s.Module
+	}
+	if id, _, ok := skippedLayout(s.source.Abs); ok {
+		return id
+	}
+	return moduleNameFromFile(s.source.Path)
 }
 
 // explicitModules reads the --module assignments: the absolute path of every
@@ -660,7 +774,11 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	res.Skipped = d.skipped
 	res.Models = models
 	res.Files = len(sources)
-	res.Findings = append(append(d.findings, parse...), Check(models, Options{Profile: opts.Profile})...)
+	var unread []string
+	for _, s := range d.skipped {
+		unread = append(unread, skippedModule(s))
+	}
+	res.Findings = append(append(d.findings, parse...), Check(models, Options{Profile: opts.Profile, Unread: unread})...)
 	SortFindings(res.Findings)
 	res.Findings = capFindings(res.Findings)
 	return res, nil

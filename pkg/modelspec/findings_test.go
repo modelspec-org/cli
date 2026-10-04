@@ -358,3 +358,61 @@ func TestSkippedFileFindingsAreKeptAheadOfOthers(t *testing.T) {
 		t.Errorf("%d skipped files and %d other errors listed; summary %v", skips, errs, last)
 	}
 }
+
+// The line that counts what a check left out stands for those findings. When a
+// skipped-file finding takes its place in the run's list, the summary counts them
+// all and not as one: a link beside a model and an enum of 1,202 equal values list
+// 999 duplicates and the skipped file, and 202 duplicates are not listed.
+func TestADisplacedCountingLineIsStillCounted(t *testing.T) {
+	t.Parallel()
+	fsys := newMemFS(map[string]string{
+		layout("shop", "order.hcl"): okEntity,
+		"aaa.modelspec.hcl":         "enum \"E\" {\n  values = [" + strings.Repeat("1, ", 1201) + "1]\n}\n",
+	})
+	skippedKinds["a dangling link"](fsys, layout("shop", "customer.hcl"), "")
+	res, err := Lint(fsys, []string{"."}, LintOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicates, skipped := 0, 0
+	for _, f := range res.Findings {
+		switch f.Rule {
+		case RuleEnumValues:
+			duplicates++
+		case RuleSkipped:
+			skipped++
+		}
+	}
+	summary := finalFinding(t, res.Findings)
+	if duplicates != 999 || skipped != 1 || len(res.Findings) != MaxFindings+1 || summary.Severity != SeverityError ||
+		!strings.Contains(summary.Message, "202 more findings (202 errors, 0 warnings) are not listed") {
+		t.Errorf("%d duplicates and %d skipped files listed of %d findings; summary %q", duplicates, skipped, len(res.Findings), summary.Message)
+	}
+}
+
+// A skipped-file finding takes the place of a warning before it takes that of any error,
+// wherever they are in the list: a full list that holds an error before its warnings
+// keeps the error, and the finding that is dropped is a warning.
+func TestSkippedFileTakesAWarningBeforeTheFirstError(t *testing.T) {
+	t.Parallel()
+	var l findingList
+	l.put(Finding{File: "f", Line: 1, Rule: "r", Severity: SeverityError, Message: "m"})
+	for i := 2; i <= MaxFindings; i++ {
+		l.put(Finding{File: "f", Line: i, Rule: "r", Severity: SeverityWarning, Message: "m"})
+	}
+	l.put(Finding{File: "g", Rule: RuleSkipped, Severity: SeverityError, Message: "m"})
+	got := l.result()
+	errs, skips := 0, 0
+	for _, f := range got[:MaxFindings] {
+		switch {
+		case f.Rule == RuleSkipped:
+			skips++
+		case f.Severity == SeverityError:
+			errs++
+		}
+	}
+	last := got[len(got)-1]
+	if errs != 1 || skips != 1 || last.Severity != SeverityWarning || !strings.Contains(last.Message, "1 more findings (0 errors, 1 warnings)") {
+		t.Errorf("%d errors and %d skipped files listed; summary %v", errs, skips, last)
+	}
+}

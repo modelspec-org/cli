@@ -11,8 +11,9 @@
 //  3. a model that lints clean exports (HCL) to JSON that parses, round-trips
 //     and lints clean under the same name;
 //  4. one input costs a bounded amount of work: the bytes allocated reading and
-//     checking it stay within allocBase plus allocPerByte for each byte of the
-//     input (a count of the work done, which does not depend on the load of the
+//     checking it, exporting it and reading the export back (FuzzHCL does all of
+//     that inside within) stay within allocBase plus allocPerByte for each byte of
+//     the input (a count of the work done, which does not depend on the load of the
 //     machine, as time does), and no input is still running after ten seconds (a
 //     watchdog stops the process while the input runs). An input over either fails
 //     the run, as a crash does; a fuzzer that is only given a time limit reports a
@@ -123,28 +124,27 @@ func FuzzHCL(f *testing.F) {
 	enabled(f)
 	seeds(f, "hcl", ".modelspec.hcl")
 	f.Fuzz(func(t *testing.T, src []byte) {
-		var m *modelspec.Model
-		var parse []modelspec.Finding
-		clean := false
+		// Everything one input costs runs inside within: the reading and the checks, the
+		// export, the read of the export and the comparison, so the watchdog and the
+		// allocation budget cover all of it.
 		within(t, src, func() {
-			m, parse = modelspec.ParseHCL("fuzz.modelspec.hcl", src)
-			clean = refusal(t, m, parse)
+			m, parse := modelspec.ParseHCL("fuzz.modelspec.hcl", src)
+			if !refusal(t, m, parse) || len(m.Unmapped) > 0 {
+				return
+			}
+			node, err := m.JSON(modelspec.ModuleIdentity{ID: "x/fuzz", Name: "fuzz", Version: "1"})
+			if err != nil {
+				t.Fatalf("a clean model does not export: %v", err)
+			}
+			back, backParse := modelspec.ParseJSON("fuzz.modelspec.json", node.Encode())
+			if !refusal(t, back, backParse) {
+				t.Fatalf("the export of a clean model does not lint clean:\n%v\n%s", lint(back, backParse, modelspec.ProfileDefault), node.Encode())
+			}
+			again, err := modelspec.ParseNode(node.Encode())
+			if err != nil || modelspec.Diff(node, again) != "" {
+				t.Fatalf("the export does not round-trip: %v %s", err, modelspec.Diff(node, again))
+			}
 		})
-		if !clean || len(m.Unmapped) > 0 {
-			return
-		}
-		node, err := m.JSON(modelspec.ModuleIdentity{ID: "x/fuzz", Name: "fuzz", Version: "1"})
-		if err != nil {
-			t.Fatalf("a clean model does not export: %v", err)
-		}
-		back, backParse := modelspec.ParseJSON("fuzz.modelspec.json", node.Encode())
-		if !refusal(t, back, backParse) {
-			t.Fatalf("the export of a clean model does not lint clean:\n%v\n%s", lint(back, backParse, modelspec.ProfileDefault), node.Encode())
-		}
-		again, err := modelspec.ParseNode(node.Encode())
-		if err != nil || modelspec.Diff(node, again) != "" {
-			t.Fatalf("the export does not round-trip: %v %s", err, modelspec.Diff(node, again))
-		}
 	})
 }
 

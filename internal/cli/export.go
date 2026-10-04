@@ -34,9 +34,16 @@ export lints the file first, as lint does under the default profile (so the modu
 the file belongs to is checked whole, as lint checks it), and refuses a file with
 errors (exit 1, the findings for the file on standard error). A file that refers to
 other modules needs them supplied with --module <name>=<path> (repeatable), as
-for lint; those files are used to resolve references and are not exported.
+for lint; those files are used to resolve references and are not exported. If one
+of those modules has a file that was found and not read (a symbolic link, a pipe, a
+device), references into it were not checked: the export is written and the exit code
+is as before, and standard error has the skipped-file finding and a note.
 export reads HCL: any .hcl file of a SpecScore models directory is accepted, whatever
 it is called, and a JSON file is a usage error.
+
+--out writes a regular file, through a temporary file in the same directory and a
+rename, and refuses a path that is one of the inputs (the model, or a file supplied
+with --module), which would replace it with its JSON.
 
 With --check, export compares a committed JSON file with what the HCL exports to
 and exits 1 when they differ, so CI can catch a stale copy:
@@ -81,9 +88,14 @@ their JSON form.`,
 					return err
 				}
 			}
-			m, err := lintForExport(env, args[0], assign)
+			m, loaded, err := lintForExport(env, args[0], assign)
 			if err != nil {
 				return err
+			}
+			if out != "" {
+				if err := refuseInputAsOutput(env.FS, out, loaded); err != nil {
+					return err
+				}
 			}
 			if check {
 				return runCheck(env, m, args[1], id)
@@ -134,6 +146,23 @@ func checkOutput(fsys modelspec.FS, out string) error {
 	return nil
 }
 
+// refuseInputAsOutput refuses an output path that is one of the files the run read as a
+// source: the model itself, or a file supplied with --module. Writing it would replace the
+// model with its JSON. The JSON copy of a module (a twin) is what export writes, so it is
+// not a source.
+func refuseInputAsOutput(fsys modelspec.FS, out string, loaded []*modelspec.Model) error {
+	target, err := fsys.Stat(out)
+	if err != nil {
+		return nil // there is nothing at the path yet, so it is no input
+	}
+	for _, m := range loaded {
+		if in, err := fsys.Stat(m.File); err == nil && !m.Twin && fsys.SameFile(target, in) {
+			return usageErrorf("--out %s is the input %s, and writing it would replace the model with its JSON; write to another file", out, m.File)
+		}
+	}
+	return nil
+}
+
 func ioErrorOrNil(err error) error {
 	if err != nil {
 		return ioError(err)
@@ -143,18 +172,19 @@ func ioErrorOrNil(err error) error {
 
 // lintForExport lints the file with the loader lint uses (so the module is
 // checked whole, and the modules it needs are supplied) and returns its model when
-// it has no error. The findings for the file go to standard error.
-func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*modelspec.Model, error) {
+// it has no error, with every model the run loaded. The findings for the file go to
+// standard error.
+func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*modelspec.Model, []*modelspec.Model, error) {
 	info, err := env.FS.Stat(file)
 	if err != nil {
-		return nil, ioError(err)
+		return nil, nil, ioError(err)
 	}
 	if info.IsDir() {
-		return nil, usageErrorf("%s is a directory; export takes one HCL file (lint takes directories)", file)
+		return nil, nil, usageErrorf("%s is a directory; export takes one HCL file (lint takes directories)", file)
 	}
 	res, err := modelspec.Lint(env.FS, []string{file}, modelspec.LintOptions{Modules: assign})
 	if err != nil {
-		return nil, ioError(err)
+		return nil, nil, ioError(err)
 	}
 	// A file that Stat found and is not a directory is the one file Lint loaded
 	// under the name it was given, so exactly one model has it for its File.
@@ -165,7 +195,7 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 		}
 	}
 	if model.Form != modelspec.FormHCL {
-		return nil, usageErrorf("%s: export reads HCL files, and this is the JSON form", file)
+		return nil, nil, usageErrorf("%s: export reads HCL files, and this is the JSON form", file)
 	}
 	// Export writes whole modules: a file of the module that a search met and did not
 	// read (a link, a pipe, a device) makes what was read a part of it. That is decided
@@ -186,7 +216,7 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 				}
 			}
 		}
-		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s: module %s has %d file(s) found and not read (%s), so what was read is not the whole module; export writes and checks whole modules only. Replace the link with the file, or name it on the command line", file, model.Name, len(files), strings.Join(files, ", "))}
+		return nil, nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s: module %s has %d file(s) found and not read (%s), so what was read is not the whole module; export writes and checks whole modules only. Replace the link with the file, or name it on the command line", file, model.Name, len(files), strings.Join(files, ", "))}
 	}
 	var siblings []string
 	for _, m := range res.Models {
@@ -195,7 +225,7 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 		}
 	}
 	if len(siblings) > 0 {
-		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s is one of %d files of module %s (%s); the JSON form is one document per module and the standard does not say how a module's files are merged, so there is nothing to export", file, len(siblings)+1, model.Name, strings.Join(siblings, ", "))}
+		return nil, nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s is one of %d files of module %s (%s); the JSON form is one document per module and the standard does not say how a module's files are merged, so there is nothing to export", file, len(siblings)+1, model.Name, strings.Join(siblings, ", "))}
 	}
 	var mine []modelspec.Finding
 	for _, f := range res.Findings {
@@ -205,9 +235,19 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 		}
 	}
 	if modelspec.HasErrors(mine) {
-		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting", file)}
+		return nil, nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting", file)}
 	}
-	return model, nil
+	// What was skipped now belongs to other modules, supplied with --module: the model's own
+	// export is whole and stays as it is, but a reference into them was not checked.
+	noted := map[string]bool{}
+	for _, s := range res.Skipped {
+		fmt.Fprintln(env.Stderr, s.Finding)
+		if !noted[s.Module] {
+			noted[s.Module] = true
+			fmt.Fprintf(env.Stderr, "note: module %s was not read whole (see the skipped-file error above), so references into it were not checked\n", s.Module)
+		}
+	}
+	return model, res.Models, nil
 }
 
 func runCheck(env *Env, m *modelspec.Model, jsonFile string, id modelspec.ModuleIdentity) error {
