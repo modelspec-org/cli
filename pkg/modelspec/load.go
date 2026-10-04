@@ -188,6 +188,22 @@ func layoutDir(abs string) (id, dir string, ok bool) {
 	return parts[n-3], strings.Join(parts[:n-1], "/"), true
 }
 
+// isModelsDir reports whether an absolute path is the models directory of a layout
+// module: …/modules/<id>/models.
+func isModelsDir(abs string) bool {
+	_, _, ok := layoutDir(abs + "/x")
+	return ok
+}
+
+// skippedLayout is layoutDir for a skipped path: the models directory a skipped file is
+// in, or the directory itself when that is what was skipped.
+func skippedLayout(abs string) (id, dir string, ok bool) {
+	if id, dir, ok = layoutDir(abs); ok {
+		return id, dir, true
+	}
+	return layoutDir(abs + "/x")
+}
+
 // layoutModule is layoutDir for an HCL file: any .hcl file there is a model of
 // the module, whatever it is called.
 func layoutModule(abs string) (id, dir string, ok bool) {
@@ -283,6 +299,8 @@ func (d *discovery) addPath(p string, anyHCL bool) error {
 		return err
 	}
 	if info.IsDir() {
+		d.seen[abs] = true // a models directory that is a link, named, is not met again as one
+		d.unskip(abs)
 		return d.walk(p, anyHCL)
 	}
 	if !isModel(p, abs, anyHCL) {
@@ -346,11 +364,16 @@ func (d *discovery) warn(file, message string) {
 	}
 }
 
-// skip records a model-named file that a search does not read, once: an error
-// (rule skipped-file), because the run did not check what it was asked to, and a
-// note of the file, whose module is not checked (markIncomplete).
-func (d *discovery) skip(s Source, what string) {
-	message := "is " + what + ", which a search does not read, so this file was not checked and neither is its module; replace it with the file, or name it on the command line"
+// The rest of the message of a skipped-file finding, for a file and for a directory.
+const (
+	notReadFile   = ", which a search does not read, so this file was not checked and neither is its module; replace it with the file, or name it on the command line"
+	notEnteredDir = ", which a search does not follow, so the models in it were not checked and neither is their module; replace it with the directory, or name it on the command line"
+)
+
+// skip records a model-named file, or a models directory, that a search does not read,
+// once: an error (rule skipped-file), because the run did not check what it was asked
+// to, and a note of it, whose module is not checked (markIncomplete).
+func (d *discovery) skip(s Source, message string) {
 	if !d.warned[s.Path+message] {
 		d.warned[s.Path+message] = true
 		f := Finding{File: s.Path, Rule: RuleSkipped, Severity: SeverityError, Message: message}
@@ -383,15 +406,22 @@ func (d *discovery) found(full, name string, anyHCL bool) bool {
 		d.warn(full, "cannot be read, so the file was not checked: "+err.Error())
 		return false
 	}
+	if info.Mode()&fs.ModeSymlink != 0 && !d.seen[abs] && isModelsDir(abs) {
+		// The models directory of a layout module that is a link: a search does not follow it.
+		if target, err := d.fsys.Stat(full); err == nil && target.IsDir() {
+			d.skip(Source{Path: full, Abs: abs}, "is a symbolic link to a directory"+notEnteredDir)
+		}
+		return false
+	}
 	if d.seen[abs] || !isModel(name, abs, anyHCL) {
 		return false // met already (a link named on the command line, then met in its directory)
 	}
 	switch {
 	case info.Mode()&fs.ModeSymlink != 0:
-		d.skip(Source{Path: full, Abs: abs}, "a symbolic link")
+		d.skip(Source{Path: full, Abs: abs}, "is a symbolic link"+notReadFile)
 		return false
 	case !info.Mode().IsRegular():
-		d.skip(Source{Path: full, Abs: abs}, fileKind(info.Mode()))
+		d.skip(Source{Path: full, Abs: abs}, "is "+fileKind(info.Mode())+notReadFile)
 		return false
 	}
 	return d.add(Source{Path: full, Abs: abs}, info)
@@ -584,7 +614,7 @@ func Load(fsys FS, files []Source, assign []Assignment) ([]*Model, []Finding, er
 func markIncomplete(models []*Model, files []Source, skips []SkippedFile, explicit map[string]string) {
 	for k := range skips {
 		s := &skips[k]
-		_, layout, inLayout := layoutDir(s.source.Abs)
+		_, layout, inLayout := skippedLayout(s.source.Abs)
 		stem := strings.TrimSuffix(strings.TrimSuffix(s.source.Abs, HCLSuffix), JSONSuffix)
 		for i, f := range files {
 			_, fileLayout, fileInLayout := layoutDir(f.Abs)
@@ -604,7 +634,7 @@ func skippedModule(s SkippedFile) string {
 	if s.Module != "" {
 		return s.Module
 	}
-	if id, _, ok := layoutDir(s.source.Abs); ok {
+	if id, _, ok := skippedLayout(s.source.Abs); ok {
 		return id
 	}
 	return moduleNameFromFile(s.source.Path)

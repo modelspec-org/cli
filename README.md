@@ -59,12 +59,15 @@ for any `*.hcl`). Hidden directories and `node_modules` are skipped. **A search 
 symbolic link**, to a directory or to a file (a repository can hold a link to `/dev/zero`, or to a
 file outside it, and `lint .` on someone else's branch must not read it): a link that would have
 been a model file is an **error** (rule `skipped-file`, exit 1, under both profiles) that names it,
-and so is a model file that is not a regular file (a named pipe, a device). It is an error, not a
+and so is a model file that is not a regular file (a named pipe, a device), and so is a SpecScore
+models directory (`…/modules/<id>/models`) that is a link to a directory, which is named in the same
+way: the models in it were not searched, so the module `<id>` is not checked (a link to a directory
+anywhere else is passed over, as it has no model files that a search would have looked for). It is an error, not a
 warning, because the run did not check what it was asked to: a warning would let an invalid model
 reached through a link pass, and let `export` write half a module. The module the file belongs to is
 not checked further, so what the missing file would have answered is not reported as an unresolved
 reference; the other modules of the run are checked, and `export` and `export --check` refuse the
-module (exit 1, the finding on standard error). Replace the link with the file, or name it on the
+module (exit 1, the finding on standard error). Replace the link with the file (or the directory), or name it on the
 command line, before or after the directory that holds it, or with a second `--module` for the same
 module: a file that is named is read, whatever else in the run would have skipped it. A file named on
 the command line may be a symbolic link to a regular file and is read through; one that is not a regular file (a device, a pipe, a directory, or
@@ -137,7 +140,9 @@ files, and a reference resolves against the whole module.
 2. **SpecScore layout.** Every `*.hcl` file directly inside `…/modules/<id>/models/` belongs to
    module `<id>`, whatever the files are called. The layout is detected from the path of each
    file as given or found (symbolic links are not resolved first), with no need for the
-   directory to be searched: a single file named on the command line is enough.
+   directory to be searched: a single file named on the command line is enough. A search does
+   not enter a `models` directory that is a symbolic link (it is a `skipped-file` error, see
+   Lint); named on the command line, the link is entered and its files belong to module `<id>`.
 3. **Standalone.** `<name>.modelspec.hcl` is module `<name>` by itself. A JSON file is module
    `module.name`, or its file name without `.modelspec.json` when it has none.
 
@@ -177,7 +182,7 @@ Both forms, on the same typed model:
 | `name-form` | a concept name contains no dot (decision 0014), and no concept, property or field name is empty or blank (nothing could refer to it). Nothing else is required of a name: `Order-Item` is valid |
 | `name-case` | warning: two names of one scope that differ only by case (`User` and `user`; a collision on a case-insensitive store). Not an error, because the standard keeps names case-sensitive |
 | `stale-twin` | warning: a JSON twin is not what its HCL exports to |
-| `skipped-file` | error, both profiles: a search found a model-named file that is not a regular file (a symbolic link, a named pipe, a device) and did not read it. The finding names the path and what it is, and the way out: replace the link with the file, or name it on the command line. The module the file belongs to is not checked at all in that run (no reference, twin or other finding is reported from a partial load, and none from another module into it, whether the module is a layout module, a `--module` assignment or a standalone file that is itself the link), and `export` and `export --check` refuse it; other modules in the run are checked as usual |
+| `skipped-file` | error, both profiles: a search found a model-named file that is not a regular file (a symbolic link, a named pipe, a device), or a SpecScore `models` directory that is a symbolic link to a directory, and did not read it. The finding names the path and what it is, and the way out: replace the link with the file or the directory, or name it on the command line. The module the file belongs to is not checked at all in that run (no reference, twin or other finding is reported from a partial load, and none from another module into it, whether the module is a layout module, a `--module` assignment or a standalone file that is itself the link), and `export` and `export --check` refuse it; other modules in the run are checked as usual |
 | `enum-values` | an enum has at least one value and no repeats, also for an inline `enum = [...]`. Values are strings or integers (decision 0013: an enum constrains a string or an int property) |
 | `unknown-type` | `type` is one of the ModelSpec types |
 | `attribute` | only supported attributes, with values of the right type |

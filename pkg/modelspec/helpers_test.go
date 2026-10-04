@@ -60,10 +60,16 @@ func (m *memFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	return nil
 }
 
+// resolve follows a link: the path itself, or a directory above it that is one.
 func (m *memFS) resolve(name string) string {
 	name = m.path(name)
 	if t, ok := m.links[name]; ok {
 		return t
+	}
+	for link, target := range m.links {
+		if target != "" && strings.HasPrefix(name, link+"/") {
+			return target + strings.TrimPrefix(name, link)
+		}
 	}
 	return name
 }
@@ -166,8 +172,9 @@ func (linkEntry) Type() fs.FileMode { return fs.ModeSymlink }
 func (linkEntry) IsDir() bool       { return false }
 
 func (m *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	resolved := m.resolve(name)
 	name = m.path(name)
-	entries, err := m.MapFS.ReadDir(name)
+	entries, err := m.MapFS.ReadDir(resolved)
 	if err != nil {
 		return nil, err
 	}

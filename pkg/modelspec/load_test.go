@@ -1207,3 +1207,96 @@ func TestPartlyLoadedModulesReportOnlyTheSkippedFile(t *testing.T) {
 		}
 	}
 }
+
+// A models directory that is itself a link is not searched, and says so: an error that
+// names the directory (rule skipped-file, both profiles), with the module of the directory
+// not checked and no reference into it reported, and the way out the same as for a file:
+// naming it on the command line, before or after the directory above it. A link named models
+// elsewhere, one that is not to a directory, and a real directory are not touched.
+func TestAModelsDirectoryThatIsALinkIsAnError(t *testing.T) {
+	t.Parallel()
+	shopModels := layout("shop", "")
+	shopModels = shopModels[:len(shopModels)-1] // spec/graph/modules/shop/models
+	invalid := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	app := "entity \"App\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"shop.Bad\"\n  }\n}\n"
+	tree := func() *memFS {
+		fsys := newMemFS(map[string]string{"elsewhere/shop/bad.hcl": invalid, "app.modelspec.hcl": app, "other.modelspec.hcl": invalid})
+		fsys.MapFS[shopModels] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
+		fsys.links[shopModels] = "elsewhere/shop"
+		return fsys
+	}
+	lint := func(profile Profile, paths ...string) (Result, []string) {
+		res, err := Lint(tree(), paths, LintOptions{Profile: profile})
+		if err != nil {
+			t.Fatalf("%v: %v", paths, err)
+		}
+		var out []string
+		for _, f := range res.Findings {
+			out = append(out, f.String())
+		}
+		return res, out
+	}
+	// Searched: the directory is named by the error, its model is not read, the module is not
+	// reported as unknown to the model that refers into it, and the other model of the run is checked.
+	res, got := lint(ProfileDefault, ".")
+	expect(t, got, shopModels+": error: is a symbolic link to a directory, which a search does not follow", "other.modelspec.hcl:2: error: entity \"Bad\" key")
+	if len(res.Skipped) != 1 || res.Skipped[0].Finding.Rule != RuleSkipped || res.Skipped[0].Finding.File != shopModels {
+		t.Errorf("skipped %+v", res.Skipped)
+	}
+	// An error under the publish profile too.
+	if res, _ := lint(ProfilePublish, "."); len(res.Skipped) != 1 || !HasErrors(res.Findings) {
+		t.Errorf("publish: skipped %d, findings %v", len(res.Skipped), res.Findings)
+	}
+	// Named, before or after the directory above it, the link is entered and its model is read.
+	keyOfBad := layout("shop", "bad.hcl") + ":2: error: entity \"Bad\" key"
+	_, got = lint(ProfileDefault, shopModels)
+	expect(t, got, keyOfBad)
+	for _, paths := range [][]string{{shopModels, "."}, {".", shopModels}} {
+		res, got := lint(ProfileDefault, paths...)
+		expect(t, got, keyOfBad, "other.modelspec.hcl:2: error: entity \"Bad\" key")
+		if len(res.Skipped) != 0 {
+			t.Errorf("%v: %d skipped", paths, len(res.Skipped))
+		}
+	}
+	// Not a models directory, or nothing to search: no finding.
+	quiet := newMemFS(map[string]string{"ok.modelspec.hcl": okEntity, "elsewhere/x.hcl": okEntity, "docs/real/models/ok.modelspec.hcl": okEntity})
+	quiet.MapFS["docs/models"] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
+	quiet.links["docs/models"] = "elsewhere" // named models, but not under modules/<id>
+	quiet.MapFS[layout("a", "")[:len(layout("a", ""))-1]] = &fstest.MapFile{Data: []byte("x")}
+	quiet.links[layout("a", "")[:len(layout("a", ""))-1]] = "ok.modelspec.hcl" // a link to a file
+	quiet.links[layout("b", "")[:len(layout("b", ""))-1]] = ""                 // a dangling one
+	if res, err := Lint(quiet, []string{"."}, LintOptions{}); err != nil || len(res.Findings) != 0 || len(res.Skipped) != 0 {
+		t.Errorf("findings %v, skipped %d, %v", res.Findings, len(res.Skipped), err)
+	}
+}
+
+// On the operating system's file system: a models directory that is a link, searched, and
+// named.
+func TestAModelsDirectoryThatIsALinkOnTheRealFileSystem(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	modules := filepath.Join(dir, "spec", "modules", "shop")
+	for _, d := range []string{real, modules} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(real, "bad.hcl"), []byte("entity \"Bad\" {\n  key = [\"nope\"]\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(modules, "models")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	for _, profile := range []Profile{ProfileDefault, ProfilePublish} {
+		res, err := Lint(OSFS{}, []string{dir}, LintOptions{Profile: profile})
+		if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleSkipped || res.Findings[0].File != link || !strings.Contains(res.Findings[0].Message, "a symbolic link to a directory") {
+			t.Fatalf("%s: findings %v, %v", profile, res.Findings, err)
+		}
+		res, err = Lint(OSFS{}, []string{link, dir}, LintOptions{Profile: profile})
+		if err != nil || len(res.Skipped) != 0 || len(res.Findings) == 0 || res.Findings[0].Rule == RuleSkipped {
+			t.Fatalf("%s, named: findings %v, %v", profile, res.Findings, err)
+		}
+	}
+}
