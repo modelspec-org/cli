@@ -95,10 +95,11 @@ recordset "c" {
     enum     = 5
 `)), []string{`"required" must be true or false`, `"unique" must be true or false, not a number`, `"min_len" must be a non-negative integer`, `"max_len" must be a non-negative integer`, `"pattern" must be a string, not a boolean`, `"format" must be a string, not an array`, `"enum" must be the name of an enum or a list of string or integer values`}},
 		{"unsupported member attribute", entityWith("A2", member("p", "    type = \"int\"\n    bind = \"x\"\n")), []string{`entity "A2" property "p" has unsupported attribute "bind"`}},
-		{"entity without key", "entity \"A\" {\n  property \"id\" {\n    type = \"int\"\n  }\n}\n", []string{`:1: error: entity "A" has no key`}},
+		{"entity without key", "entity \"A\" {\n  property \"id\" {\n    type = \"int\"\n  }\n}\n", nil},
 		{"entity key not a list", "entity \"A\" {\n  key = \"id\"\n  property \"id\" {\n    type = \"int\"\n  }\n}\n", []string{`"key" must be a list of strings`}},
 		{"entity empty key", "entity \"A\" {\n  key = []\n  property \"id\" {\n    type = \"int\"\n  }\n}\n", []string{`:2: error: entity "A" has an empty key`}},
 		{"entity key not a property", "entity \"A\" {\n  key = [\"ghost\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n", []string{`entity "A" key "ghost" is not a property of the entity`}},
+		{"entity key has duplicate properties", "entity \"A\" {\n  key = [\"id\", \"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n", []string{`entity "A" key "id" is duplicated`}},
 		{"entity without properties is fine", "entity \"A\" {\n  key = []\n}\nentity \"B\" {\n  key = [\"x\"]\n}\n", []string{`entity "A" has an empty key`, `entity "B" key "x" is not a property`}},
 		{"key from a used component", `component "C" {
   field "id" {
@@ -535,6 +536,8 @@ func TestPublishProfile(t *testing.T) {
 		want  []string
 	}{
 		{"a model that meets it", map[string]string{"a" + hclExt: good}, nil},
+		{"an entity for a physical heap omits its key", map[string]string{"a" + hclExt: "entity \"HeapRow\" {\n  property \"value\" {\n    type = \"string\"\n  }\n}\n"}, nil},
+		{"JSON entity for a physical heap omits its key", map[string]string{"a.modelspec.json": `{"modelspec":"1.0-draft","module":{"id":"x","name":"a","version":"1"},"entities":{"HeapRow":{"properties":{"value":{"type":"string"}}}}}`}, nil},
 		{"no entities", map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [\"x\"]\n}\n"}, []string{"a.modelspec.hcl:1: error: has no entities; a published model declares at least one entity"}},
 		{"an empty file", map[string]string{"a" + hclExt: ""}, []string{"has no entities; a published"}},
 		{"entities in a sibling file count", map[string]string{layout("m", "a.hcl"): "enum \"E\" {\n  values = [\"x\"]\n}\n", layout("m", "b.hcl"): good}, nil},

@@ -187,7 +187,7 @@ Both forms, on the same typed model:
 | `unknown-type` | `type` is one of the ModelSpec types |
 | `attribute` | only supported attributes, with values of the right type |
 | `member-kind` | an entity property or component field has exactly one of `type`, `entity`, `component` |
-| `key` | an entity has a non-empty `key` naming its properties (or fields of components it uses); a recordset key names its columns |
+| `key` | an entity may omit `key` when the model does not assert record identity; when present, its non-empty list names distinct properties (or fields of components it uses). A recordset key, when present, names its columns |
 | `collection` | `kind` is `editable` or `computed`; a computed collection without a `query` is a warning |
 | `modelspec-version`, `module` | JSON: `"modelspec"` is `"1.0-draft"`; `module.id` and `module.version` are present (`module.name` is optional) |
 | `unknown-field` | JSON: a top-level field the format does not define is a warning (`$schema` is accepted; the format is silent on other fields) |
@@ -502,8 +502,8 @@ number is not the manifest's):
 
 The test asserts that `modelspec lint` refuses everything they refuse, except where the manifest
 names the difference and its reason, and that every recorded difference is real. In the other
-direction `modelspec lint` is deliberately stricter in places (for example it requires entity keys
-and checks types); the manifest says so item by item. To refresh the golden files (needs Node,
+direction `modelspec lint` is deliberately stricter in places (for example it checks types); the
+manifest says so item by item. To refresh the golden files (needs Node,
 `git`, and `specscore` on `PATH` or `SPECSCORE=...`; the Directory clone must be at a commit on its
 `main`):
 

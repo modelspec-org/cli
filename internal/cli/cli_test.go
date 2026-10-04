@@ -157,6 +157,7 @@ const goodHCL = `entity "A" {
 `
 
 const badHCL = `entity "A" {
+  key = []
   property "id" {
     type = "int"
   }
@@ -218,7 +219,7 @@ func TestLintText(t *testing.T) {
 		wantErr  string // a substring of standard error
 	}{
 		{"clean default path", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
-		{"findings", map[string]string{"a.modelspec.hcl": badHCL, "b.modelspec.hcl": goodHCL}, []string{"lint", "."}, 1, "a.modelspec.hcl:1: error: entity \"A\" has no key (a list of the properties that identify a record) [key]\nfailed: 2 files checked, 1 error, 0 warnings\n", ""},
+		{"findings", map[string]string{"a.modelspec.hcl": badHCL, "b.modelspec.hcl": goodHCL}, []string{"lint", "."}, 1, "a.modelspec.hcl:2: error: entity \"A\" has an empty key [key]\nfailed: 2 files checked, 1 error, 0 warnings\n", ""},
 		{"warnings only", map[string]string{"a.modelspec.hcl": warnHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "a.modelspec.hcl:2: warning: collection \"c\" is computed but carries no query (computed collections should) [collection]\nok: 1 file checked, 0 errors, 1 warning\n", ""},
 		{"explicit files", map[string]string{"a.modelspec.hcl": goodHCL, "b.modelspec.hcl": badHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
 		{"a component property is fine by default", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
@@ -378,7 +379,7 @@ func TestLintJSON(t *testing.T) {
 	if err := json.Unmarshal(h.out.Bytes(), &rep); err != nil {
 		t.Fatal(err)
 	}
-	if rep.Errors != 1 || rep.Warnings != 1 || len(rep.Findings) != 2 || rep.Findings[0]["file"] != "a.modelspec.hcl" || rep.Findings[0]["rule"] != "key" || rep.Findings[0]["severity"] != "error" || rep.Findings[0]["line"] != float64(1) {
+	if rep.Errors != 1 || rep.Warnings != 1 || len(rep.Findings) != 2 || rep.Findings[0]["file"] != "a.modelspec.hcl" || rep.Findings[0]["rule"] != "key" || rep.Findings[0]["severity"] != "error" || rep.Findings[0]["line"] != float64(2) {
 		t.Fatalf("report = %s", h.out)
 	}
 }
@@ -504,6 +505,20 @@ func TestExport(t *testing.T) {
 	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 0 || h.out.String() != "ok: a.modelspec.json is what a.modelspec.hcl exports to\n" {
 		t.Fatalf("check: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
 	}
+
+	keyless := "entity \"HeapRow\" {\n  property \"value\" {\n    type = \"string\"\n  }\n}\n"
+	h = newHarness(map[string]string{"heap.modelspec.hcl": keyless})
+	if code := h.run(append([]string{"export", "heap.modelspec.hcl"}, exportID...)...); code != 0 {
+		t.Fatalf("export keyless entity: exit %d, stderr %s", code, h.errb)
+	}
+	var exported map[string]any
+	if err := json.Unmarshal(h.out.Bytes(), &exported); err != nil {
+		t.Fatal(err)
+	}
+	entities := exported["entities"].(map[string]any)
+	if _, hasKey := entities["HeapRow"].(map[string]any)["key"]; hasKey {
+		t.Fatalf("keyless entity export invented a key: %s", h.out)
+	}
 }
 
 func TestExportLintsFirst(t *testing.T) {
@@ -513,7 +528,7 @@ func TestExportLintsFirst(t *testing.T) {
 	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "o.json"}, exportID...)...); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
-	if !strings.Contains(h.errb.String(), `a.modelspec.hcl:1: error: entity "A" has no key`) || !strings.Contains(h.errb.String(), "has errors; fix them") || h.out.Len() != 0 || len(h.fsys.written) != 0 {
+	if !strings.Contains(h.errb.String(), `a.modelspec.hcl:2: error: entity "A" has an empty key`) || !strings.Contains(h.errb.String(), "has errors; fix them") || h.out.Len() != 0 || len(h.fsys.written) != 0 {
 		t.Fatalf("stderr %q stdout %q written %v", h.errb, h.out, h.fsys.written)
 	}
 	// --check refuses an invalid model as well: a check must not pass on one.
