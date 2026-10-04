@@ -54,7 +54,13 @@ type Finding struct {
 	Rule     string   `json:"rule"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
+	// cut is set on the finding that says how many others a full list did not keep:
+	// when a later list drops that finding too, it counts for all of them.
+	cut cutCount
 }
+
+// cutCount is what a cut list left out: findings, of them errors, of them skipped files.
+type cutCount struct{ n, errors, skipped int }
 
 // String formats a finding as "file:line: severity: message [rule]".
 func (f Finding) String() string {
@@ -162,12 +168,19 @@ func (l *findingList) put(f Finding) {
 	if l.count == 0 {
 		l.droppedFile = f.File
 	}
-	l.count++
-	if f.Severity == SeverityError {
-		l.errors++
-	}
-	if f.Rule == RuleSkipped {
-		l.skipped++
+	switch {
+	case f.cut.n > 0: // the line that counts a cut list: it stands for the findings that list left out
+		l.count += f.cut.n
+		l.errors += f.cut.errors
+		l.skipped += f.cut.skipped
+	default:
+		l.count++
+		if f.Severity == SeverityError {
+			l.errors++
+		}
+		if f.Rule == RuleSkipped {
+			l.skipped++
+		}
 	}
 }
 
@@ -186,14 +199,15 @@ func (l *findingList) result() []Finding {
 	if l.skipped > 0 {
 		message += fmt.Sprintf("; %d of them are skipped-file errors: model files that were not read, and their modules were not checked", l.skipped)
 	}
-	return append(l.list, Finding{File: l.droppedFile, Rule: RuleLimit, Severity: severity, Message: message})
+	return append(l.list, Finding{File: l.droppedFile, Rule: RuleLimit, Severity: severity, Message: message, cut: cutCount{l.count, l.errors, l.skipped}})
 }
 
 // capFindings applies the limit to a whole run's findings, sorted: the first
 // MaxFindings are kept, and a finding says how many others there were. A list of
 // one more than the limit is what one cut reader or check gives (the findings and
 // the one that counts the rest), and is left as it is. When several files add up
-// to more, a finding that already stands for a cut list counts as one.
+// to more, a finding that already stands for a cut list counts for all that list
+// left out, whether it is dropped or another finding takes its place.
 func capFindings(fs []Finding) []Finding {
 	if len(fs) <= MaxFindings+1 {
 		return fs
