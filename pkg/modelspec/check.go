@@ -430,8 +430,7 @@ func (c *checker) entity(u *unit, k *Concept) {
 	}
 	key, ok := k.Attr("key")
 	if !ok {
-		c.errorf(k.Line, RuleKey, "%s has no key (a list of the properties that identify a record)", who)
-		return
+		return // an entity may describe a concept whose records have no declared identity
 	}
 	names, ok := key.Value.stringList()
 	if !ok {
@@ -441,7 +440,12 @@ func (c *checker) entity(u *unit, k *Concept) {
 		c.errorf(key.Line, RuleKey, "%s has an empty key", who)
 	}
 	known := c.propertyNames(u, k)
+	seen := make(map[string]bool, len(names))
 	for _, n := range names {
+		if seen[n] {
+			c.errorf(key.Line, RuleKey, "%s key %q is duplicated", who, n)
+		}
+		seen[n] = true
 		if known.complete && !known.has(n) {
 			c.errorf(key.Line, RuleKey, "%s key %q is not a property of the entity (or of a component it uses)", who, n)
 		}

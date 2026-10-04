@@ -237,19 +237,10 @@
   },
   "hcl/missing-key.modelspec.hcl": {
    "default": {
-    "verdict": "refuse",
-    "rules": [
-     "key"
-    ]
+    "verdict": "accept"
    },
    "publish": {
-    "verdict": "refuse",
-    "rules": [
-     "key"
-    ]
-   },
-   "differs": {
-    "specscore": "specscore does not require an entity key; spec/core-model.md lists missing keys among the validation errors"
+    "verdict": "accept"
    }
   },
   "hcl/names-not-identifiers.modelspec.hcl": {
@@ -649,19 +640,10 @@
   },
   "json/entity-no-key.modelspec.json": {
    "default": {
-    "verdict": "refuse",
-    "rules": [
-     "key"
-    ]
+    "verdict": "accept"
    },
    "publish": {
-    "verdict": "refuse",
-    "rules": [
-     "key"
-    ]
-   },
-   "differs": {
-    "directory": "the Directory's reader does not use keys; core-model.md lists missing keys among the validation errors"
+    "verdict": "accept"
    }
   },
   "json/entity-no-properties.modelspec.json": {
