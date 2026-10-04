@@ -134,6 +134,11 @@ type Model struct {
 	// Broken is set when the source could not be read into a model; Check skips
 	// it and does not report references into its module.
 	Broken bool
+	// Incomplete is set when a file of the model's module was found by a search
+	// and not read (a link, a pipe, a device: rule skipped-file). Check does not
+	// check an incomplete module: a partial load would report what is missing as
+	// unresolved references.
+	Incomplete bool
 }
 
 // HasConcept reports whether the model declares a concept of the kind with the

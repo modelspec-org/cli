@@ -154,7 +154,7 @@ func runCheck(models []*Model, opts Options) *checker {
 			c.byName[m.Name] = append(c.byName[m.Name], u)
 		}
 		u.models = append(u.models, m)
-		u.broken = u.broken || m.Broken
+		u.broken = u.broken || m.Broken || m.Incomplete
 	}
 	for _, u := range order {
 		c.unit(u)
@@ -215,6 +215,11 @@ func conceptScope(k Kind) string {
 func quote1(s string) string { return fmt.Sprintf("%q", clipText(s, MaxEchoBytes)) }
 
 func (c *checker) unit(u *unit) {
+	for _, m := range u.models {
+		if m.Incomplete {
+			return // a file of the module was not read: nothing can be said of the rest
+		}
+	}
 	c.duplicates(u)
 	for _, m := range u.models {
 		if m.Broken {

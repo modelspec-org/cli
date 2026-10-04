@@ -184,11 +184,11 @@ func TestDiscoverSymlinks(t *testing.T) {
 	if paths(got) != "dir/keep.modelspec.hcl real/a.modelspec.hcl" {
 		t.Fatalf("files = %v", paths(got))
 	}
-	if len(warnings) != 2 || warnings[0].File != "dangling.modelspec.hcl" || warnings[1].File != "link.modelspec.hcl" || warnings[0].Severity != SeverityWarning {
+	if len(warnings) != 2 || warnings[0].File != "dangling.modelspec.hcl" || warnings[1].File != "link.modelspec.hcl" || warnings[0].Severity != SeverityError {
 		t.Fatalf("warnings = %v", warnings)
 	}
 	for _, w := range warnings {
-		if !strings.Contains(w.Message, "is a symbolic link, which a search does not follow") || w.Rule != RuleIO {
+		if !strings.Contains(w.Message, "is a symbolic link, which a search does not read") || w.Rule != RuleSkipped {
 			t.Errorf("warning = %v", w)
 		}
 	}
@@ -221,7 +221,7 @@ func TestLayoutIsReadFromTheGivenPath(t *testing.T) {
 	// warning names it, and the module is checked without it.
 	fsys.links[layout("sales", "enums.hcl")] = "shared/enums.hcl"
 	fsys.MapFS[layout("sales", "enums.hcl")] = fsys.MapFS["shared/enums.hcl"]
-	expect(t, lintTree(fsys, "spec"), "enums.hcl: warning: is a symbolic link", `enum reference "Status" does not resolve`)
+	expect(t, lintTree(fsys, "spec"), "enums.hcl: error: is a symbolic link") // and no reference error from a module read in part
 	// Named, the link has a model name and the same module as its siblings.
 	linked := newMemFS(map[string]string{
 		layout("sales", "entities.hcl"): order,
@@ -229,7 +229,7 @@ func TestLayoutIsReadFromTheGivenPath(t *testing.T) {
 	})
 	linked.links[layout("sales", "enums.modelspec.hcl")] = "shared/enums.modelspec.hcl"
 	linked.MapFS[layout("sales", "enums.modelspec.hcl")] = linked.MapFS["shared/enums.modelspec.hcl"]
-	expect(t, lintTree(linked, "spec"), "enums.modelspec.hcl: warning: is a symbolic link", `enum reference "Status" does not resolve`)
+	expect(t, lintTree(linked, "spec"), "enums.modelspec.hcl: error: is a symbolic link")
 	// Given by name, a link is read through, and is part of its module.
 	res, err := Lint(linked, []string{layout("sales", "entities.hcl"), layout("sales", "enums.modelspec.hcl")}, LintOptions{})
 	if err != nil || len(res.Findings) != 0 {
@@ -611,7 +611,7 @@ func TestLint(t *testing.T) {
 	// Warnings from an assigned directory are kept.
 	fsys.links["ctx/dead.hcl"] = ""
 	res, err = Lint(fsys, nil, LintOptions{Modules: []Assignment{{Module: "core", Path: "ctx"}}})
-	if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleIO {
+	if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleSkipped || res.Findings[0].Severity != SeverityError {
 		t.Fatalf("assigned directory with a dead link: %v %v", res.Findings, err)
 	}
 }
@@ -689,7 +689,7 @@ func TestOSFS(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err = Lint(fsys, []string{dir}, LintOptions{})
-	if err != nil || res.Files != 2 || len(res.Findings) != 2 || res.Findings[0].Rule != RuleIO || res.Findings[1].Rule != RuleIO {
+	if err != nil || res.Files != 2 || len(res.Findings) != 2 || res.Findings[0].Rule != RuleSkipped || res.Findings[1].Rule != RuleSkipped {
 		t.Fatalf("Lint with a dangling link, the alias and a directory link = %d files, %v, %v", res.Files, res.Findings, err)
 	}
 	var pathErr *fs.PathError
@@ -850,7 +850,7 @@ func TestSearchDoesNotReadLinksPipesOrDevices(t *testing.T) {
 	}
 	var warned []string
 	for _, f := range res.Findings {
-		if f.Severity != SeverityWarning || f.Rule != RuleIO {
+		if f.Severity != SeverityError || f.Rule != RuleSkipped {
 			t.Errorf("finding %v", f)
 		}
 		warned = append(warned, f.File+" "+f.Message[:strings.Index(f.Message, ",")])
@@ -918,5 +918,151 @@ func TestFileThatGrewIsAFinding(t *testing.T) {
 	res, err := Lint(fsys, []string{"."}, LintOptions{})
 	if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleLimit || res.Findings[0].Message != "file is more than 1048576 bytes; the limit is 1048576 bytes" {
 		t.Fatalf("findings %v, %v", res.Findings, err)
+	}
+}
+
+// skippedKinds make a model-named file, p, that a search finds and does not read: a link
+// to a regular file, a dangling link, a named pipe, a device.
+var skippedKinds = map[string]func(fsys *memFS, p, content string){
+	"a link to a regular file": func(fsys *memFS, p, content string) {
+		fsys.MapFS["elsewhere/"+filepath.Base(p)] = &fstest.MapFile{Data: []byte(content)}
+		fsys.links[p] = "elsewhere/" + filepath.Base(p)
+		fsys.MapFS[p] = fsys.MapFS["elsewhere/"+filepath.Base(p)]
+	},
+	"a dangling link": func(fsys *memFS, p, content string) { fsys.links[p] = "" },
+	"a named pipe": func(fsys *memFS, p, content string) {
+		fsys.MapFS[p] = &fstest.MapFile{Data: []byte(content)}
+		fsys.modes[p] = fs.ModeNamedPipe
+	},
+	"a device": func(fsys *memFS, p, content string) {
+		fsys.MapFS[p] = &fstest.MapFile{Data: []byte(content)}
+		fsys.modes[p] = fs.ModeDevice | fs.ModeCharDevice
+	},
+}
+
+// A model file that a search finds and does not read is an error under both
+// profiles, with a rule of its own, and its module is not checked in part: no
+// finding of what the read files lack, and none that the missing file would have
+// answered. Three sequences of a review: a valid module whose sibling is such a file is
+// refused for that and not for an unresolved reference; an invalid model reached
+// through one is not green; a JSON twin that is one is not passed over.
+func TestSkippedModelFileIsAnErrorAndItsModuleIsNotCheckedInPart(t *testing.T) {
+	t.Parallel()
+	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	invalid := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	for kind, make := range skippedKinds {
+		for _, profile := range []Profile{ProfileDefault, ProfilePublish} {
+			lint := func(fsys *memFS, paths ...string) []string {
+				res, err := Lint(fsys, paths, LintOptions{Profile: profile})
+				if err != nil {
+					t.Fatalf("%s: %v", kind, err)
+				}
+				var out []string
+				for _, f := range res.Findings {
+					out = append(out, f.String())
+				}
+				return out
+			}
+			want := func(path string) string { return path + ": error: is " }
+			// 1 and 3: the sibling of a layout module's file.
+			shop := func() *memFS {
+				fsys := newMemFS(map[string]string{layout("shop", "order.hcl"): order, "other.modelspec.hcl": "entity \"Other\" {\n  key = [\"nope\"]\n}\n"})
+				make(fsys, layout("shop", "customer.hcl"), customer)
+				return fsys
+			}
+			for _, paths := range [][]string{{"."}, {filepath.Dir(layout("shop", "x"))}, {layout("shop", "order.hcl")}} {
+				got := lint(shop(), paths...)
+				found := false
+				for _, g := range got {
+					switch {
+					case strings.Contains(g, want(layout("shop", "customer.hcl"))) && strings.Contains(g, "[skipped-file]"):
+						found = true
+					case strings.Contains(g, "does not resolve"):
+						t.Errorf("%s, %v, %s: a reference error from a module read in part: %s", kind, paths, profile, g)
+					case strings.Contains(g, "other.modelspec.hcl") && paths[0] == ".":
+						// another module of the run is still checked
+					default:
+						t.Errorf("%s, %v, %s: unexpected finding %s", kind, paths, profile, g)
+					}
+				}
+				if !found {
+					t.Errorf("%s, %v, %s: no skipped-file error: %v", kind, paths, profile, got)
+				}
+				if paths[0] == "." && !strings.Contains(strings.Join(got, "\n"), "other.modelspec.hcl:2: error: entity \"Other\" key") {
+					t.Errorf("%s, %s: the other module of the run was not checked: %v", kind, profile, got)
+				}
+			}
+			// 2: an invalid model reached through one, alone in its module, is not green; and the
+			// module's own real files are not checked in part either.
+			bad := newMemFS(map[string]string{"models/note.txt": ""})
+			make(bad, "models/bad.modelspec.hcl", invalid)
+			if got := lint(bad, "models"); len(got) != 1 || !strings.Contains(got[0], "models/bad.modelspec.hcl: error: is ") || !strings.Contains(got[0], "[skipped-file]") {
+				t.Errorf("%s, %s: an invalid model behind it: %v", kind, profile, got)
+			}
+			// A JSON twin that is one: the HCL beside it is not reported as stale or as lacking its twin.
+			twin := newMemFS(map[string]string{"models/a.modelspec.hcl": customer})
+			make(twin, "models/a.modelspec.json", "{}")
+			if got := lint(twin, "models"); len(got) != 1 || !strings.Contains(got[0], "models/a.modelspec.json: error: is ") {
+				t.Errorf("%s, %s: a JSON twin behind it: %v", kind, profile, got)
+			}
+			// Only the HCL file is named: its twin is met beside it, and is not passed over.
+			if got := lint(twin, "models/a.modelspec.hcl"); len(got) != 1 || !strings.Contains(got[0], "models/a.modelspec.json: error: is ") {
+				t.Errorf("%s, %s: a JSON twin behind it, the HCL named: %v", kind, profile, got)
+			}
+		}
+	}
+}
+
+// A model file that is one is not a reason for the run to stop: given by name it is read when it
+// resolves to a regular file, and --module assignments carry the same rule.
+func TestSkippedFileOfAnAssignedModule(t *testing.T) {
+	t.Parallel()
+	fsys := newMemFS(map[string]string{
+		"a.modelspec.hcl": "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"core.X\"\n  }\n}\n",
+		"ctx/x.hcl":       "entity \"X\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n",
+	})
+	skippedKinds["a named pipe"](fsys, "ctx/y.hcl", "entity \"Y\" {}\n")
+	res, err := Lint(fsys, []string{"a.modelspec.hcl"}, LintOptions{Modules: []Assignment{{Module: "core", Path: "ctx"}}})
+	if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleSkipped || res.Findings[0].File != "ctx/y.hcl" {
+		t.Fatalf("findings %v, %v", res.Findings, err)
+	}
+	for _, m := range res.Models {
+		if m.File == "ctx/x.hcl" && !m.Incomplete || m.File == "a.modelspec.hcl" && m.Incomplete {
+			t.Errorf("%s: incomplete = %v", m.File, m.Incomplete)
+		}
+	}
+}
+
+// On the operating system's own file system: the sibling of a layout module's file that
+// is a symbolic link to a regular file is an error and the module is not checked in part.
+func TestSkippedLinkOnTheRealFileSystem(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	models := filepath.Join(dir, "spec", "modules", "shop", "models")
+	if err := os.MkdirAll(models, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	real := filepath.Join(dir, "customer-real.hcl")
+	for path, content := range map[string]string{filepath.Join(models, "order.hcl"): order, real: customer} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(models, "customer.hcl")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	for _, profile := range []Profile{ProfileDefault, ProfilePublish} {
+		res, err := Lint(OSFS{}, []string{filepath.Join(models, "order.hcl")}, LintOptions{Profile: profile})
+		if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleSkipped || res.Findings[0].File != link || !HasErrors(res.Findings) {
+			t.Fatalf("%s: findings %v, %v", profile, res.Findings, err)
+		}
+	}
+	// Named, the link is read through, and the module is whole.
+	if res, err := Lint(OSFS{}, []string{filepath.Join(models, "order.hcl"), link}, LintOptions{}); err != nil || len(res.Findings) != 0 {
+		t.Fatalf("named: findings %v, %v", res.Findings, err)
 	}
 }

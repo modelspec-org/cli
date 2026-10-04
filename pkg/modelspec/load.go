@@ -60,9 +60,15 @@ func (e *NotRegularError) Error() string {
 	return fmt.Sprintf("%s is %s, not a regular file; modelspec reads regular files only", e.File, e.What)
 }
 
+// FileKind says what a file that is not a regular file is: "a directory", "a named
+// pipe", "a symbolic link", "a character device".
+func FileKind(mode fs.FileMode) string { return fileKind(mode) }
+
 // fileKind says what a file that is not a regular file is.
 func fileKind(mode fs.FileMode) string {
 	switch {
+	case mode&fs.ModeSymlink != 0:
+		return "a symbolic link"
 	case mode.IsDir():
 		return "a directory"
 	case mode&fs.ModeNamedPipe != 0:
@@ -212,6 +218,15 @@ type discovery struct {
 	infos    map[string][]fs.FileInfo // by size and time: candidates for SameFile
 	out      []Source
 	findings []Finding
+	skipped  []skipped // files met and not read, see skip
+	module   string    // the module being assigned (--module), while its path is searched
+}
+
+// skipped is a file a search did not read, and the module a --module assignment
+// gave it ("" when it was not found through one).
+type skipped struct {
+	Source
+	module string
 }
 
 func newDiscovery(fsys FS) *discovery {
@@ -305,6 +320,18 @@ func (d *discovery) warn(file, message string) {
 	}
 }
 
+// skip records a model-named file that a search does not read, once: an error
+// (rule skipped-file), because the run did not check what it was asked to, and a
+// note of the file, whose module is not checked (markIncomplete).
+func (d *discovery) skip(s Source, what string) {
+	message := "is " + what + ", which a search does not read, so this file was not checked and neither is its module; replace it with the file, or name it on the command line"
+	if !d.warned[s.Path+message] {
+		d.warned[s.Path+message] = true
+		d.findings = append(d.findings, Finding{File: s.Path, Rule: RuleSkipped, Severity: SeverityError, Message: message})
+		d.skipped = append(d.skipped, skipped{Source: s, module: d.module})
+	}
+}
+
 // found adds a file a search met when it is a model file; a file that cannot be
 // read is a warning, not the end of the run. A search does not follow symbolic
 // links: a link that would have been a model file is a warning that names it
@@ -326,10 +353,10 @@ func (d *discovery) found(full, name string, anyHCL bool) bool {
 	}
 	switch {
 	case info.Mode()&fs.ModeSymlink != 0:
-		d.warn(full, "is a symbolic link, which a search does not follow, so the file was not checked (name the file itself to check what it points to)")
+		d.skip(Source{Path: full, Abs: abs}, "a symbolic link")
 		return false
 	case !info.Mode().IsRegular():
-		d.warn(full, "is "+fileKind(info.Mode())+", not a regular file, so the file was not checked")
+		d.skip(Source{Path: full, Abs: abs}, fileKind(info.Mode()))
 		return false
 	}
 	return d.add(Source{Path: full, Abs: abs}, info)
@@ -514,6 +541,24 @@ func Load(fsys FS, files []Source, assign []Assignment) ([]*Model, []Finding, er
 	return models, findings, nil
 }
 
+// markIncomplete marks the models of every module that has a skipped file: the
+// files of the models directory of a layout module (the skipped one is in it), the
+// other form of X.modelspec.hcl and X.modelspec.json, and the files assigned to
+// the same module with --module. models[i] was read from files[i].
+func markIncomplete(models []*Model, files []Source, skips []skipped, explicit map[string]string) {
+	for _, s := range skips {
+		_, layout, inLayout := layoutDir(s.Abs)
+		stem := strings.TrimSuffix(strings.TrimSuffix(s.Abs, HCLSuffix), JSONSuffix)
+		for i, f := range files {
+			_, fileLayout, fileInLayout := layoutDir(f.Abs)
+			sameStem := (strings.HasSuffix(f.Abs, HCLSuffix) || strings.HasSuffix(f.Abs, JSONSuffix)) && strings.TrimSuffix(strings.TrimSuffix(f.Abs, HCLSuffix), JSONSuffix) == stem
+			if sameStem || (inLayout && fileInLayout && fileLayout == layout) || (s.module != "" && explicit[f.Abs] == s.module) {
+				models[i].Incomplete = true
+			}
+		}
+	}
+}
+
 // explicitModules reads the --module assignments: the absolute path of every
 // assigned file and the module it is assigned to. A file assigned to two
 // different modules is an error, and so is assigning part of a layout module's
@@ -580,11 +625,13 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 		}
 	}
 	for _, a := range opts.Modules {
+		d.module = a.Module
 		if err := d.addPath(a.Path, true); err != nil {
 			return res, err
 		}
 	}
-	if len(d.out) == 0 {
+	d.module = ""
+	if len(d.out) == 0 && len(d.skipped) == 0 {
 		return res, errors.New("no ModelSpec files (" + HCLSuffix + ", " + JSONSuffix + ") found in " + strings.Join(paths, ", "))
 	}
 	if res.Notes, err = d.expand(); err != nil {
@@ -594,6 +641,10 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	models, parse, err := Load(fsys, sources, opts.Modules)
 	if err != nil {
 		return res, err
+	}
+	if len(d.skipped) > 0 {
+		explicit, _ := explicitModules(fsys, opts.Modules) // Load has just read them without error
+		markIncomplete(models, sources, d.skipped, explicit)
 	}
 	res.Models = models
 	res.Files = len(sources)

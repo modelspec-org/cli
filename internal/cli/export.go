@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -75,6 +76,11 @@ their JSON form.`,
 			if err != nil {
 				return &exitError{code: ExitUsage, err: err}
 			}
+			if out != "" {
+				if err := checkOutput(env.FS, out); err != nil {
+					return err
+				}
+			}
 			m, err := lintForExport(env, args[0], assign)
 			if err != nil {
 				return err
@@ -110,6 +116,24 @@ their JSON form.`,
 	return cmd
 }
 
+// checkOutput refuses an output path that exists and is not a regular file, without
+// following a link: --out writes a file, and a link would send the write to whatever it
+// points to, a pipe would wait for a reader, and a device would take it. A path that
+// does not exist, and a regular file that is overwritten, are as they were.
+func checkOutput(fsys modelspec.FS, out string) error {
+	info, err := fsys.Lstat(out)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return ioError(err)
+	}
+	if !info.Mode().IsRegular() {
+		return ioError(fmt.Errorf("%s is %s, not a regular file; --out writes regular files only (to write elsewhere, leave --out out and redirect standard output)", out, modelspec.FileKind(info.Mode())))
+	}
+	return nil
+}
+
 func ioErrorOrNil(err error) error {
 	if err != nil {
 		return ioError(err)
@@ -142,6 +166,18 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 	}
 	if model.Form != modelspec.FormHCL {
 		return nil, usageErrorf("%s: export reads HCL files, and this is the JSON form", file)
+	}
+	// Export writes whole modules: a file of the module that a search met and did not
+	// read (a link, a pipe, a device) makes what was read a part of it.
+	var skippedFiles []string
+	for _, f := range res.Findings {
+		if f.Rule == modelspec.RuleSkipped {
+			fmt.Fprintln(env.Stderr, f)
+			skippedFiles = append(skippedFiles, f.File)
+		}
+	}
+	if len(skippedFiles) > 0 {
+		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s: %d file(s) of the module were found and not read (%s), so what was read is not the whole module; export writes and checks whole modules only. Replace the link with the file, or name it on the command line", file, len(skippedFiles), strings.Join(skippedFiles, ", "))}
 	}
 	var siblings []string
 	for _, m := range res.Models {

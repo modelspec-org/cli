@@ -35,6 +35,7 @@ const (
 	RuleCollection = "collection"
 	RuleUnknown    = "unknown-field" // a top-level JSON field the format does not define
 	RuleIO         = "unreadable"    // a file found by a directory search that cannot be read
+	RuleSkipped    = "skipped-file"  // a model-named link, pipe or device a search does not read: an error, and its module is not checked
 	RuleStaleTwin  = "stale-twin"    // a JSON twin that is not what its HCL exports to
 	RuleNameCase   = "name-case"     // names in one scope that differ only by case
 

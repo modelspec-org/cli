@@ -27,6 +27,7 @@ type memFS struct {
 	listErr  error // makes ReadDir of a directory that has models in it fail
 	reads    []string
 	special  map[string]fs.FileMode // files that are not regular: a device, a pipe
+	lstatErr map[string]error       // paths that cannot be asked about
 }
 
 // endless is a file that never ends: what a device is.
@@ -45,7 +46,16 @@ func (m *memFS) Open(name string) (fs.File, error) {
 	return m.MapFS.Open(strings.TrimPrefix(filepath.Clean(name), "/"))
 }
 
-func (m *memFS) Lstat(name string) (fs.FileInfo, error) { return m.Stat(name) }
+func (m *memFS) Lstat(name string) (fs.FileInfo, error) {
+	if err, ok := m.lstatErr[filepath.Clean(name)]; ok {
+		return nil, err
+	}
+	info, err := fs.Lstat(m.MapFS, strings.TrimPrefix(filepath.Clean(name), "/"))
+	if err != nil {
+		return nil, err
+	}
+	return pathInfo{info, filepath.Clean(name), m.special[filepath.Clean(name)]}, nil
+}
 
 func (m *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if m.listErr != nil && strings.HasSuffix(filepath.ToSlash(name), "/models") {
@@ -989,5 +999,102 @@ func TestExportCheckCutsItsMessage(t *testing.T) {
 	code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json")
 	if code != 1 || h.errb.Len() > modelspec.MaxMessageBytes+200 || !strings.Contains(h.errb.String(), "bytes in all]") {
 		t.Fatalf("exit %d, %d bytes of stderr: %.300s", code, h.errb.Len(), h.errb)
+	}
+}
+
+// A model file that a search does not read (a link, a pipe, a device) is an error at
+// the CLI under both profiles, and export and export --check will not write or approve
+// the part of its module that was read. Three sequences of a review, for each kind.
+func TestSkippedModelFileAtTheCLI(t *testing.T) {
+	t.Parallel()
+	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	invalid := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	const dir = "spec/modules/shop/models/"
+	kinds := map[string]func(h *harness, p, content string){
+		"a link to a regular file": func(h *harness, p, content string) {
+			h.fsys.MapFS["real/"+filepath.Base(p)] = &fstest.MapFile{Data: []byte(content)}
+			h.fsys.MapFS[p] = &fstest.MapFile{Data: []byte("../../../../real/" + filepath.Base(p)), Mode: fs.ModeSymlink}
+		},
+		"a dangling link": func(h *harness, p, content string) {
+			h.fsys.MapFS[p] = &fstest.MapFile{Data: []byte("nowhere"), Mode: fs.ModeSymlink}
+		},
+		"a named pipe": func(h *harness, p, content string) {
+			h.fsys.MapFS[p] = &fstest.MapFile{Data: []byte(content)}
+			h.fsys.special = map[string]fs.FileMode{p: fs.ModeNamedPipe}
+		},
+		"a device": func(h *harness, p, content string) {
+			h.fsys.MapFS[p] = &fstest.MapFile{Data: []byte(content)}
+			h.fsys.special = map[string]fs.FileMode{p: fs.ModeDevice | fs.ModeCharDevice}
+		},
+	}
+	for kind, make := range kinds {
+		shop := func() *harness {
+			h := newHarness(map[string]string{dir + "order.hcl": order})
+			make(h, dir+"customer.hcl", customer)
+			return h
+		}
+		// 1: export writes nothing and approves nothing, and says why.
+		h := shop()
+		if code := h.run(append([]string{"export", dir + "order.hcl", "--out", "o.json"}, exportID...)...); code != 1 || len(h.fsys.written) != 0 || h.out.Len() != 0 || !strings.Contains(h.errb.String(), "[skipped-file]") || !strings.Contains(h.errb.String(), "not the whole module") {
+			t.Errorf("%s: export: exit %d, written %d, stdout %q, stderr %q", kind, code, len(h.fsys.written), h.out, h.errb)
+		}
+		h = shop()
+		h.fsys.MapFS["a.json"] = &fstest.MapFile{Data: []byte("{}")}
+		if code := h.run("export", "--check", dir+"order.hcl", "a.json"); code != 1 || strings.Contains(h.out.String(), "ok:") || !strings.Contains(h.errb.String(), "[skipped-file]") {
+			t.Errorf("%s: export --check: exit %d, stdout %q, stderr %q", kind, code, h.out, h.errb)
+		}
+		for _, profile := range []string{"default", "publish"} {
+			// 3: a valid module is refused for the file, not for a reference that file answers.
+			h = shop()
+			code := h.run("lint", "--profile", profile, dir+"order.hcl")
+			if code != 1 || strings.Contains(h.errb.String()+h.out.String(), "does not resolve") || !strings.Contains(h.out.String(), "[skipped-file]") {
+				t.Errorf("%s, %s: lint of the module: exit %d, %q %q", kind, profile, code, h.out, h.errb)
+			}
+			// 2: an invalid model reached through one is not green.
+			h = newHarness(map[string]string{"models/note.txt": ""})
+			make(h, "models/bad.modelspec.hcl", invalid)
+			if code := h.run("lint", "--profile", profile, "models"); code != 1 || !strings.Contains(h.out.String(), "models/bad.modelspec.hcl: error: is ") {
+				t.Errorf("%s, %s: lint of a model behind one: exit %d, %q %q", kind, profile, code, h.out, h.errb)
+			}
+		}
+	}
+}
+
+// --out writes a regular file: a path that exists and is not one (a link, a pipe, a
+// device, a directory) is refused, without following a link, and nothing is written;
+// a new path and a regular file are written as before. /dev/null is a device, and is
+// refused like one.
+func TestExportOutRefusesWhatIsNotARegularFile(t *testing.T) {
+	t.Parallel()
+	newHarnessWith := func() *harness {
+		h := newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "existing.json": "old", "target.json": "target", "dir/x": ""})
+		h.fsys.MapFS["link.json"] = &fstest.MapFile{Data: []byte("target.json"), Mode: fs.ModeSymlink}
+		h.fsys.MapFS["dangling.json"] = &fstest.MapFile{Data: []byte("nowhere"), Mode: fs.ModeSymlink}
+		h.fsys.MapFS["fifo.json"] = &fstest.MapFile{}
+		h.fsys.MapFS["dev/null"] = &fstest.MapFile{}
+		h.fsys.special = map[string]fs.FileMode{"fifo.json": fs.ModeNamedPipe, "dev/null": fs.ModeDevice | fs.ModeCharDevice}
+		h.fsys.lstatErr = map[string]error{"unreadable.json": errors.New("permission denied")}
+		return h
+	}
+	for out, want := range map[string]string{
+		"link.json":       "link.json is a symbolic link, not a regular file",
+		"dangling.json":   "dangling.json is a symbolic link, not a regular file",
+		"fifo.json":       "fifo.json is a named pipe, not a regular file",
+		"dev/null":        "dev/null is a character device, not a regular file",
+		"dir":             "dir is a directory, not a regular file",
+		"unreadable.json": "permission denied",
+	} {
+		h := newHarnessWith()
+		code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", out}, exportID...)...)
+		if code != 2 || len(h.fsys.written) != 0 || h.out.Len() != 0 || !strings.Contains(h.errb.String(), want) {
+			t.Errorf("--out %s: exit %d, written %v, stderr %q", out, code, h.fsys.written, h.errb)
+		}
+	}
+	for _, out := range []string{"new.json", "existing.json"} {
+		h := newHarnessWith()
+		if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", out}, exportID...)...); code != 0 || len(h.fsys.written[out]) == 0 {
+			t.Errorf("--out %s: exit %d, written %v, stderr %q", out, code, h.fsys.written, h.errb)
+		}
 	}
 }
