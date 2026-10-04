@@ -1114,3 +1114,96 @@ func TestOnlyTheAffectedModuleIsNotChecked(t *testing.T) {
 		only(lint(fsys, "models"), "models/a.modelspec.hcl: error: is ")
 	}
 }
+
+// A file named on the command line is read, whatever else in the run would have skipped it:
+// naming a link after its directory behaves as naming it before, for paths and for --module
+// assignments, and what cannot be read at all is an error in either order.
+func TestANamedLinkIsReadInEitherOrder(t *testing.T) {
+	t.Parallel()
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
+	link := layout("shop", "customer.hcl")
+	tree := func(kind string) *memFS {
+		fsys := newMemFS(map[string]string{layout("shop", "order.hcl"): order})
+		skippedKinds[kind](fsys, link, customer)
+		return fsys
+	}
+	lint := func(fsys *memFS, paths []string, modules ...Assignment) (Result, error) {
+		return Lint(fsys, paths, LintOptions{Modules: modules})
+	}
+	for _, paths := range [][]string{{link, "."}, {".", link}, {link, "spec"}, {"spec", link}} {
+		res, err := lint(tree("a link to a regular file"), paths)
+		if err != nil || len(res.Findings) != 0 || res.Files != 2 || len(res.Skipped) != 0 {
+			t.Errorf("%v: %d files, findings %v, skipped %d, %v", paths, res.Files, res.Findings, len(res.Skipped), err)
+		}
+	}
+	// The same through --module, in either order of the two assignments.
+	fsys := newMemFS(map[string]string{"core/space.hcl": customer})
+	skippedKinds["a link to a regular file"](fsys, "core/customer.hcl", customer)
+	dir, file := Assignment{Module: "core", Path: "core"}, Assignment{Module: "core", Path: "core/customer.hcl"}
+	for _, assign := range [][]Assignment{{file, dir}, {dir, file}} {
+		res, err := lint(fsys, nil, assign...)
+		if err != nil || res.Files != 2 || len(res.Skipped) != 0 {
+			t.Errorf("%v: %d files, skipped %d, %v", assign, res.Files, len(res.Skipped), err)
+		}
+		// Both files declare Customer: read, so the module says so; nothing was left unread.
+		if len(res.Findings) != 1 || res.Findings[0].Rule != RuleDuplicate {
+			t.Errorf("%v: findings %v", assign, res.Findings)
+		}
+	}
+	// A path that cannot be read is an error whichever comes first, and a link that is not named is still skipped.
+	for _, kind := range []string{"a named pipe", "a device", "a dangling link"} {
+		for _, paths := range [][]string{{link, "."}, {".", link}} {
+			var notRegular *NotRegularError
+			_, err := lint(tree(kind), paths)
+			if err == nil || kind != "a dangling link" && !errors.As(err, &notRegular) {
+				t.Errorf("%s, %v: %v", kind, paths, err)
+			}
+		}
+		if res, err := lint(tree(kind), []string{"."}); err != nil || len(res.Skipped) != 1 {
+			t.Errorf("%s: not named: %d skipped, %v", kind, len(res.Skipped), err)
+		}
+	}
+}
+
+// Only the skipped-file error is reported for a module that was not read whole, and no
+// finding from another module into it: a directory given both as a path and to --module
+// (the file was first met in the search that has no module name), and a standalone module
+// that is itself the file that was not read, whatever its form.
+func TestPartlyLoadedModulesReportOnlyTheSkippedFile(t *testing.T) {
+	t.Parallel()
+	space := "entity \"Space\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	app := "entity \"App\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"core.Customer\"\n  }\n}\n"
+	for kind, make := range skippedKinds {
+		// A directory as a path and with --module: core.hcl is read only as part of the assignment.
+		fsys := newMemFS(map[string]string{"core/core.hcl": space, "app/app.modelspec.hcl": app})
+		make(fsys, "core/customer.modelspec.hcl", customer)
+		res, err := Lint(fsys, []string{"core", "app"}, LintOptions{Modules: []Assignment{{Module: "core", Path: "core"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, f := range res.Findings {
+			got = append(got, f.String())
+		}
+		expect(t, got, "core/customer.modelspec.hcl: error: is ")
+		if len(res.Skipped) != 1 || res.Skipped[0].Module != "core" {
+			t.Errorf("%s: skipped %+v, want one found under module core", kind, res.Skipped)
+		}
+		// A standalone module that is the file not read, as HCL or as JSON.
+		for suffix, content := range map[string]string{HCLSuffix: customer, JSONSuffix: doc(jEntities)} {
+			fsys = newMemFS(map[string]string{"app.modelspec.hcl": app})
+			make(fsys, "core"+suffix, content)
+			res, err = Lint(fsys, []string{"."}, LintOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = got[:0]
+			for _, f := range res.Findings {
+				got = append(got, f.String())
+			}
+			expect(t, got, "core"+suffix+": error: is ")
+		}
+	}
+}

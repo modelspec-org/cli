@@ -292,8 +292,30 @@ func (d *discovery) addPath(p string, anyHCL bool) error {
 	if err := notRegular(d.fsys, p, info); err != nil {
 		return err
 	}
+	d.unskip(abs) // named, so read, whether or not a search met it before
 	d.add(Source{Path: filepath.Clean(p), Abs: abs}, info)
 	return nil
+}
+
+// unskip withdraws the skip of a file that is then named on the command line: the
+// finding and the note of it. Named after its directory, a link is read as it is named
+// before it.
+func (d *discovery) unskip(abs string) {
+	kept := d.skipped[:0]
+	for _, s := range d.skipped {
+		if s.source.Abs != abs {
+			kept = append(kept, s)
+			continue
+		}
+		delete(d.warned, s.Finding.File+s.Finding.Message)
+		for i, f := range d.findings {
+			if f == s.Finding {
+				d.findings = append(d.findings[:i], d.findings[i+1:]...)
+				break
+			}
+		}
+	}
+	d.skipped = kept
 }
 
 func (d *discovery) walk(dir string, anyHCL bool) error {
@@ -334,6 +356,14 @@ func (d *discovery) skip(s Source, what string) {
 		f := Finding{File: s.Path, Rule: RuleSkipped, Severity: SeverityError, Message: message}
 		d.findings = append(d.findings, f)
 		d.skipped = append(d.skipped, SkippedFile{Finding: f, Module: d.module, source: s})
+		return
+	}
+	// Met again, as a file of a --module assignment after a path met it without one: it
+	// belongs to that module too, and the module is not checked.
+	for i := range d.skipped {
+		if d.skipped[i].source.Abs == s.Abs && d.skipped[i].Module == "" {
+			d.skipped[i].Module = d.module
+		}
 	}
 }
 
@@ -567,6 +597,19 @@ func markIncomplete(models []*Model, files []Source, skips []SkippedFile, explic
 	}
 }
 
+// skippedModule is the name of the module a skipped file belongs to: the --module name
+// it was found under, the id of the layout module whose models directory it is in, or the
+// name its file gives a standalone module.
+func skippedModule(s SkippedFile) string {
+	if s.Module != "" {
+		return s.Module
+	}
+	if id, _, ok := layoutDir(s.source.Abs); ok {
+		return id
+	}
+	return moduleNameFromFile(s.source.Path)
+}
+
 // explicitModules reads the --module assignments: the absolute path of every
 // assigned file and the module it is assigned to. A file assigned to two
 // different modules is an error, and so is assigning part of a layout module's
@@ -660,7 +703,11 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	res.Skipped = d.skipped
 	res.Models = models
 	res.Files = len(sources)
-	res.Findings = append(append(d.findings, parse...), Check(models, Options{Profile: opts.Profile})...)
+	var unread []string
+	for _, s := range d.skipped {
+		unread = append(unread, skippedModule(s))
+	}
+	res.Findings = append(append(d.findings, parse...), Check(models, Options{Profile: opts.Profile, Unread: unread})...)
 	SortFindings(res.Findings)
 	res.Findings = capFindings(res.Findings)
 	return res, nil

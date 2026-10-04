@@ -156,6 +156,11 @@ func runCheck(models []*Model, opts Options) *checker {
 		u.models = append(u.models, m)
 		u.broken = u.broken || m.Broken || m.Incomplete
 	}
+	for _, name := range opts.Unread {
+		if len(c.byName[name]) == 0 {
+			c.byName[name] = []*unit{{name: name, broken: true}}
+		}
+	}
 	for _, u := range order {
 		c.unit(u)
 	}
