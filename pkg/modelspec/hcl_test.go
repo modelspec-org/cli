@@ -177,6 +177,8 @@ var canonicalTable = []struct{ in, want string }{
 	{"1234567890123456789012345678901234567e1", "1234567890123456789012345678901234567" + "0"},
 	{"1234567890123456789012345678901234567.5", "1234567890123456789012345678901234567.5"},
 	{"1.2345678901234567890123456e-30", "12345678901234567890123456e-55"},
+	// 39 digits and a point are 40 characters, and the plain decimal; one digit more is not.
+	{"12345678901234567890123456789012345678.9", "12345678901234567890123456789012345678.9"},
 }
 
 var jsonNumber = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
@@ -260,6 +262,81 @@ func TestCanonicalNumberAllocatesLittle(t *testing.T) { // not parallel: AllocsP
 	for _, in := range []string{"0.1", "1e-99", "123.456e-7", "9e99", "-1234567890123456789012345678901234567e1"} {
 		if allocs := testing.AllocsPerRun(100, func() { canonicalNumber(in) }); allocs > 6 {
 			t.Errorf("canonicalNumber(%q) makes %.0f allocations", in, allocs)
+		}
+	}
+}
+
+// A number is read from its own token wherever it stands, after text whose `$` and
+// `%` were rewritten (which moves everything after them): on a later line, on the same
+// line after a string, after a heredoc. The offsets the reader looks the numbers up by
+// are those of the rewritten source.
+func TestNumbersAfterRewrittenText(t *testing.T) {
+	t.Parallel()
+	texts := []string{`"^[a-z]+$"`, `"50%"`, `"$$"`, `"%%"`, `"$${"`, `"a$b%c"`, `"$A"`, "<<EOT\n^[a-z]+$\nEOT"}
+	for _, text := range texts {
+		earlier := "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type    = \"string\"\n    pattern = " + text + "\n    max_len = 17\n    min_len = 3\n  }\n}\n"
+		m, fs := ParseHCL("a"+hclExt, []byte(earlier))
+		if len(fs) != 0 {
+			t.Errorf("%s: %v", text, fs)
+			continue
+		}
+		mem := m.Concepts[0].Members[0]
+		for name, want := range map[string]string{"max_len": "17", "min_len": "3"} {
+			if a, _ := mem.Attr(name); a.Value.Str != want {
+				t.Errorf("%s: %s is %q after the text, want %s", text, name, a.Value.Str, want)
+			}
+		}
+		node, err := m.JSON(ModuleIdentity{ID: "x", Version: "1"})
+		if err != nil || !strings.Contains(string(node.Encode()), `"max_len": 17`) {
+			t.Errorf("%s: export %v: %s", text, err, node.Encode())
+		}
+	}
+	// On the same line, between strings and after them.
+	for _, strs := range [][]string{{`"a$"`, "5", `"b%"`, "7"}, {`"$$"`, "-5", `"%%"`, "1e2"}, {"5", `"$"`, "-0.5", `"%"`, "9"}} {
+		src := "enum \"E\" {\n  values = [" + strings.Join(strs, ", ") + "]\n}\n"
+		m, fs := ParseHCL("a"+hclExt, []byte(src))
+		if len(fs) != 0 {
+			t.Errorf("%v: %v", strs, fs)
+			continue
+		}
+		items := m.Concepts[0].Attrs[0].Value.Items
+		if len(items) != len(strs) {
+			t.Fatalf("%v: %d items", strs, len(items))
+		}
+		for i, s := range strs {
+			if s[0] != '"' && items[i].Type == NodeNumber && items[i].Str != canonicalNumber(s) {
+				t.Errorf("%v: item %d is %q, want %q", strs, i, items[i].Str, canonicalNumber(s))
+			}
+			if s[0] != '"' && items[i].Type != NodeNumber {
+				t.Errorf("%v: item %d is not a number", strs, i)
+			}
+		}
+	}
+}
+
+// A whole number is one with no point and no negative exponent: a number with a negative
+// exponent is not an enum value or a count, however small it makes the digits.
+func TestNegativeExponentIsNotAWholeNumber(t *testing.T) {
+	t.Parallel()
+	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [1e-50, 7]\n}\n"}), `"values" must be a list of strings or integers`)
+	expect(t, run(map[string]string{"a" + hclExt: "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"string\"\n    max_len = 1e-50\n  }\n}\n"}), `"max_len"`)
+	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [10e-1, 7]\n}\n"})) // 10e-1 is 1
+	for in, want := range map[string]bool{"1": true, "-7": true, "1e41": true, "15e-50": false, "0.5": false, "1e-50": false} {
+		if got := isIntegerNumber(canonicalNumber(in)); got != want {
+			t.Errorf("isIntegerNumber(%s) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestNumberProblemShowsTheNormalForm(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"100e99":  "the number 100e99 is 1e101, whose exponent 101 is past the limit of 100 either way (the digits without trailing zeros, times a power of ten): a larger or smaller number cannot be read exactly",
+		"-100e99": "the number -100e99 is -1e101, whose exponent 101 is past the limit of 100 either way (the digits without trailing zeros, times a power of ten): a larger or smaller number cannot be read exactly",
+		"0.1e101": "",
+	} {
+		if got := numberProblem(in); got != want {
+			t.Errorf("numberProblem(%s) = %q, want %q", in, got, want)
 		}
 	}
 }

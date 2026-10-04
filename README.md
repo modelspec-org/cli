@@ -58,8 +58,14 @@ Each path is a file or a directory. A directory is searched recursively for
 for any `*.hcl`). Hidden directories and `node_modules` are skipped. **A search follows no
 symbolic link**, to a directory or to a file (a repository can hold a link to `/dev/zero`, or to a
 file outside it, and `lint .` on someone else's branch must not read it): a link that would have
-been a model file is a warning that names it, and so is a model file that is not a regular file (a
-named pipe, a device); the run goes on. A file named on the command line may be a symbolic link to a
+been a model file is an **error** (rule `skipped-file`, exit 1, under both profiles) that names it,
+and so is a model file that is not a regular file (a named pipe, a device). It is an error, not a
+warning, because the run did not check what it was asked to: a warning would let an invalid model
+reached through a link pass, and let `export` write half a module. The module the file belongs to is
+not checked further, so what the missing file would have answered is not reported as an unresolved
+reference; the other modules of the run are checked, and `export` and `export --check` refuse the
+module (exit 1, the finding on standard error). Replace the link with the file, or name it on the
+command line. A file named on the command line may be a symbolic link to a
 regular file and is read through; one that is not a regular file (a device, a pipe, a directory, or
 a link to one) is an error, exit 2, whose message says what it is. A file reached by two names (a
 relative and an absolute path, a symbolic link named on the command line) is read once.
@@ -170,6 +176,7 @@ Both forms, on the same typed model:
 | `name-form` | a concept name contains no dot (decision 0014), and no concept, property or field name is empty or blank (nothing could refer to it). Nothing else is required of a name: `Order-Item` is valid |
 | `name-case` | warning: two names of one scope that differ only by case (`User` and `user`; a collision on a case-insensitive store). Not an error, because the standard keeps names case-sensitive |
 | `stale-twin` | warning: a JSON twin is not what its HCL exports to |
+| `skipped-file` | error, both profiles: a search found a model-named file that is not a regular file (a symbolic link, a named pipe, a device) and did not read it. The finding names the path and what it is, and the way out: replace the link with the file, or name it on the command line. The module the file belongs to is not checked at all in that run (no reference, twin or other finding is reported from a partial load), and `export` and `export --check` refuse it; other modules in the run are checked as usual |
 | `enum-values` | an enum has at least one value and no repeats, also for an inline `enum = [...]`. Values are strings or integers (decision 0013: an enum constrains a string or an int property) |
 | `unknown-type` | `type` is one of the ModelSpec types |
 | `attribute` | only supported attributes, with values of the right type |
@@ -315,6 +322,11 @@ exported and read back is the same model and is within the limits it was read un
 number of more than 40 characters as an integer or decimal, which it used to write in full and now writes with an
 exponent; none in the corpus, the standard's examples or Chinook changes a byte.
 
+The exponent limit is on that normal form, not on the exponent as written: `100e99` is refused (it is `1e101`, and the
+message says so: "the number 100e99 is 1e101, whose exponent 101 is past the limit of 100"), `0.1e101` is accepted (it is
+`1e100`), and so are `10e99` and `1e100`. Zero keeps the exponent it was written with, so `0e100` is accepted and `0e101`
+and `0e2147483648` are refused alike.
+
 **Time and memory, measured.** `modelspec lint` of the inputs below, every one within the 1 MiB limit, at the head of
 this change, on a laptop shared with other work (load average 2.8 to 4.2, so the figures are upper bounds; the peak
 is the process's resident memory). The first table is the shapes that were once slow, the second what the limits and
@@ -348,8 +360,11 @@ which printed each number as the shortest decimal of its 512 bits, after is the 
 | `1e100,` before | 0.29 s, 60 MiB | 0.55 s, 101 MiB | 1.21 s, 198 MiB |
 | `1e100,` after | 0.06 s, 56 MiB | 0.13 s, 96 MiB | 0.27 s, 185 MiB |
 
-The slowest input measured is 0.30 seconds, and the largest peak 380 MiB: the lexer holds every token of a file at
-once, so memory is linear in the number of tokens, about 420 to 470 MiB for each MB of one-byte tokens (the limit
+The slowest input measured is 0.44 seconds and the largest peak 521 MiB, both for a megabyte of `1,` (an enum of
+524,274 repeats of it, exactly 1 MiB; half the size peaks at 228 MiB), measured at a load average of 3.0; the review
+measured 0.48 to 0.49 seconds and 564 to 577 MiB for it. Every other input in the tables is at most 0.30 seconds and
+380 MiB. The lexer holds every token of a file at
+once, so memory is linear in the number of tokens, about 420 to 500 MiB for each MB of one-byte tokens (the limit
 of 1 MiB is what bounds that, and what bounded it at 1.7 to 1.9 GiB when it was 4 MiB). (`values` takes integers, so a list of fractions is a finding for each item, and each number is still read and
 written, which is the cost measured.) These are measurements of the inputs
 listed, not every input, and no time or memory is proved: the HCL library could have other paths that are slower
@@ -365,7 +380,9 @@ refused token. A new version of the `hcl` library, which could add tokens or rec
 crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
 lints clean, and one input costs a bounded amount of work: at most 4 MiB plus 1,000 bytes allocated for each
 byte of input, counted by the allocator and not by time, and a watchdog ends the process, which the fuzzer reports
-as a failing input, if one input is still running after ten seconds: while it runs, not after it returns). A
+as a failing input, if one input is still running after ten seconds: while it runs, not after it returns). `scripts/fuzz.sh`
+runs the fuzzer with `-fuzzminimizetime 5s`: by default it minimises a new input for up to a minute, with no execution
+reported (30 to 42 seconds of nothing, with two workers), which no judge can tell from a stall. A
 whole run that stalls is judged by `scripts/fuzz.sh` through `cmd/fuzzjudge` (`internal/fuzzjudge`, with table tests
 over synthetic logs): it fails when nothing ran for 30 seconds anywhere in the run, including its end, or when the
 rate of the second half fell below 30% of the first. The fuzzer's own pauses (12 to 18 seconds with no execution)
@@ -404,6 +421,12 @@ objects and of items in arrays does** (the Directory compares a model with its r
 the same way). The module identity is read from the committed file unless `--module-*` flags are
 given. `--out` cannot be combined with `--check`.
 
+`--out` writes a regular file. The path is looked at without following a link, and one that exists and is not a
+regular file is refused (exit 2, nothing written, and the message says what it is): a symbolic link (even to a
+regular file, which would send the write elsewhere), a named pipe (which would wait for a reader), a directory, a
+device. `/dev/null` is a device, so `--out /dev/null` is refused; write to standard output and redirect it
+(`export ... > /dev/null`). A path that does not exist, and a regular file, are written as before.
+
 Every file a command reads has the 1 MiB limit, the committed JSON that `--check` reads too (one over it is
 refused without being read, exit 1), and every one is read through one reader that refuses what is not a regular
 file (exit 2) and reads at most one byte over the limit. `export` refuses to write a JSON twin over the limit, since `lint` would refuse
@@ -441,7 +464,7 @@ The standard does not settle these, so `modelspec` does not invent an answer (ea
 ## Parity with the other readers
 
 `go test` compares `modelspec lint` with committed verdicts of two other readers over the corpus
-in `testdata/corpus` (**120 manifest items**; each is a file, a SpecScore-layout tree or a set of standalone files, or an
+in `testdata/corpus` (**121 manifest items**; each is a file, a SpecScore-layout tree or a set of standalone files, or an
 entry under `parts/` that is one file of another item given alone and must give the verdict of its whole module;
 `testdata/corpus/manifest.json` is the expected verdict of each, under both profiles; a test fails when this
 number is not the manifest's):

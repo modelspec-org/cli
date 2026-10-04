@@ -185,3 +185,41 @@ func TestRun(t *testing.T) {
 		t.Errorf("an unreadable log: %d %q", code, errOut)
 	}
 }
+
+// The rate of a half is the median of its stretches, so a few slow stretches (a line
+// printed in a pause, a worker busy minimising) are not a stall; and the first tenth
+// of the run, in which the fuzzer is warming up, is not counted in the first half.
+func TestJudgeIgnoresSlowStretchesAndWarmUp(t *testing.T) {
+	t.Parallel()
+	// A fifth of the stretches of the second half run at a twentieth of the rate: the median is
+	// the rate of the rest (the least rate would be a collapse).
+	slowFifth := synth(180, func(s int) int {
+		if s >= 90 && s%15 < 3 {
+			return 1000
+		}
+		return 20000
+	})
+	samples, err := Parse(strings.NewReader(slowFifth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := Judge(samples); v.Problem != "" || v.LastRate != 20000 {
+		t.Errorf("a fifth of the stretches slow: %q, last rate %.0f", v.Problem, v.LastRate)
+	}
+	// A fast start: for six seconds a line every half second at 100000 a second, then a steady
+	// 20000. The first half is the steady rate; with the start in it the median would be 100000
+	// and the steady run a collapse.
+	var fast []Sample
+	execs := int64(0)
+	for ms := 500; ms <= 6000; ms += 500 {
+		execs += 50000
+		fast = append(fast, Sample{time.Duration(ms) * time.Millisecond, execs})
+	}
+	for s := 9; s <= 60; s += 3 {
+		execs += 60000
+		fast = append(fast, Sample{time.Duration(s) * time.Second, execs})
+	}
+	if v := Judge(fast); v.Problem != "" || v.FirstRate != 20000 || v.LastRate != 20000 {
+		t.Errorf("a fast start: %q, rates %.0f and %.0f", v.Problem, v.FirstRate, v.LastRate)
+	}
+}

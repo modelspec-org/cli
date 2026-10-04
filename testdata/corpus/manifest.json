@@ -1452,6 +1452,14 @@
     ]
    }
   },
+  "standalone/number-after-rewritten-dollar": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
   "standalone/number-exponent-over-100": {
    "default": {
     "verdict": "refuse",
