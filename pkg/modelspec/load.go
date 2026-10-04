@@ -218,15 +218,19 @@ type discovery struct {
 	infos    map[string][]fs.FileInfo // by size and time: candidates for SameFile
 	out      []Source
 	findings []Finding
-	skipped  []skipped // files met and not read, see skip
-	module   string    // the module being assigned (--module), while its path is searched
+	skipped  []SkippedFile // files met and not read, see skip
+	module   string        // the module being assigned (--module), while its path is searched
 }
 
-// skipped is a file a search did not read, and the module a --module assignment
-// gave it ("" when it was not found through one).
-type skipped struct {
-	Source
-	module string
+// SkippedFile is a model-named file that a search met and did not read (rule
+// skipped-file). Unlike the finding, which the findings cap can cut from a long
+// list, it is kept whole: Lint returns every one, with the models that its absence
+// makes incomplete.
+type SkippedFile struct {
+	Finding  Finding  // the skipped-file finding for it
+	Module   string   // the --module name it was found under, "" when it was not found through one
+	Affected []*Model // the models of its module, which are marked Incomplete
+	source   Source
 }
 
 func newDiscovery(fsys FS) *discovery {
@@ -327,16 +331,17 @@ func (d *discovery) skip(s Source, what string) {
 	message := "is " + what + ", which a search does not read, so this file was not checked and neither is its module; replace it with the file, or name it on the command line"
 	if !d.warned[s.Path+message] {
 		d.warned[s.Path+message] = true
-		d.findings = append(d.findings, Finding{File: s.Path, Rule: RuleSkipped, Severity: SeverityError, Message: message})
-		d.skipped = append(d.skipped, skipped{Source: s, module: d.module})
+		f := Finding{File: s.Path, Rule: RuleSkipped, Severity: SeverityError, Message: message}
+		d.findings = append(d.findings, f)
+		d.skipped = append(d.skipped, SkippedFile{Finding: f, Module: d.module, source: s})
 	}
 }
 
 // found adds a file a search met when it is a model file; a file that cannot be
 // read is a warning, not the end of the run. A search does not follow symbolic
-// links: a link that would have been a model file is a warning that names it
-// (a repository can point one at a device, or at a file outside it), and so is a
-// model file that is not a regular file.
+// links: a link that would have been a model file is an error (skipped-file) that
+// names it (a repository can point one at a device, or at a file outside it), and
+// so is a model file that is not a regular file.
 func (d *discovery) found(full, name string, anyHCL bool) bool {
 	info, err := d.fsys.Lstat(full)
 	if err != nil {
@@ -367,10 +372,11 @@ func (d *discovery) found(full, name string, anyHCL bool) bool {
 // *.modelspec.json, and in a SpecScore layout models directory for any *.hcl.
 // Hidden directories and node_modules are skipped. A search follows no symbolic
 // link, to a directory or to a file: a link that would have been a model file is
-// a warning that names it. A file named on the command line may be a link to a
+// an error finding (skipped-file) that names it. A file named on the command line may be a link to a
 // regular file, and is read through. A file reached by two names
 // is returned once, under the first name. The result is sorted by path. The
-// findings are warnings for files a search found but cannot read.
+// findings are errors (skipped-file) for model files a search did not read, and
+// warnings for files it found but cannot read.
 func Discover(fsys FS, paths []string) ([]Source, []Finding, error) {
 	return discover(fsys, paths, false)
 }
@@ -545,15 +551,17 @@ func Load(fsys FS, files []Source, assign []Assignment) ([]*Model, []Finding, er
 // files of the models directory of a layout module (the skipped one is in it), the
 // other form of X.modelspec.hcl and X.modelspec.json, and the files assigned to
 // the same module with --module. models[i] was read from files[i].
-func markIncomplete(models []*Model, files []Source, skips []skipped, explicit map[string]string) {
-	for _, s := range skips {
-		_, layout, inLayout := layoutDir(s.Abs)
-		stem := strings.TrimSuffix(strings.TrimSuffix(s.Abs, HCLSuffix), JSONSuffix)
+func markIncomplete(models []*Model, files []Source, skips []SkippedFile, explicit map[string]string) {
+	for k := range skips {
+		s := &skips[k]
+		_, layout, inLayout := layoutDir(s.source.Abs)
+		stem := strings.TrimSuffix(strings.TrimSuffix(s.source.Abs, HCLSuffix), JSONSuffix)
 		for i, f := range files {
 			_, fileLayout, fileInLayout := layoutDir(f.Abs)
 			sameStem := (strings.HasSuffix(f.Abs, HCLSuffix) || strings.HasSuffix(f.Abs, JSONSuffix)) && strings.TrimSuffix(strings.TrimSuffix(f.Abs, HCLSuffix), JSONSuffix) == stem
-			if sameStem || (inLayout && fileInLayout && fileLayout == layout) || (s.module != "" && explicit[f.Abs] == s.module) {
+			if sameStem || (inLayout && fileInLayout && fileLayout == layout) || (s.Module != "" && explicit[f.Abs] == s.Module) {
 				models[i].Incomplete = true
+				s.Affected = append(s.Affected, models[i])
 			}
 		}
 	}
@@ -604,6 +612,9 @@ type Result struct {
 	Findings []Finding
 	Files    int
 	Models   []*Model
+	// Skipped is every model-named file a search did not read, whole: the findings
+	// are capped, this is not.
+	Skipped []SkippedFile
 	// Notes say what Lint did beyond the paths given: a module is the unit of
 	// checking, so the files of a module that were not given were checked too.
 	Notes []string
@@ -646,6 +657,7 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 		explicit, _ := explicitModules(fsys, opts.Modules) // Load has just read them without error
 		markIncomplete(models, sources, d.skipped, explicit)
 	}
+	res.Skipped = d.skipped
 	res.Models = models
 	res.Files = len(sources)
 	res.Findings = append(append(d.findings, parse...), Check(models, Options{Profile: opts.Profile})...)

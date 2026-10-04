@@ -290,3 +290,71 @@ func findingStrings(fs []Finding) []string {
 	}
 	return out
 }
+
+// A skipped-file finding says that a module was not checked, so the cap drops every
+// other finding before it: it takes the place of a warning, then of any other error, in
+// whichever order the findings come, and is dropped only when more than MaxFindings of them
+// came, and then the summary says so.
+func TestSkippedFileFindingsAreKeptAheadOfOthers(t *testing.T) {
+	t.Parallel()
+	mk := func(rule string, sev Severity, n int) Finding {
+		return Finding{File: "f", Line: n, Rule: rule, Severity: sev, Message: "m"}
+	}
+	skipped := func(n int) Finding { return mk(RuleSkipped, SeverityError, n) }
+	listed := func(got []Finding) (skips, errs int) {
+		for _, f := range got[:MaxFindings] {
+			switch {
+			case f.Rule == RuleSkipped:
+				skips++
+			case f.Severity == SeverityError:
+				errs++
+			}
+		}
+		return skips, errs
+	}
+	for name, order := range map[string]func(l *findingList){
+		"errors then the skipped file": func(l *findingList) {
+			for i := 1; i <= 1201; i++ {
+				l.put(mk("r", SeverityError, i))
+			}
+			l.put(skipped(5000))
+		},
+		"the skipped file then errors": func(l *findingList) {
+			l.put(skipped(5000))
+			for i := 1; i <= 1201; i++ {
+				l.put(mk("r", SeverityError, i))
+			}
+		},
+		"warnings, errors and the skipped file": func(l *findingList) {
+			for i := 1; i <= 600; i++ {
+				l.put(mk("r", SeverityWarning, i))
+				l.put(mk("r", SeverityError, 2000+i))
+			}
+			l.put(skipped(5000))
+		},
+	} {
+		var l findingList
+		order(&l)
+		got := l.result()
+		if skips, _ := listed(got); skips != 1 || len(got) != MaxFindings+1 || strings.Contains(got[MaxFindings].Message, "skipped-file") {
+			t.Errorf("%s: %d skipped files listed, %d findings, summary %q", name, skips, len(got), got[len(got)-1].Message)
+		}
+	}
+	// More skipped files than the limit: the extra are dropped, and the summary says so.
+	var l findingList
+	for i := 1; i <= 300; i++ {
+		l.put(mk("r", SeverityWarning, i))
+	}
+	for i := 1; i <= 400; i++ {
+		l.put(mk("r", SeverityError, 400+i))
+	}
+	for i := 1; i <= MaxFindings+7; i++ {
+		l.put(skipped(5000 + i))
+	}
+	got := l.result()
+	skips, errs := listed(got)
+	last := got[len(got)-1]
+	if skips != MaxFindings || errs != 0 || last.Severity != SeverityError || !strings.Contains(last.Message, "707 more findings (407 errors, 300 warnings)") || !strings.Contains(last.Message, "; 7 of them are skipped-file errors") {
+		t.Errorf("%d skipped files and %d other errors listed; summary %v", skips, errs, last)
+	}
+}

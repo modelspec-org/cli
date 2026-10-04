@@ -1098,3 +1098,54 @@ func TestExportOutRefusesWhatIsNotARegularFile(t *testing.T) {
 		}
 	}
 }
+
+// export and export --check decide from the loaded module, not from the findings: a second
+// module supplied with --module that has more errors than the findings list holds (and a
+// path that sorts before the link) must not push the finding about the link out of the list
+// export reads. Every place the noisy module can have, and 999, 1,000 and 1,201 errors.
+func TestExportRefusesAPartialModuleWhateverTheFindingsListHolds(t *testing.T) {
+	t.Parallel()
+	const dir = "spec/modules/shop/models/"
+	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	for _, noisyPath := range []string{"aaa.modelspec.hcl", "zzz.modelspec.hcl"} {
+		for _, repeats := range []int{999, 1000, 1201} {
+			noisy := "enum \"E\" {\n  values = [" + strings.Repeat("1, ", repeats-1) + "1]\n}\n"
+			newTree := func() *harness {
+				h := newHarness(map[string]string{dir + "order.hcl": order, "real/customer.hcl": customer, noisyPath: noisy})
+				h.fsys.MapFS[dir+"customer.hcl"] = &fstest.MapFile{Data: []byte("../../../../real/customer.hcl"), Mode: fs.ModeSymlink}
+				h.fsys.MapFS["half.json"] = &fstest.MapFile{Data: []byte("{}")}
+				return h
+			}
+			module := "noisy=" + noisyPath
+			for name, args := range map[string][]string{
+				"export":         append([]string{"export", "--module", module, dir + "order.hcl"}, exportID...),
+				"export --out":   append([]string{"export", "--module", module, dir + "order.hcl", "--out", "o.json"}, exportID...),
+				"export --check": {"export", "--check", "--module", module, dir + "order.hcl", "half.json"},
+			} {
+				h := newTree()
+				code := h.run(args...)
+				if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), "[skipped-file]") || !strings.Contains(h.errb.String(), "not the whole module") || !strings.Contains(h.errb.String(), "module shop has 1 file(s)") {
+					t.Errorf("%s, %s, %d repeats: exit %d, stdout %q, written %d, stderr %.300q", name, noisyPath, repeats, code, h.out, len(h.fsys.written), h.errb)
+				}
+			}
+			// lint of the same tree lists the skipped-file error, whatever else it cuts.
+			h := newTree()
+			code := h.run("lint", "spec", "--module", module)
+			if code != 1 || !strings.Contains(h.out.String(), "customer.hcl: error: is a symbolic link") || !strings.Contains(h.out.String(), "[skipped-file]") {
+				t.Errorf("lint, %s, %d repeats: exit %d, the skipped-file error is not listed (%d bytes of output)", noisyPath, repeats, code, h.out.Len())
+			}
+		}
+	}
+}
+
+// The refusal names the --module module a skipped file was found under.
+func TestExportRefusalNamesTheAssignedModule(t *testing.T) {
+	t.Parallel()
+	h := newHarness(map[string]string{"ctx/x.modelspec.hcl": goodHCL, "real/y.hcl": goodHCL})
+	h.fsys.MapFS["ctx/y.modelspec.hcl"] = &fstest.MapFile{Data: []byte("../real/y.hcl"), Mode: fs.ModeSymlink}
+	code := h.run(append([]string{"export", "--module", "core=ctx", "ctx/x.modelspec.hcl"}, exportID...)...)
+	if code != 1 || !strings.Contains(h.errb.String(), `ctx/y.modelspec.hcl (assigned to module "core" with --module)`) || len(h.fsys.written) != 0 || h.out.Len() != 0 {
+		t.Fatalf("exit %d, stderr %q", code, h.errb)
+	}
+}

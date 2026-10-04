@@ -107,27 +107,56 @@ type findingList struct {
 	droppedFile string // the file of the first finding dropped
 	count       int
 	errors      int
-	evict       int // every finding of list before this one is an error
+	skipped     int // of those dropped, the skipped-file findings
+	evictWarn   int // every finding of list before this one is an error or worse
+	evictError  int // every finding of list before this one is a skipped-file finding
+}
+
+// rank orders the findings the list keeps when it is full: a warning, an error, and
+// a skipped-file error, which says that a module was not checked and must not be
+// dropped for lack of room before any other finding is.
+func rank(f Finding) int {
+	switch {
+	case f.Rule == RuleSkipped:
+		return 2
+	case f.Severity == SeverityError:
+		return 1
+	}
+	return 0
+}
+
+// replace puts f in the place of the first finding of list from *from on whose rank
+// is below r, and returns the one it replaced; it reports whether there was one.
+func (l *findingList) replace(f Finding, r int, from *int) (Finding, bool) {
+	for ; *from < len(l.list); *from++ {
+		if rank(l.list[*from]) < r {
+			f, l.list[*from] = l.list[*from], f
+			*from++
+			return f, true
+		}
+	}
+	return f, false
 }
 
 // put keeps the finding, or counts it when the list is full. Every message is cut
 // to MaxMessageBytes here, the one place all findings pass, so that no finding is
 // larger than that however large the input is. When the list is full an error
-// takes the place of a warning, so that errors are listed first; one is dropped
-// only when MaxFindings errors are already there.
+// takes the place of a warning, so that errors are listed first, and a skipped-file
+// error takes the place of a warning and then of any other error; one is dropped
+// only when MaxFindings of its own rank or better are already there.
 func (l *findingList) put(f Finding) {
 	f.Message = clipText(f.Message, MaxMessageBytes)
 	if len(l.list) < MaxFindings {
 		l.list = append(l.list, f)
 		return
 	}
-	if f.Severity == SeverityError {
-		for ; l.evict < len(l.list); l.evict++ {
-			if l.list[l.evict].Severity != SeverityError {
-				f, l.list[l.evict] = l.list[l.evict], f
-				l.evict++
-				break
-			}
+	switch r := rank(f); {
+	case r == 1:
+		f, _ = l.replace(f, 1, &l.evictWarn)
+	case r == 2:
+		var ok bool
+		if f, ok = l.replace(f, 1, &l.evictWarn); !ok {
+			f, _ = l.replace(f, 2, &l.evictError)
 		}
 	}
 	if l.count == 0 {
@@ -136,6 +165,9 @@ func (l *findingList) put(f Finding) {
 	l.count++
 	if f.Severity == SeverityError {
 		l.errors++
+	}
+	if f.Rule == RuleSkipped {
+		l.skipped++
 	}
 }
 
@@ -150,7 +182,11 @@ func (l *findingList) result() []Finding {
 	if l.errors > 0 {
 		severity = SeverityError
 	}
-	return append(l.list, Finding{File: l.droppedFile, Rule: RuleLimit, Severity: severity, Message: fmt.Sprintf("%d more findings (%d errors, %d warnings) are not listed: at most %d are kept for one file or check, and for one run", l.count, l.errors, l.count-l.errors, MaxFindings)})
+	message := fmt.Sprintf("%d more findings (%d errors, %d warnings) are not listed: at most %d are kept for one file or check, and for one run", l.count, l.errors, l.count-l.errors, MaxFindings)
+	if l.skipped > 0 {
+		message += fmt.Sprintf("; %d of them are skipped-file errors: model files that were not read, and their modules were not checked", l.skipped)
+	}
+	return append(l.list, Finding{File: l.droppedFile, Rule: RuleLimit, Severity: severity, Message: message})
 }
 
 // capFindings applies the limit to a whole run's findings, sorted: the first

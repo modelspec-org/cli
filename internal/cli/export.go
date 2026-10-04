@@ -168,16 +168,25 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 		return nil, usageErrorf("%s: export reads HCL files, and this is the JSON form", file)
 	}
 	// Export writes whole modules: a file of the module that a search met and did not
-	// read (a link, a pipe, a device) makes what was read a part of it.
-	var skippedFiles []string
-	for _, f := range res.Findings {
-		if f.Rule == modelspec.RuleSkipped {
-			fmt.Fprintln(env.Stderr, f)
-			skippedFiles = append(skippedFiles, f.File)
+	// read (a link, a pipe, a device) makes what was read a part of it. That is decided
+	// from the loaded state (the module's models are marked Incomplete), not from the
+	// findings, which are capped and can have lost the one about the file.
+	if model.Incomplete {
+		var files []string
+		for _, s := range res.Skipped {
+			for _, affected := range s.Affected {
+				if affected == model {
+					fmt.Fprintln(env.Stderr, s.Finding)
+					name := s.Finding.File
+					if s.Module != "" {
+						name += fmt.Sprintf(" (assigned to module %q with --module)", s.Module)
+					}
+					files = append(files, name)
+					break
+				}
+			}
 		}
-	}
-	if len(skippedFiles) > 0 {
-		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s: %d file(s) of the module were found and not read (%s), so what was read is not the whole module; export writes and checks whole modules only. Replace the link with the file, or name it on the command line", file, len(skippedFiles), strings.Join(skippedFiles, ", "))}
+		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s: module %s has %d file(s) found and not read (%s), so what was read is not the whole module; export writes and checks whole modules only. Replace the link with the file, or name it on the command line", file, model.Name, len(files), strings.Join(files, ", "))}
 	}
 	var siblings []string
 	for _, m := range res.Models {
