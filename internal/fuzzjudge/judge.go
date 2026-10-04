@@ -10,11 +10,15 @@
 //     of the log; or
 //   - the rate in the second half of the run (the median of the stretches that had
 //     executions) fell below MinRatio of the rate in the first half (after its
-//     first tenth, which is warm-up): a collapse to under a third.
+//     first tenth, which is warm-up): a collapse to under a third; or
+//   - the share of the second half that was idle (stretches between progress lines
+//     with no execution) is more than MaxIdleRise above the share of the first
+//     half's: a run that pauses in stretches of less than StallGap and runs at full
+//     rate between them has a healthy median rate and no stall, and is mostly idle.
 //
 // It does not fail the pauses the fuzzer makes itself (12 to 18 seconds with no
 // execution, seen in real runs), nor a stall of 30 seconds or less at the end, nor
-// a rate that varies by a factor of two. A stall of one input in one of several
+// a rate that varies by a factor of two, nor the same pauses in both halves. A stall of one input in one of several
 // workers leaves most of the rate, so it is the watchdog in
 // scripts/fuzz/fuzz_test.go that stops an input that takes ten seconds, while it
 // runs.
@@ -39,6 +43,11 @@ const (
 	// half to the other (the fuzzer pauses to minimise an input that found new
 	// coverage), so only a collapse is a stall.
 	MinRatio = 0.3
+	// MaxIdleRise is the most the share of idle time of the second half of a run may
+	// exceed the first half's (a fraction of the half: 0.5 is 50 points). The fuzzer's
+	// own pauses (12 to 18 seconds, seen in real runs) fall in either half, so only a
+	// share far above the first half's is a stall.
+	MaxIdleRise = 0.5
 )
 
 // Sample is one progress line: the time since the run began and the executions
@@ -78,6 +87,8 @@ type Verdict struct {
 	Elapsed   time.Duration
 	FirstRate float64 // executions a second in the first half, after the first tenth
 	LastRate  float64 // and in the second half
+	FirstIdle float64 // the share of the first half (after its first tenth) with no execution, from 0 to 1
+	LastIdle  float64 // and of the second half
 	Problem   string  // empty when the run is sound
 }
 
@@ -99,6 +110,20 @@ func activeRate(samples []Sample, from, to time.Duration) float64 {
 	}
 	sort.Float64s(rates)
 	return rates[len(rates)/2]
+}
+
+// idleShare is the part of the time from from to to that was idle: the stretches
+// between progress lines with no execution, as far as they lie in (from, to].
+func idleShare(samples []Sample, from, to time.Duration) float64 {
+	var idle time.Duration
+	prev := Sample{}
+	for _, s := range samples {
+		if s.Execs == prev.Execs {
+			idle += max(0, min(s.Elapsed, to)-max(prev.Elapsed, from))
+		}
+		prev = s
+	}
+	return float64(idle) / float64(to-from)
 }
 
 // Judge judges a run from its samples.
@@ -123,8 +148,13 @@ func Judge(samples []Sample) Verdict {
 	warm, half := last.Elapsed/10, last.Elapsed/2
 	v.FirstRate = activeRate(samples, warm, half)
 	v.LastRate = activeRate(samples, half, last.Elapsed)
+	v.FirstIdle = idleShare(samples, warm, half)
+	v.LastIdle = idleShare(samples, half, last.Elapsed)
 	if v.Problem == "" && v.LastRate < MinRatio*v.FirstRate {
 		v.Problem = fmt.Sprintf("the rate fell from %.0f to %.0f executions a second between the first and the second half of the run (below %.0f%% of it)", v.FirstRate, v.LastRate, MinRatio*100)
+	}
+	if v.Problem == "" && v.LastIdle > v.FirstIdle+MaxIdleRise {
+		v.Problem = fmt.Sprintf("the run was idle %.0f%% of the second half, against %.0f%% of the first (more than %.0f points more): pauses shorter than %v each, but most of the half", v.LastIdle*100, v.FirstIdle*100, MaxIdleRise*100, StallGap)
 	}
 	return v
 }
@@ -143,7 +173,7 @@ func Run(args []string, in io.Reader, out, errOut io.Writer) int {
 		return 2
 	}
 	v := Judge(samples)
-	fmt.Fprintf(out, "%s: %d executions in %v; %.0f/sec in the first half, %.0f/sec in the second\n", args[0], v.Execs, v.Elapsed.Round(time.Second), v.FirstRate, v.LastRate)
+	fmt.Fprintf(out, "%s: %d executions in %v; %.0f/sec in the first half, %.0f/sec in the second; idle %.0f%% of the first half, %.0f%% of the second\n", args[0], v.Execs, v.Elapsed.Round(time.Second), v.FirstRate, v.LastRate, v.FirstIdle*100, v.LastIdle*100)
 	if v.Problem != "" {
 		fmt.Fprintf(out, "%s: STALLED: %s\n", args[0], v.Problem)
 		return 1

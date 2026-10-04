@@ -108,6 +108,36 @@ func TestJudge(t *testing.T) {
 			}
 			return 20000
 		}), ""},
+		{"idle 80% of the second half in pauses of 24 seconds, bursts at full rate between (no pause reaches 30 seconds)", synth(120, func(t int) int {
+			if t >= 60 && (t-60)%30 < 24 {
+				return 0
+			}
+			return 20000
+		}), "idle 80% of the second half, against 0% of the first"},
+		{"the same pauses in both halves", synth(120, func(t int) int {
+			if t%30 < 24 {
+				return 0
+			}
+			return 20000
+		}), ""},
+		{"more idle in the first half than in the second", synth(120, func(t int) int {
+			if t >= 20 && t < 47 || t >= 80 && t < 90 {
+				return 0
+			}
+			return 20000
+		}), ""},
+		{"idle in the second half a little under 50 points above the first (27 of 60 seconds)", synth(120, func(t int) int {
+			if t >= 63 && t < 90 {
+				return 0
+			}
+			return 20000
+		}), ""},
+		{"idle in the second half a little over 50 points above the first (33 of 60 seconds)", synth(120, func(t int) int {
+			if t >= 63 && t < 90 || t >= 102 && t < 108 {
+				return 0
+			}
+			return 20000
+		}), "of the second half, against 0% of the first"},
 		{"no execution at all", synth(60, func(t int) int { return 0 }), "no execution from 0s"},
 		{"no progress lines", "PASS\n", "only 0 progress lines"},
 		{"one progress line", "fuzz: elapsed: 3s, execs: 10 (3/sec), new interesting: 0 (total: 1)\n", "only 1 progress lines"},
@@ -166,8 +196,17 @@ func TestRun(t *testing.T) {
 		code := Run(args, strings.NewReader(in), &out, &errOut)
 		return code, out.String(), errOut.String()
 	}
-	if code, out, _ := run([]string{"FuzzHCL"}, synth(60, steady)); code != 0 || !strings.Contains(out, "FuzzHCL: 1200000 executions in 1m0s; 20000/sec in the first half, 20000/sec in the second") {
+	if code, out, _ := run([]string{"FuzzHCL"}, synth(60, steady)); code != 0 || !strings.Contains(out, "FuzzHCL: 1200000 executions in 1m0s; 20000/sec in the first half, 20000/sec in the second; idle 0% of the first half, 0% of the second") {
 		t.Errorf("a sound run: %d %q", code, out)
+	}
+	bursts := synth(120, func(t int) int {
+		if t >= 60 && (t-60)%30 < 24 {
+			return 0
+		}
+		return 20000
+	})
+	if code, out, _ := run([]string{"FuzzHCL"}, bursts); code != 1 || !strings.Contains(out, "FuzzHCL: STALLED: the run was idle 80% of the second half, against 0% of the first") {
+		t.Errorf("a run that is mostly idle in its second half: %d %q", code, out)
 	}
 	stalled := synth(60, func(t int) int {
 		if t >= 20 {

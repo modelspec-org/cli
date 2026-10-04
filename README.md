@@ -388,15 +388,19 @@ recurse (it fails by overflowing the stack if the pre-parse refusal is removed),
 refused token. A new version of the `hcl` library, which could add tokens or recursion, needs
 `scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
 crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
-lints clean, and one input costs a bounded amount of work: at most 4 MiB plus 1,000 bytes allocated for each
+lints clean, and one input costs a bounded amount of work (the reading, the checks, the export, the read of the
+export and the comparison all count): at most 4 MiB plus 1,000 bytes allocated for each
 byte of input, counted by the allocator and not by time, and a watchdog ends the process, which the fuzzer reports
 as a failing input, if one input is still running after ten seconds: while it runs, not after it returns). `scripts/fuzz.sh`
 runs the fuzzer with `-fuzzminimizetime 5s`: by default it minimises a new input for up to a minute, with no execution
 reported (30 to 42 seconds of nothing, with two workers), which no judge can tell from a stall. A
 whole run that stalls is judged by `scripts/fuzz.sh` through `cmd/fuzzjudge` (`internal/fuzzjudge`, with table tests
-over synthetic logs): it fails when nothing ran for 30 seconds anywhere in the run, including its end, or when the
-rate of the second half fell below 30% of the first. The fuzzer's own pauses (12 to 18 seconds with no execution)
-and a rate that halves from one half to the other (seen in real runs) pass. A stall of one input in one worker of
+over synthetic logs): it fails when nothing ran for 30 seconds anywhere in the run, including its end, when the
+rate of the second half fell below 30% of the first, or when the share of the second half that was idle (stretches
+between progress lines with no execution) is more than 50 points above the first half's (a run that pauses for 24
+seconds at a time and runs at full rate between the pauses has no stall and a healthy median rate, and is mostly
+idle). The fuzzer's own pauses (12 to 18 seconds with no execution), the same pauses in both halves, and a rate that
+halves from one half to the other (seen in real runs) pass. A stall of one input in one worker of
 several leaves most of the rate, so it is the watchdog that catches it, not the judge. The fuzz targets are skipped in `go test` and are not in the coverage
 gate.
 
