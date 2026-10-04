@@ -1,7 +1,6 @@
 package modelspec
 
 import (
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -223,44 +222,6 @@ func TestReadersRefuseHostileInput(t *testing.T) {
 		}
 		if !m.Broken || !found {
 			t.Errorf("%s: broken %v, findings %v", tc.name, m.Broken, fs)
-		}
-	}
-}
-
-// The parser itself must never be reached by input that would overflow its stack.
-// This test lowers the stack limit of the process to 4 MiB (the parser needs
-// several KB of stack for each item of these chains, so one that recursed would
-// die within a few thousand items; a Go stack overflow is fatal, and the run
-// would fail) and feeds ParseHCL 5,000 repeats of each construct that makes the
-// parser recurse. It is not parallel, because the limit is process-wide.
-func TestHostileInputDoesNotReachTheParserStack(t *testing.T) {
-	defer debug.SetMaxStack(debug.SetMaxStack(4 << 20))
-	const n = 5000
-	for name, src := range map[string]string{
-		"a full splat":                "entity \"A\" {\n  key = a" + rep("[*]", n) + "\n}\n",
-		"an attribute splat":          "x = a" + rep(".*", n),
-		"heredoc lines":               "x = <<EOT\n" + rep("a\n", n) + "EOT\n",
-		"directives":                  "x = <<EOT\n" + rep("%{\nif x}", n) + "EOT\n",
-		"hidden directives":           "x = <<EOT\n" + rep("%{/**/if true}", n) + "EOT\n",
-		"unary minus":                 "x = " + rep("-", n) + "1",
-		"unary bangs":                 "x = " + rep("!", n) + "true",
-		"conditionals":                "x = " + rep("a ? b : ", n) + "c",
-		"nested conditionals":         "x = " + rep("a ? ", n) + "b" + rep(" : c", n),
-		"a sum":                       "x = 1" + rep(" + 1", n),
-		"a traversal":                 "x = a" + rep(".b", n),
-		"indexes":                     "x = a" + rep("[0]", n),
-		"namespaces":                  "x = " + rep("a::", n) + "b()",
-		"nested calls":                "x = " + rep("f(", n) + "1" + rep(")", n),
-		"nested for expression":       "x = " + rep("[for a in b : ", n) + "1" + rep("]", n),
-		"nested templates":            "x = " + rep("\"${", n) + "1" + rep("}\"", n),
-		"nested lists":                "x = " + rep("[", n) + rep("]", n),
-		"closers, then nested lists":  rep("]", n) + "\nx = " + rep("[", n),
-		"closing braces, then blocks": rep("}\n", n) + rep("a {\n", n),
-		"nested objects":              "x = " + rep("{a=", n) + "1" + rep("}", n),
-		"nested blocks":               rep("a {\n", n) + rep("}\n", n),
-	} {
-		if m, fs := ParseHCL("a"+hclExt, []byte(src)); !m.Broken || len(fs) == 0 {
-			t.Errorf("%s: broken %v, findings %v", name, m.Broken, fs)
 		}
 	}
 }

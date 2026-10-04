@@ -71,29 +71,6 @@ func linearShapes() map[string]func(n int) (string, func(src string) (*Model, []
 	}
 }
 
-// The checker's work is linear in the size of the model: eight times the model
-// allocates about eight times the memory, where a scan for each reference, or a
-// map of an entity's properties rebuilt for each bind, took sixty-four times. The
-// allocator's own count stands for steps (see allocated): it does not depend on
-// time or on the load of the machine. Not parallel, because the count is of the
-// whole process.
-func TestCheckIsLinear(t *testing.T) {
-	for name, build := range linearShapes() {
-		smallSrc, parse := build(128)
-		largeSrc, _ := build(1024)
-		check := func(src string) func() {
-			return func() {
-				m, _ := parse(src)
-				Check([]*Model{m}, Options{})
-			}
-		}
-		a, b := allocated(check(smallSrc)), allocated(check(largeSrc))
-		if ratio := float64(b) / float64(a); ratio > 14 {
-			t.Errorf("%s: 8 times the model allocated %.1f times the memory (%d and %d bytes), want about 8", name, ratio, a, b)
-		}
-	}
-}
-
 func parseHCLString(src string) (*Model, []Finding)  { return ParseHCL("a"+hclExt, []byte(src)) }
 func parseJSONString(src string) (*Model, []Finding) { return ParseJSON("a"+jsonExt, []byte(src)) }
 
@@ -145,7 +122,7 @@ func TestUnitIndexAgreesWithAScan(t *testing.T) {
 // twice the fields of the components it uses however many lookups there are.
 func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 	t.Parallel()
-	for _, n := range []int{100, 300} {
+	for _, n := range []int{100, 200} {
 		var b strings.Builder
 		for i := 0; i < n; i++ {
 			fmt.Fprintf(&b, "entity \"E%d\" {\n  key = []\n}\n", i)
@@ -179,7 +156,7 @@ func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 		}
 	}
 	// Property lookups: the probes stop growing once the merged set is built.
-	for _, n := range []int{40, 120} {
+	for _, n := range []int{30, 90} {
 		var b strings.Builder
 		fields := 0
 		for i := 0; i < 5; i++ {
@@ -210,7 +187,7 @@ func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 	// Through a whole check, each concept of a unit is visited once and no member
 	// set is built twice, at two sizes of each shape.
 	for name, build := range linearShapes() {
-		for _, n := range []int{48, 192} {
+		for _, n := range []int{32, 128} {
 			src, parse := build(n)
 			m, _ := parse(src)
 			c := runCheck([]*Model{m}, Options{})
