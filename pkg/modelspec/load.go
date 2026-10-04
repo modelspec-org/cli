@@ -3,19 +3,25 @@ package modelspec
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // FS is the filesystem the loader reads and writes through. OSFS is the real
 // one; tests use in-memory implementations.
 type FS interface {
-	ReadFile(name string) ([]byte, error)
+	// Open opens a file for reading. It is read only through ReadSource, which
+	// refuses what is not a regular file and bounds how much is read.
+	Open(name string) (fs.File, error)
 	ReadDir(name string) ([]fs.DirEntry, error)
+	// Stat follows symbolic links; Lstat does not.
 	Stat(name string) (fs.FileInfo, error)
+	Lstat(name string) (fs.FileInfo, error)
 	WriteFile(name string, data []byte, perm fs.FileMode) error
 	// Abs returns the absolute form of a path, cleaned, with symbolic links left
 	// as they are: the path as the file was given or found. The SpecScore layout
@@ -27,33 +33,101 @@ type FS interface {
 	SameFile(a, b fs.FileInfo) bool
 }
 
-// TooLargeError is the error of a file over MaxInputBytes, which is not read.
+// TooLargeError is the error of a file over MaxInputBytes, which is not read
+// (further than the limit). Partial is set when the size is not known: the file
+// grew after it was checked, and Size is how much was read before reading stopped.
 type TooLargeError struct {
-	File string
-	Size int64
+	File    string
+	Size    int64
+	Partial bool
 }
 
 func (e *TooLargeError) Error() string {
+	if e.Partial {
+		return fmt.Sprintf("%s: file is more than %d bytes; the limit is %d bytes", e.File, e.Size-1, MaxInputBytes)
+	}
 	return fmt.Sprintf("%s: file is %d bytes; the limit is %d bytes", e.File, e.Size, MaxInputBytes)
 }
 
-// ReadSource reads a file, which every command that reads a model goes through:
-// one larger than MaxInputBytes is refused with a *TooLargeError before it is read
-// into memory, and again after, in case it grew between the two.
+// NotRegularError is the error of a file that is not a regular file: a device, a
+// named pipe, a socket or a directory, which has no size and may never end.
+type NotRegularError struct {
+	File string
+	What string // what it is: "a named pipe", "a symbolic link to a character device"
+}
+
+func (e *NotRegularError) Error() string {
+	return fmt.Sprintf("%s is %s, not a regular file; modelspec reads regular files only", e.File, e.What)
+}
+
+// fileKind says what a file that is not a regular file is.
+func fileKind(mode fs.FileMode) string {
+	switch {
+	case mode.IsDir():
+		return "a directory"
+	case mode&fs.ModeNamedPipe != 0:
+		return "a named pipe"
+	case mode&fs.ModeSocket != 0:
+		return "a socket"
+	case mode&fs.ModeCharDevice != 0:
+		return "a character device"
+	case mode&fs.ModeDevice != 0:
+		return "a device"
+	default:
+		return "not an ordinary file"
+	}
+}
+
+// notRegular returns the error for a path whose target is not a regular file
+// (nil when it is), saying whether the path is a symbolic link to it.
+func notRegular(fsys FS, name string, target fs.FileInfo) error {
+	if target.Mode().IsRegular() {
+		return nil
+	}
+	what := fileKind(target.Mode())
+	if li, err := fsys.Lstat(name); err == nil && li.Mode()&fs.ModeSymlink != 0 {
+		what = "a symbolic link to " + what
+	}
+	return &NotRegularError{File: name, What: what}
+}
+
+// ReadSource reads a file, which every command that reads a model goes through,
+// for every kind of file (a model, the JSON operand of export --check, a --module
+// path). A symbolic link is followed to its target, which must be a regular file:
+// that is checked before the file is opened (opening a named pipe waits for a
+// writer), and again on the opened file, and what is read is at most
+// MaxInputBytes+1, so a file that grows after the checks, or that reports a size
+// of zero and never ends, is still bounded. One over the limit is refused with a
+// *TooLargeError, and one that is not regular with a *NotRegularError.
 func ReadSource(fsys FS, name string) ([]byte, error) {
 	info, err := fsys.Stat(name)
 	if err != nil {
 		return nil, err
 	}
+	if err := notRegular(fsys, name, info); err != nil {
+		return nil, err
+	}
 	if info.Size() > MaxInputBytes {
 		return nil, &TooLargeError{File: name, Size: info.Size()}
 	}
-	src, err := fsys.ReadFile(name)
+	f, err := fsys.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if err := notRegular(fsys, name, opened); err != nil {
+		return nil, err
+	}
+	src, err := io.ReadAll(io.LimitReader(f, MaxInputBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(src) > MaxInputBytes {
-		return nil, &TooLargeError{File: name, Size: int64(len(src))}
+		return nil, &TooLargeError{File: name, Size: int64(len(src)), Partial: true}
 	}
 	return src, nil
 }
@@ -63,9 +137,14 @@ type OSFS struct {
 	getwd func() (string, error) // os.Getwd when nil; a seam for tests
 }
 
-func (OSFS) ReadFile(name string) ([]byte, error)       { return os.ReadFile(name) }
+// Open opens without waiting: opening a named pipe for reading otherwise blocks
+// until a writer comes, and ReadSource must be able to refuse it.
+func (OSFS) Open(name string) (fs.File, error) {
+	return os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+}
 func (OSFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
 func (OSFS) Stat(name string) (fs.FileInfo, error)      { return os.Stat(name) }
+func (OSFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) }
 func (OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	return os.WriteFile(name, data, perm)
 }
@@ -127,6 +206,7 @@ type Source struct {
 
 // discovery collects the model files of a run, once each.
 type discovery struct {
+	warned   map[string]bool // a warning is given once for a file
 	fsys     FS
 	seen     map[string]bool          // by Abs
 	infos    map[string][]fs.FileInfo // by size and time: candidates for SameFile
@@ -135,7 +215,7 @@ type discovery struct {
 }
 
 func newDiscovery(fsys FS) *discovery {
-	return &discovery{fsys: fsys, seen: map[string]bool{}, infos: map[string][]fs.FileInfo{}}
+	return &discovery{fsys: fsys, warned: map[string]bool{}, seen: map[string]bool{}, infos: map[string][]fs.FileInfo{}}
 }
 
 // add records a file unless the same file is already there; it reports whether
@@ -189,6 +269,10 @@ func (d *discovery) addPath(p string, anyHCL bool) error {
 	if !isModel(p, abs, anyHCL) {
 		return fmt.Errorf("%s: not a ModelSpec file (expected a name ending in %s or %s, or a .hcl file in a SpecScore models directory)", p, HCLSuffix, JSONSuffix)
 	}
+	// A file named on the command line may be a link to a regular file.
+	if err := notRegular(d.fsys, p, info); err != nil {
+		return err
+	}
 	d.add(Source{Path: filepath.Clean(p), Abs: abs}, info)
 	return nil
 }
@@ -200,57 +284,64 @@ func (d *discovery) walk(dir string, anyHCL bool) error {
 	}
 	for _, e := range entries {
 		full := filepath.Join(dir, e.Name())
-		switch {
-		case e.Type()&fs.ModeSymlink != 0:
-			d.link(full, e.Name(), anyHCL)
-		case e.IsDir():
+		if e.IsDir() {
 			if !skipDir(e.Name()) {
 				if err := d.walk(full, anyHCL); err != nil {
 					return err
 				}
 			}
-		default:
-			d.found(full, e.Name(), anyHCL)
+			continue
 		}
+		d.found(full, e.Name(), anyHCL)
 	}
 	return nil
 }
 
+// warn records a warning about a file, once.
+func (d *discovery) warn(file, message string) {
+	if !d.warned[file+message] {
+		d.warned[file+message] = true
+		d.findings = append(d.findings, Finding{File: file, Rule: RuleIO, Severity: SeverityWarning, Message: message})
+	}
+}
+
 // found adds a file a search met when it is a model file; a file that cannot be
-// read is a warning, not the end of the run.
+// read is a warning, not the end of the run. A search does not follow symbolic
+// links: a link that would have been a model file is a warning that names it
+// (a repository can point one at a device, or at a file outside it), and so is a
+// model file that is not a regular file.
 func (d *discovery) found(full, name string, anyHCL bool) bool {
-	info, err := d.fsys.Stat(full)
+	info, err := d.fsys.Lstat(full)
 	if err != nil {
-		d.findings = append(d.findings, Finding{File: full, Rule: RuleIO, Severity: SeverityWarning, Message: "cannot be read, so the file was not checked: " + err.Error()})
+		d.warn(full, "cannot be read, so the file was not checked: "+err.Error())
 		return false
 	}
 	abs, err := d.fsys.Abs(full)
 	if err != nil {
-		d.findings = append(d.findings, Finding{File: full, Rule: RuleIO, Severity: SeverityWarning, Message: "cannot be read, so the file was not checked: " + err.Error()})
+		d.warn(full, "cannot be read, so the file was not checked: "+err.Error())
 		return false
 	}
-	return isModel(name, abs, anyHCL) && d.add(Source{Path: full, Abs: abs}, info)
-}
-
-// link follows a symbolic link to a file; a link to a directory is not followed,
-// and a dangling link is a warning, not the end of the run.
-func (d *discovery) link(full, name string, anyHCL bool) {
-	info, err := d.fsys.Stat(full)
-	switch {
-	case err != nil:
-		if IsModelFile(name) || strings.HasSuffix(name, ".hcl") {
-			d.findings = append(d.findings, Finding{File: full, Rule: RuleIO, Severity: SeverityWarning, Message: "symbolic link cannot be followed, so the file was not checked: " + err.Error()})
-		}
-	case !info.IsDir():
-		d.found(full, name, anyHCL)
+	if d.seen[abs] || !isModel(name, abs, anyHCL) {
+		return false // met already (a link named on the command line, then met in its directory)
 	}
+	switch {
+	case info.Mode()&fs.ModeSymlink != 0:
+		d.warn(full, "is a symbolic link, which a search does not follow, so the file was not checked (name the file itself to check what it points to)")
+		return false
+	case !info.Mode().IsRegular():
+		d.warn(full, "is "+fileKind(info.Mode())+", not a regular file, so the file was not checked")
+		return false
+	}
+	return d.add(Source{Path: full, Abs: abs}, info)
 }
 
 // Discover expands paths into model files. A file is taken as given (it must be
 // a model file); a directory is searched recursively for *.modelspec.hcl and
 // *.modelspec.json, and in a SpecScore layout models directory for any *.hcl.
-// Hidden directories and node_modules are skipped, and symlinked directories are
-// not followed; a symlink to a file is read through. A file reached by two names
+// Hidden directories and node_modules are skipped. A search follows no symbolic
+// link, to a directory or to a file: a link that would have been a model file is
+// a warning that names it. A file named on the command line may be a link to a
+// regular file, and is read through. A file reached by two names
 // is returned once, under the first name. The result is sorted by path. The
 // findings are warnings for files a search found but cannot read.
 func Discover(fsys FS, paths []string) ([]Source, []Finding, error) {
@@ -308,7 +399,7 @@ func (d *discovery) expand() ([]string, error) {
 			continue
 		}
 		path := filepath.Join(dir, partner)
-		if info, err := d.fsys.Stat(path); err == nil && !info.IsDir() && d.found(path, partner, false) {
+		if info, err := d.fsys.Lstat(path); err == nil && !info.IsDir() && d.found(path, partner, false) {
 			notes = append(notes, fmt.Sprintf("%s and %s are one module (the JSON is the interchange copy of the HCL), so both were checked", filepath.ToSlash(s.Path), filepath.ToSlash(path)))
 		}
 	}
@@ -371,7 +462,7 @@ func Load(fsys FS, files []Source, assign []Assignment) ([]*Model, []Finding, er
 			if strings.HasSuffix(f.Path, JSONSuffix) {
 				m.Form = FormJSON
 			}
-			findings = append(findings, oversize(f.Path, tooLarge.Size))
+			findings = append(findings, oversize(f.Path, tooLarge.Size, tooLarge.Partial))
 		case err != nil:
 			return nil, nil, err
 		default:

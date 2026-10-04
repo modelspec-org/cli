@@ -2,6 +2,7 @@ package modelspec
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -177,17 +178,28 @@ func TestDiscoverSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The link and its target are one file, read once, under the name the search met first.
-	if paths(got) != "dir/keep.modelspec.hcl link.modelspec.hcl" {
+	// A search follows no link: the model-named ones (the link to a file, the dangling one)
+	// are warnings that name them, the link to a directory and the ones that are not model-named
+	// are not, and the files are the two real ones.
+	if paths(got) != "dir/keep.modelspec.hcl real/a.modelspec.hcl" {
 		t.Fatalf("files = %v", paths(got))
 	}
-	if len(warnings) != 2 || warnings[0].File != "dangling.hcl" || warnings[1].File != "dangling.modelspec.hcl" || !strings.Contains(warnings[0].Message, "symbolic link cannot be followed") || warnings[0].Severity != SeverityWarning {
+	if len(warnings) != 2 || warnings[0].File != "dangling.modelspec.hcl" || warnings[1].File != "link.modelspec.hcl" || warnings[0].Severity != SeverityWarning {
 		t.Fatalf("warnings = %v", warnings)
 	}
-	// The rest of the run goes on, and the warning is in the findings.
+	for _, w := range warnings {
+		if !strings.Contains(w.Message, "is a symbolic link, which a search does not follow") || w.Rule != RuleIO {
+			t.Errorf("warning = %v", w)
+		}
+	}
+	// The rest of the run goes on, and the warnings are in the findings.
 	res, err := Lint(fsys, []string{"."}, LintOptions{})
 	if err != nil || len(res.Findings) != 2 {
 		t.Fatalf("Lint = %v, %v", res.Findings, err)
+	}
+	// A link named on the command line is read through to its regular file.
+	if got, _, err := Discover(fsys, []string{"link.modelspec.hcl"}); err != nil || paths(got) != "link.modelspec.hcl" {
+		t.Errorf("a link named explicitly: %v, %v", paths(got), err)
 	}
 	// A dangling link named on the command line is an error.
 	if _, _, err := Discover(fsys, []string{"dangling.modelspec.hcl"}); err == nil {
@@ -205,10 +217,11 @@ func TestLayoutIsReadFromTheGivenPath(t *testing.T) {
 		layout("sales", "entities.hcl"): order,
 		"shared/enums.hcl":              enums,
 	})
-	// A part of the module that is a symbolic link to a file elsewhere is still a part.
+	// A part of the module that is a symbolic link to a file elsewhere is not followed: a
+	// warning names it, and the module is checked without it.
 	fsys.links[layout("sales", "enums.hcl")] = "shared/enums.hcl"
 	fsys.MapFS[layout("sales", "enums.hcl")] = fsys.MapFS["shared/enums.hcl"]
-	expect(t, lintTree(fsys, "spec"))
+	expect(t, lintTree(fsys, "spec"), "enums.hcl: warning: is a symbolic link", `enum reference "Status" does not resolve`)
 	// Named, the link has a model name and the same module as its siblings.
 	linked := newMemFS(map[string]string{
 		layout("sales", "entities.hcl"): order,
@@ -216,7 +229,12 @@ func TestLayoutIsReadFromTheGivenPath(t *testing.T) {
 	})
 	linked.links[layout("sales", "enums.modelspec.hcl")] = "shared/enums.modelspec.hcl"
 	linked.MapFS[layout("sales", "enums.modelspec.hcl")] = linked.MapFS["shared/enums.modelspec.hcl"]
-	expect(t, lintTree(linked, "spec"))
+	expect(t, lintTree(linked, "spec"), "enums.modelspec.hcl: warning: is a symbolic link", `enum reference "Status" does not resolve`)
+	// Given by name, a link is read through, and is part of its module.
+	res, err := Lint(linked, []string{layout("sales", "entities.hcl"), layout("sales", "enums.modelspec.hcl")}, LintOptions{})
+	if err != nil || len(res.Findings) != 0 {
+		t.Errorf("links named explicitly: %v, %v", res.Findings, err)
+	}
 
 	// A tree reached through a symbolic link to its modules directory has the layout of the path used.
 	via := newMemFS(map[string]string{
@@ -528,7 +546,7 @@ func TestOversizeFileIsNotRead(t *testing.T) {
 	if err != nil || read["big.modelspec.hcl"] || read["bigj.modelspec.json"] || !read["ok.modelspec.hcl"] {
 		t.Fatalf("read %v, %v", read, err)
 	}
-	if len(res.Findings) != 2 || res.Findings[0].Rule != RuleLimit || !strings.Contains(res.Findings[0].Message, "the limit is 4194304 bytes") || res.Findings[0].File != "big.modelspec.hcl" || res.Findings[1].File != "bigj.modelspec.json" {
+	if len(res.Findings) != 2 || res.Findings[0].Rule != RuleLimit || !strings.Contains(res.Findings[0].Message, "the limit is 1048576 bytes") || res.Findings[0].File != "big.modelspec.hcl" || res.Findings[1].File != "bigj.modelspec.json" {
 		t.Fatalf("findings = %v", res.Findings)
 	}
 	for _, m := range res.Models {
@@ -546,9 +564,9 @@ type readSpy struct {
 	read map[string]bool
 }
 
-func (r *readSpy) ReadFile(name string) ([]byte, error) {
+func (r *readSpy) Open(name string) (fs.File, error) {
 	r.read[name] = true
-	return r.memFS.ReadFile(name)
+	return r.memFS.Open(name)
 }
 
 func TestLint(t *testing.T) {
@@ -600,7 +618,7 @@ func TestLint(t *testing.T) {
 
 type unreadableFS struct{ *memFS }
 
-func (unreadableFS) ReadFile(string) ([]byte, error) { return nil, errors.New("unreadable") }
+func (unreadableFS) Open(string) (fs.File, error) { return nil, errors.New("unreadable") }
 
 func TestOSFS(t *testing.T) {
 	t.Parallel()
@@ -610,8 +628,8 @@ func TestOSFS(t *testing.T) {
 	if err := fsys.WriteFile(file, []byte(okEntity), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := fsys.ReadFile(file); err != nil || string(b) != okEntity {
-		t.Fatalf("ReadFile = %q, %v", b, err)
+	if b, err := ReadSource(fsys, file); err != nil || string(b) != okEntity {
+		t.Fatalf("ReadSource = %q, %v", b, err)
 	}
 	if info, err := fsys.Stat(dir); err != nil || !info.IsDir() {
 		t.Fatalf("Stat = %v, %v", info, err)
@@ -671,8 +689,8 @@ func TestOSFS(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err = Lint(fsys, []string{dir}, LintOptions{})
-	if err != nil || res.Files != 2 || len(res.Findings) != 1 || res.Findings[0].Rule != RuleIO {
-		t.Fatalf("Lint with a dangling link and a directory link = %d files, %v, %v", res.Files, res.Findings, err)
+	if err != nil || res.Files != 2 || len(res.Findings) != 2 || res.Findings[0].Rule != RuleIO || res.Findings[1].Rule != RuleIO {
+		t.Fatalf("Lint with a dangling link, the alias and a directory link = %d files, %v, %v", res.Files, res.Findings, err)
 	}
 	var pathErr *fs.PathError
 	if _, err := Lint(fsys, []string{filepath.Join(dir, "dangling.modelspec.hcl")}, LintOptions{}); !errors.As(err, &pathErr) {
@@ -690,7 +708,7 @@ func TestReadSource(t *testing.T) {
 		t.Errorf("a file of the limit: %d bytes, %v", len(src), err)
 	}
 	var tooLarge *TooLargeError
-	if _, err := ReadSource(fsys, "grew"); !errors.As(err, &tooLarge) || tooLarge.Size != MaxInputBytes+1 || tooLarge.File != "grew" || !strings.Contains(err.Error(), "grew: file is 4194305 bytes; the limit is 4194304 bytes") {
+	if _, err := ReadSource(fsys, "grew"); !errors.As(err, &tooLarge) || tooLarge.Size != MaxInputBytes+1 || !tooLarge.Partial || tooLarge.File != "grew" || !strings.Contains(err.Error(), "grew: file is more than 1048576 bytes; the limit is 1048576 bytes") {
 		t.Errorf("a file that grew: %v", err)
 	}
 	if _, err := ReadSource(fsys, "missing"); !errors.Is(err, fs.ErrNotExist) {
@@ -705,4 +723,200 @@ func TestReadSource(t *testing.T) {
 // failRead is an FS whose reads fail.
 type failRead struct{ *memFS }
 
-func (failRead) ReadFile(string) ([]byte, error) { return nil, errors.New("read failed") }
+func (f failRead) Open(name string) (fs.File, error) {
+	info, err := f.memFS.Stat(name)
+	return specialFile{Reader: errReader{}, info: info}, err
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
+// countingZeros is a reader that never ends and counts what it gave.
+type countingZeros struct{ n *int64 }
+
+func (c countingZeros) Read(p []byte) (int, error) {
+	*c.n += int64(len(p))
+	return len(p), nil
+}
+
+// What is not a regular file is refused before it is opened and without being read,
+// whatever it is and however it is reached: a device that reports a size of zero and
+// never ends, a named pipe, a directory, a symbolic link to each; a regular file that
+// reports a small size and grows is read only up to one byte over the limit.
+func TestReadSourceRefusesWhatIsNotRegular(t *testing.T) {
+	t.Parallel()
+	var given int64
+	zeros := func() io.Reader { return countingZeros{&given} }
+	fsys := newMemFS(map[string]string{"dev": "", "pipe": "", "dir/x": "", "plain": "ok", "grows": "", "swapped": "", "loop": ""})
+	fsys.modes["dev"] = fs.ModeDevice | fs.ModeCharDevice
+	fsys.modes["pipe"] = fs.ModeNamedPipe
+	fsys.streams["dev"], fsys.streams["pipe"] = zeros, zeros
+	fsys.links["link-dev"], fsys.links["link-pipe"], fsys.links["link-dir"] = "dev", "pipe", "dir"
+	fsys.MapFS["link-dev"], fsys.MapFS["link-pipe"], fsys.MapFS["link-dir"] = fsys.MapFS["dev"], fsys.MapFS["pipe"], fsys.MapFS["dir"]
+	spy := &readSpy{memFS: fsys, read: map[string]bool{}}
+	for name, want := range map[string]string{
+		"dev":       "dev is a character device, not a regular file",
+		"pipe":      "pipe is a named pipe, not a regular file",
+		"dir":       "dir is a directory, not a regular file",
+		"link-dev":  "link-dev is a symbolic link to a character device, not a regular file",
+		"link-pipe": "link-pipe is a symbolic link to a named pipe, not a regular file",
+		"link-dir":  "link-dir is a symbolic link to a directory, not a regular file",
+	} {
+		_, err := ReadSource(spy, name)
+		var notRegular *NotRegularError
+		if !errors.As(err, &notRegular) || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want %q", name, err, want)
+		}
+	}
+	if len(spy.read) != 0 || given != 0 {
+		t.Errorf("opened %v and read %d bytes of what is not regular", spy.read, given)
+	}
+	// A device is a device whatever mode bit it has.
+	for mode, want := range map[fs.FileMode]string{fs.ModeDevice: "a device", fs.ModeSocket: "a socket", fs.ModeIrregular: "not an ordinary file"} {
+		if got := fileKind(mode); got != want {
+			t.Errorf("fileKind(%v) = %q, want %q", mode, got, want)
+		}
+	}
+	// A loop of links is an error from Stat, and is not read.
+	fsys.statErr["loop"] = errors.New("too many levels of symbolic links")
+	if _, err := ReadSource(spy, "loop"); err == nil || !strings.Contains(err.Error(), "too many levels") || len(spy.read) != 0 {
+		t.Errorf("a loop of links: %v", err)
+	}
+	// A regular file that reports no size and never ends is read up to one byte over the limit.
+	given = 0
+	fsys.streams["grows"] = zeros
+	var tooLarge *TooLargeError
+	if _, err := ReadSource(fsys, "grows"); !errors.As(err, &tooLarge) || !tooLarge.Partial || given != MaxInputBytes+1 {
+		t.Errorf("an endless regular file: %v after %d bytes, want %d", err, given, MaxInputBytes+1)
+	}
+	// A file that was regular when checked and is a pipe when opened is refused on the opened file.
+	given = 0
+	fsys.streams["swapped"] = zeros
+	fsys.openModes["swapped"] = fs.ModeNamedPipe
+	var notRegular *NotRegularError
+	if _, err := ReadSource(fsys, "swapped"); !errors.As(err, &notRegular) || given != 0 {
+		t.Errorf("a file swapped for a pipe: %v after %d bytes", err, given)
+	}
+	// Exactly the limit is read, and one byte over is refused with the size.
+	for size, wantErr := range map[int]bool{MaxInputBytes: false, MaxInputBytes + 1: true} {
+		edge := newMemFS(map[string]string{"f": strings.Repeat("x", size)})
+		src, err := ReadSource(edge, "f")
+		if wantErr != errors.As(err, &tooLarge) || (!wantErr && len(src) != size) || (wantErr && (tooLarge.Partial || tooLarge.Size != int64(size))) {
+			t.Errorf("%d bytes: read %d, %v", size, len(src), err)
+		}
+	}
+	// A read error of an open file is the error.
+	if _, err := ReadSource(&failRead{memFS: fsys}, "plain"); err == nil || err.Error() != "read failed" {
+		t.Errorf("read error: %v", err)
+	}
+	// A file that cannot be asked about once open.
+	if _, err := ReadSource(statFails{fsys}, "plain"); err == nil || err.Error() != "stat failed" {
+		t.Errorf("stat of an open file: %v", err)
+	}
+}
+
+// statFails is an FS whose opened files cannot be asked about.
+type statFails struct{ *memFS }
+
+func (s statFails) Open(name string) (fs.File, error) {
+	f, err := s.memFS.Open(name)
+	return noStat{f}, err
+}
+
+type noStat struct{ fs.File }
+
+func (noStat) Stat() (fs.FileInfo, error) { return nil, errors.New("stat failed") }
+
+// A search names what it will not read and does not read it: a link (to a device, a
+// pipe or a file), a pipe and a device found in a directory are warnings that name
+// them; the other files are read.
+func TestSearchDoesNotReadLinksPipesOrDevices(t *testing.T) {
+	t.Parallel()
+	var given int64
+	zeros := func() io.Reader { return countingZeros{&given} }
+	fsys := newMemFS(map[string]string{"repo/ok.modelspec.hcl": okEntity, "repo/pipe.modelspec.hcl": "", "repo/dev.modelspec.json": "", "repo/real.modelspec.hcl": okEntity, "dir/models.txt": ""})
+	fsys.modes["repo/pipe.modelspec.hcl"] = fs.ModeNamedPipe
+	fsys.modes["repo/dev.modelspec.json"] = fs.ModeDevice | fs.ModeCharDevice
+	fsys.streams["repo/pipe.modelspec.hcl"], fsys.streams["repo/dev.modelspec.json"] = zeros, zeros
+	fsys.links["repo/evil.modelspec.hcl"] = "repo/dev.modelspec.json" // what a repository can hold: a link to /dev/zero
+	fsys.links["repo/alias.modelspec.hcl"] = "repo/real.modelspec.hcl"
+	fsys.MapFS["repo/evil.modelspec.hcl"] = fsys.MapFS["repo/dev.modelspec.json"]
+	fsys.MapFS["repo/alias.modelspec.hcl"] = fsys.MapFS["repo/real.modelspec.hcl"]
+	spy := &readSpy{memFS: fsys, read: map[string]bool{}}
+	res, err := Lint(spy, []string{"repo"}, LintOptions{})
+	if err != nil || given != 0 {
+		t.Fatalf("Lint: %v, %d bytes read from what is not a file", err, given)
+	}
+	var warned []string
+	for _, f := range res.Findings {
+		if f.Severity != SeverityWarning || f.Rule != RuleIO {
+			t.Errorf("finding %v", f)
+		}
+		warned = append(warned, f.File+" "+f.Message[:strings.Index(f.Message, ",")])
+	}
+	want := "repo/alias.modelspec.hcl is a symbolic link; repo/dev.modelspec.json is a character device; repo/evil.modelspec.hcl is a symbolic link; repo/pipe.modelspec.hcl is a named pipe"
+	if got := strings.Join(warned, "; "); got != want {
+		t.Errorf("warnings:\n got %s\nwant %s", got, want)
+	}
+	for name := range spy.read {
+		if name != "repo/ok.modelspec.hcl" && name != "repo/real.modelspec.hcl" {
+			t.Errorf("read %s", name)
+		}
+	}
+	// Named on the command line, a pipe, a device and a link to one are errors, and a link to a file is read.
+	for _, name := range []string{"repo/pipe.modelspec.hcl", "repo/dev.modelspec.json", "repo/evil.modelspec.hcl"} {
+		var notRegular *NotRegularError
+		if _, err := Lint(spy, []string{name}, LintOptions{}); !errors.As(err, &notRegular) {
+			t.Errorf("%s named: %v", name, err)
+		}
+	}
+	if res, err := Lint(spy, []string{"repo/alias.modelspec.hcl"}, LintOptions{}); err != nil || res.Files != 1 {
+		t.Errorf("a link to a file named: %d files, %v", res.Files, err)
+	}
+	if given != 0 {
+		t.Errorf("%d bytes were read from what is not a regular file", given)
+	}
+}
+
+// The operating system's own files: a device is refused, whatever the fake says.
+func TestOSFSRefusesADeviceAndOpensWithoutWaiting(t *testing.T) {
+	t.Parallel()
+	var notRegular *NotRegularError
+	if _, err := ReadSource(OSFS{}, os.DevNull); !errors.As(err, &notRegular) {
+		t.Errorf("%s: %v", os.DevNull, err)
+	}
+	dir := t.TempDir()
+	if _, err := ReadSource(OSFS{}, dir); !errors.As(err, &notRegular) || !strings.Contains(err.Error(), "a directory") {
+		t.Errorf("a directory: %v", err)
+	}
+	file := filepath.Join(dir, "f")
+	if err := os.WriteFile(file, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if src, err := ReadSource(OSFS{}, file); err != nil || string(src) != "data" {
+		t.Errorf("a regular file: %q, %v", src, err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(os.DevNull, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	if _, err := ReadSource(OSFS{}, link); !errors.As(err, &notRegular) || !strings.Contains(err.Error(), "a symbolic link to a character device") {
+		t.Errorf("a link to the null device: %v", err)
+	}
+	if _, err := (OSFS{}).Open(filepath.Join(dir, "missing")); err == nil {
+		t.Error("a missing file opened")
+	}
+}
+
+// A file that grows after it was checked is a finding as well, saying only that it
+// is more than the limit.
+func TestFileThatGrewIsAFinding(t *testing.T) {
+	t.Parallel()
+	fsys := newMemFS(map[string]string{"grew.modelspec.hcl": strings.Repeat("#", MaxInputBytes+5)})
+	fsys.sizes["grew.modelspec.hcl"] = 10
+	res, err := Lint(fsys, []string{"."}, LintOptions{})
+	if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleLimit || res.Findings[0].Message != "file is more than 1048576 bytes; the limit is 1048576 bytes" {
+		t.Fatalf("findings %v, %v", res.Findings, err)
+	}
+}

@@ -350,7 +350,7 @@ func TestPrecheck(t *testing.T) {
 		t.Error("valid UTF-8 refused")
 	}
 	f, bad := precheck("f", make([]byte, MaxInputBytes+1))
-	if !bad || f.Rule != RuleLimit || !strings.Contains(f.Message, "the limit is 4194304 bytes") || f.Line != 0 {
+	if !bad || f.Rule != RuleLimit || !strings.Contains(f.Message, "the limit is 1048576 bytes") || f.Line != 0 {
 		t.Fatalf("finding = %+v", f)
 	}
 	if _, bad := precheck("f", make([]byte, MaxInputBytes)); bad {

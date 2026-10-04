@@ -26,12 +26,26 @@ type memFS struct {
 	writeErr error
 	listErr  error // makes ReadDir of a directory that has models in it fail
 	reads    []string
+	special  map[string]fs.FileMode // files that are not regular: a device, a pipe
 }
 
-func (m *memFS) ReadFile(name string) ([]byte, error) {
+// endless is a file that never ends: what a device is.
+type endless struct{ info fs.FileInfo }
+
+func (e endless) Read(p []byte) (int, error) { return len(p), nil }
+func (endless) Close() error                 { return nil }
+func (e endless) Stat() (fs.FileInfo, error) { return e.info, nil }
+
+func (m *memFS) Open(name string) (fs.File, error) {
 	m.reads = append(m.reads, name)
-	return m.MapFS.ReadFile(strings.TrimPrefix(filepath.Clean(name), "/"))
+	if _, ok := m.special[filepath.Clean(name)]; ok {
+		info, err := m.Stat(name)
+		return endless{info}, err
+	}
+	return m.MapFS.Open(strings.TrimPrefix(filepath.Clean(name), "/"))
 }
+
+func (m *memFS) Lstat(name string) (fs.FileInfo, error) { return m.Stat(name) }
 
 func (m *memFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if m.listErr != nil && strings.HasSuffix(filepath.ToSlash(name), "/models") {
@@ -60,6 +74,14 @@ func (m *memFS) Abs(name string) (string, error) {
 type pathInfo struct {
 	fs.FileInfo
 	path string
+	mode fs.FileMode // when not zero, the mode of the file
+}
+
+func (p pathInfo) Mode() fs.FileMode {
+	if p.mode != 0 {
+		return p.mode
+	}
+	return p.FileInfo.Mode()
 }
 
 func (m *memFS) Stat(name string) (fs.FileInfo, error) {
@@ -67,7 +89,7 @@ func (m *memFS) Stat(name string) (fs.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pathInfo{info, filepath.Clean(name)}, nil
+	return pathInfo{info, filepath.Clean(name), m.special[filepath.Clean(name)]}, nil
 }
 
 func (m *memFS) SameFile(a, b fs.FileInfo) bool {
@@ -861,7 +883,7 @@ func TestExportCheckRefusesAJSONOperandOverTheLimit(t *testing.T) {
 	h := newHarness(map[string]string{"a.modelspec.hcl": goodHCL})
 	h.fsys.MapFS["big.json"] = &fstest.MapFile{Data: make([]byte, modelspec.MaxInputBytes+1)}
 	code := h.run("export", "--check", "a.modelspec.hcl", "big.json")
-	if code != 1 || !strings.Contains(h.errb.String(), "big.json: file is 4194305 bytes; the limit is 4194304 bytes") {
+	if code != 1 || !strings.Contains(h.errb.String(), "big.json: file is 1048577 bytes; the limit is 1048576 bytes") {
 		t.Fatalf("exit %d, stderr %q", code, h.errb)
 	}
 	for _, name := range h.fsys.reads {
@@ -875,4 +897,37 @@ func TestExportCheckRefusesAJSONOperandOverTheLimit(t *testing.T) {
 	if code := h.run("export", "--check", "a.modelspec.hcl", "edge.json"); code != 1 || strings.Contains(h.errb.String(), "the limit is") {
 		t.Fatalf("exit %d, stderr %.200s", code, h.errb)
 	}
+}
+
+// What is not a regular file is refused by every command that reads a file: exit
+// 2 and a message that says what it is, and it is never opened.
+func TestCommandsRefuseWhatIsNotARegularFile(t *testing.T) {
+	t.Parallel()
+	for name, args := range map[string][]string{
+		"lint":                   {"lint", "dev.modelspec.hcl"},
+		"lint of a json":         {"lint", "pipe.modelspec.json"},
+		"export":                 {"export", "dev.modelspec.hcl"},
+		"export of the model":    {"export", "--check", "dev.modelspec.hcl", "a.modelspec.json"},
+		"export --check operand": {"export", "--check", "a.modelspec.hcl", "pipe.modelspec.json"},
+		"lint --module path":     {"lint", "a.modelspec.hcl", "--module", "x=dev.modelspec.hcl"},
+	} {
+		h := newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": "{}", "dev.modelspec.hcl": "", "pipe.modelspec.json": ""})
+		h.fsys.special = map[string]fs.FileMode{"dev.modelspec.hcl": fs.ModeDevice | fs.ModeCharDevice, "pipe.modelspec.json": fs.ModeNamedPipe}
+		code := h.run(append(args[:len(args):len(args)], exportIDIfExport(args)...)...)
+		if code != 2 || !strings.Contains(h.errb.String(), "not a regular file") {
+			t.Errorf("%s: exit %d, stderr %q", name, code, h.errb)
+		}
+		for _, read := range h.fsys.reads {
+			if read == "dev.modelspec.hcl" || read == "pipe.modelspec.json" {
+				t.Errorf("%s: opened %s", name, read)
+			}
+		}
+	}
+}
+
+func exportIDIfExport(args []string) []string {
+	if args[0] == "export" && args[1] != "--check" {
+		return exportID
+	}
+	return nil
 }

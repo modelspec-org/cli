@@ -30,11 +30,11 @@ import (
 )
 
 // The budget of one input. Reading and checking a large valid file (under both
-// profiles, as refusal does) allocates about 470 times its size; the budget is four
-// times that, and a fixed amount for the smallest inputs.
+// profiles, as refusal does) allocates about 470 times its size; the budget is twice
+// that, and a fixed amount for the smallest inputs.
 const (
 	allocBase    = 4 << 20
-	allocPerByte = 2000
+	allocPerByte = 1000
 	maxTime      = 10 * time.Second
 )
 

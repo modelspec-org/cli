@@ -1,6 +1,7 @@
 package modelspec
 
 import (
+	"io"
 	"io/fs"
 	"path/filepath"
 	"sort"
@@ -25,10 +26,18 @@ type memFS struct {
 	sizes    map[string]int64
 	absErr   map[string]error
 	statErr  map[string]error
+	// modes gives a path's target a type other than a regular file (a named pipe, a
+	// device), and streams what Open of it reads: a fake of /dev/zero is a reader
+	// that never ends.
+	modes   map[string]fs.FileMode
+	streams map[string]func() io.Reader
+	// openModes is the mode the opened file reports when it is not the one Stat
+	// reported: the file was swapped between the check and the open.
+	openModes map[string]fs.FileMode
 }
 
 func newMemFS(files map[string]string) *memFS {
-	m := &memFS{MapFS: fstest.MapFS{}, written: map[string][]byte{}, perms: map[string]fs.FileMode{}, links: map[string]string{}, sizes: map[string]int64{}, absErr: map[string]error{}, statErr: map[string]error{}}
+	m := &memFS{MapFS: fstest.MapFS{}, written: map[string][]byte{}, perms: map[string]fs.FileMode{}, links: map[string]string{}, sizes: map[string]int64{}, absErr: map[string]error{}, statErr: map[string]error{}, modes: map[string]fs.FileMode{}, streams: map[string]func() io.Reader{}, openModes: map[string]fs.FileMode{}}
 	for n, s := range files {
 		m.MapFS[n] = &fstest.MapFile{Data: []byte(s)}
 	}
@@ -71,6 +80,14 @@ type pathInfo struct {
 	fs.FileInfo
 	path string
 	size int64
+	mode fs.FileMode // when not zero, the mode of the file
+}
+
+func (p pathInfo) Mode() fs.FileMode {
+	if p.mode != 0 {
+		return p.mode
+	}
+	return p.FileInfo.Mode()
 }
 
 func (p pathInfo) Size() int64 {
@@ -92,7 +109,37 @@ func (m *memFS) SameFile(a, b fs.FileInfo) bool {
 	return pa.path == pb.path
 }
 
-func (m *memFS) ReadFile(name string) ([]byte, error) { return m.MapFS.ReadFile(m.resolve(name)) }
+// specialFile is an opened file that is not a regular file, or that never ends.
+type specialFile struct {
+	io.Reader
+	info fs.FileInfo
+}
+
+func (f specialFile) Stat() (fs.FileInfo, error) { return f.info, nil }
+func (specialFile) Close() error                 { return nil }
+
+func (m *memFS) Open(name string) (fs.File, error) {
+	t := m.resolve(name)
+	if stream, ok := m.streams[t]; ok {
+		info, err := m.Stat(name)
+		if err != nil {
+			return nil, err
+		}
+		if mode, ok := m.openModes[t]; ok {
+			info = pathInfo{FileInfo: info, mode: mode, size: -1}
+		}
+		return specialFile{Reader: stream(), info: info}, nil
+	}
+	return m.MapFS.Open(t)
+}
+
+// Lstat describes a symbolic link as a link, and anything else as Stat does.
+func (m *memFS) Lstat(name string) (fs.FileInfo, error) {
+	if _, ok := m.links[m.path(name)]; ok {
+		return pathInfo{FileInfo: fakeInfo{name: filepath.Base(name)}, path: m.path(name), size: -1}, nil
+	}
+	return m.Stat(name)
+}
 
 func (m *memFS) Stat(name string) (fs.FileInfo, error) {
 	if err, ok := m.statErr[m.path(name)]; ok {
@@ -110,7 +157,7 @@ func (m *memFS) Stat(name string) (fs.FileInfo, error) {
 	if s, ok := m.sizes[m.path(name)]; ok {
 		size = s
 	}
-	return pathInfo{FileInfo: info, path: t, size: size}, nil
+	return pathInfo{FileInfo: info, path: t, size: size, mode: m.modes[t]}, nil
 }
 
 type linkEntry struct{ fs.DirEntry }

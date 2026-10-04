@@ -16,9 +16,11 @@ import (
 // literal value cannot contain; what is left to bound is the nesting of brackets.
 const (
 	// MaxInputBytes is the largest source, in bytes, that is read. The lexer holds
-	// every token of a file in memory at once, about a hundred bytes each, so the
-	// limit also bounds that.
-	MaxInputBytes = 4 << 20
+	// every token of a file in memory at once, and the peak is about 420 to 470
+	// MiB for each MB of one-byte tokens, so 1 MiB keeps one file under 500 MiB
+	// and about a second of work. Chinook's model is under 8 KB and the largest
+	// corpus file 30 KB; a module is a set of files, each under the limit.
+	MaxInputBytes = 1 << 20
 	// MaxDepth is the deepest nesting of HCL braces, brackets, quoted strings and
 	// heredocs, counted from tokens (blocks, lists, objects), and of JSON arrays
 	// and objects. Real models nest four or five levels in HCL, six to eight in
@@ -41,7 +43,7 @@ const (
 // or is not valid UTF-8. Findings say where.
 func precheck(file string, src []byte) (Finding, bool) {
 	if len(src) > MaxInputBytes {
-		return oversize(file, int64(len(src))), true
+		return oversize(file, int64(len(src)), false), true
 	}
 	if !utf8.Valid(src) {
 		line := 1
@@ -60,8 +62,13 @@ func precheck(file string, src []byte) (Finding, bool) {
 	return Finding{}, false
 }
 
-// oversize is the finding for a source of the given size that exceeds the limit.
-func oversize(file string, size int64) Finding {
+// oversize is the finding for a source of the given size that exceeds the limit;
+// partial says the size is how much was read before reading stopped, not the
+// size of the file.
+func oversize(file string, size int64, partial bool) Finding {
+	if partial {
+		return Finding{File: file, Rule: RuleLimit, Severity: SeverityError, Message: fmt.Sprintf("file is more than %d bytes; the limit is %d bytes", size-1, MaxInputBytes)}
+	}
 	return Finding{File: file, Rule: RuleLimit, Severity: SeverityError, Message: fmt.Sprintf("file is %d bytes; the limit is %d bytes", size, MaxInputBytes)}
 }
 
