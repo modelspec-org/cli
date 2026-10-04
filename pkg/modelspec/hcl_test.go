@@ -330,13 +330,23 @@ func TestNegativeExponentIsNotAWholeNumber(t *testing.T) {
 
 func TestNumberProblemShowsTheNormalForm(t *testing.T) {
 	t.Parallel()
+	const why = "(the digits without trailing zeros, times a power of ten): a larger or smaller number cannot be read exactly"
 	for in, want := range map[string]string{
-		"100e99":  "the number 100e99 is 1e101, whose exponent 101 is past the limit of 100 either way (the digits without trailing zeros, times a power of ten): a larger or smaller number cannot be read exactly",
-		"-100e99": "the number -100e99 is -1e101, whose exponent 101 is past the limit of 100 either way (the digits without trailing zeros, times a power of ten): a larger or smaller number cannot be read exactly",
+		"100e99":  "the number 100e99 is 1e101, whose exponent 101 is past the limit of 100 either way " + why,
+		"-100e99": "the number -100e99 is -1e101, whose exponent 101 is past the limit of 100 either way " + why,
+		"1e101":   "the number 1e101 has the exponent 101, past the limit of 100 either way " + why,
+		"-1e-101": "the number -1e-101 has the exponent -101, past the limit of 100 either way " + why,
 		"0.1e101": "",
 	} {
 		if got := numberProblem(in); got != want {
 			t.Errorf("numberProblem(%s) = %q, want %q", in, got, want)
+		}
+	}
+	// In HCL a sign is a token of its own, and the message keeps it.
+	for src, want := range map[string]string{"x = -100e99": "the number -100e99 is -1e101,", "x = 100e99": "the number 100e99 is 1e101,", "x = -1e101": "the number -1e101 has the exponent 101,"} {
+		got := hclFindings(src)
+		if len(got) != 1 || !strings.Contains(got[0].Message, want) {
+			t.Errorf("%s: %v, want %q", src, got, want)
 		}
 	}
 }

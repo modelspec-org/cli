@@ -142,7 +142,11 @@ func hclLiterals(file string, lexed hclsyntax.Tokens) []Finding {
 		problem := ""
 		switch t.Type {
 		case hclsyntax.TokenNumberLit:
-			problem = numberProblem(string(t.Bytes))
+			text := string(t.Bytes)
+			if prev == hclsyntax.TokenMinus {
+				text = "-" + text // the sign is a token of its own in HCL; the message keeps it
+			}
+			problem = numberProblem(text)
 		case hclsyntax.TokenIdent:
 			problem = nameProblem("an identifier", len(t.Bytes))
 		case hclsyntax.TokenEqual:

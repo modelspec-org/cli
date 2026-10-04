@@ -1066,3 +1066,51 @@ func TestSkippedLinkOnTheRealFileSystem(t *testing.T) {
 		t.Fatalf("named: findings %v, %v", res.Findings, err)
 	}
 }
+
+// Only the module that has the skipped file is incomplete, and an incomplete module is
+// not checked at all: two layout modules, one with a link, the other with an error of its
+// own (reported); the affected one with an error of its own (not reported); a module that
+// refers into the affected one (its references are not reported); and the twin of the same
+// name, in either direction.
+func TestOnlyTheAffectedModuleIsNotChecked(t *testing.T) {
+	t.Parallel()
+	keyError := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	refersToCore := "entity \"App\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"core.Customer\"\n  }\n}\n"
+	for kind, make := range skippedKinds {
+		lint := func(fsys *memFS, paths ...string) []string {
+			res, err := Lint(fsys, paths, LintOptions{})
+			if err != nil {
+				t.Fatalf("%s: %v", kind, err)
+			}
+			var out []string
+			for _, f := range res.Findings {
+				out = append(out, f.String())
+			}
+			return out
+		}
+		only := func(got []string, wants ...string) {
+			t.Helper()
+			expect(t, got, wants...)
+		}
+		// Two layout modules: billing has an error of its own and is reported; core, which has
+		// the skipped file and an error of its own, is not checked and so reports only the file.
+		fsys := newMemFS(map[string]string{layout("billing", "a.hcl"): keyError, layout("core", "bad.hcl"): keyError})
+		make(fsys, layout("core", "customer.hcl"), customer)
+		only(lint(fsys, "."), layout("billing", "a.hcl")+":2: error: entity \"Bad\" key", layout("core", "customer.hcl")+": error: is ")
+		// A module that refers into the incomplete one: its reference is not reported.
+		fsys = newMemFS(map[string]string{layout("core", "other.hcl"): "entity \"Other\" {\n  key = []\n}\n", "app.modelspec.hcl": refersToCore}) // Customer is in the file not read
+		make(fsys, layout("core", "customer2.hcl"), customer)
+		only(lint(fsys, "."), layout("core", "customer2.hcl")+": error: is ")
+		// The twin of the same name: the HCL a link and the JSON real, and the other way round.
+		fsys = newMemFS(map[string]string{"models/a.modelspec.json": doc(jEntities)})
+		make(fsys, "models/a.modelspec.hcl", keyError)
+		only(lint(fsys, "models"), "models/a.modelspec.hcl: error: is ")
+		fsys = newMemFS(map[string]string{"models/a.modelspec.hcl": keyError})
+		make(fsys, "models/a.modelspec.json", "{}")
+		only(lint(fsys, "models"), "models/a.modelspec.json: error: is ")
+		fsys = newMemFS(map[string]string{"models/a.modelspec.json": `{"modelspec": "1.0-draft", "module": {"id": "x", "version": "1"}, "entities": {"Bad": {"key": ["nope"], "properties": {}}}}`})
+		make(fsys, "models/a.modelspec.hcl", customer)
+		only(lint(fsys, "models"), "models/a.modelspec.hcl: error: is ")
+	}
+}

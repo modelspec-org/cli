@@ -87,7 +87,11 @@ func numberProblem(text string) string {
 		if d.neg {
 			sign = "-"
 		}
-		return fmt.Sprintf("the number %s is %s%se%d, whose exponent %d is past the limit of %d either way (the digits without trailing zeros, times a power of ten): a larger or smaller number cannot be read exactly", text, sign, d.digits, d.exp, d.exp, MaxNumberExponent)
+		const why = "(the digits without trailing zeros, times a power of ten): a larger or smaller number cannot be read exactly"
+		if normal := fmt.Sprintf("%s%se%d", sign, d.digits, d.exp); normal != text {
+			return fmt.Sprintf("the number %s is %s, whose exponent %d is past the limit of %d either way %s", text, normal, d.exp, MaxNumberExponent, why)
+		}
+		return fmt.Sprintf("the number %s has the exponent %d, past the limit of %d either way %s", text, d.exp, MaxNumberExponent, why)
 	}
 	return ""
 }
