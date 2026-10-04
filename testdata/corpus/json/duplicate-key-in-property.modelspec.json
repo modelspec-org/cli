@@ -1,0 +1,1 @@
+{"modelspec":"1.0-draft","module":{"id":"x/y","name":"y","version":"1"},"entities":{"A":{"key":["id"],"properties":{"id":{"type":"int","type":"bogus"}}}}}

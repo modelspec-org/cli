@@ -1,0 +1,20 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "github.com/acme/orders",
+    "name": "order-app",
+    "version": "0.1.0"
+  },
+  "entities": {
+    "Order-Item": {
+      "key": [
+        "unit-price"
+      ],
+      "properties": {
+        "unit-price": {
+          "type": "decimal"
+        }
+      }
+    }
+  }
+}

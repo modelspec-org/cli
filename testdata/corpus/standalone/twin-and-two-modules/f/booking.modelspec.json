@@ -1,0 +1,23 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "github.com/acme/booking",
+    "name": "booking",
+    "version": "0.1.0"
+  },
+  "entities": {
+    "Booking": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "uuid"
+        },
+        "space": {
+          "entity": "core.Space"
+        }
+      }
+    }
+  }
+}

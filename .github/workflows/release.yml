@@ -1,0 +1,67 @@
+name: Release
+
+# Continuous delivery: every push to main runs the gate and then the shared
+# strongo/cicd release workflow, which computes the next version from conventional
+# commits, creates the tag, and has GoReleaser publish the binaries and the SHA-256
+# checksums file to GitHub Releases. A push with only docs/ci/chore/refactor commits
+# tags nothing.
+#
+# Job `gate` calls ci.yml (formatting, vet, the tests with the race detector, the
+# exact coverage gate, the GoReleaser checks) in this same workflow run, for this
+# same commit. Job `release` needs it, so it runs only when the gate passed. There
+# is nothing for the shared workflow to wait for and no fallback after a timeout:
+# the shared workflow's `require_workflow_success` is not used, because the order
+# is made here by `needs`.
+#
+# This workflow needs no secret beyond the GITHUB_TOKEN every run has. The
+# optional secrets below are forwarded so that macOS signing and notarisation
+# start the moment they exist: when you add the five MACOS_*/NOTARIZE_* secrets,
+# also set `require_notarized_macos: true` here (the shared workflow refuses to
+# publish with MACOS_SIGN_P12 set and that input false). Until then
+# .goreleaser.yml builds unsigned macOS binaries, because its notarize block is
+# gated on `isEnvSet "MACOS_SIGN_P12"`.
+#
+# modelspec is pre-1.0: allow_major_version_bump stays false, so a `feat!:` is
+# capped to a minor bump. Cut v1.0.0 deliberately, by changing that input.
+#
+# The only trigger is a push to main: no tag trigger and no manual dispatch, so a
+# hand-pushed tag releases nothing. internal/covergate's tests pin this file, ci.yml
+# and the pinned commits below.
+on:
+  push:
+    branches:
+      - main
+
+# The jobs below set the permissions they need; nothing else gets any.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release:
+    needs: gate
+    if: github.ref == 'refs/heads/main'
+    # Pinned to the commit of strongo/cicd v1.21.0; this workflow's source was read
+    # at that tag to confirm that every secret is optional and that, without them,
+    # it publishes binaries and checksums to GitHub Releases and skips the rest.
+    uses: strongo/cicd/.github/workflows/release.yml@5d96b1f3fbb3f12bb1e2762ff5ba54ccb9506504 # v1.21.0
+    permissions:
+      contents: write
+    with:
+      go_version: '1.27.0'
+      allow_major_version_bump: false
+      # No Homebrew cask is published, so there is no cask to smoke-test.
+      artifact_smoke_test_homebrew_cask: false
+    secrets:
+      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+      NOTARIZE_ISSUER_ID: ${{ secrets.NOTARIZE_ISSUER_ID }}
+      NOTARIZE_KEY_ID: ${{ secrets.NOTARIZE_KEY_ID }}
+      NOTARIZE_KEY: ${{ secrets.NOTARIZE_KEY }}

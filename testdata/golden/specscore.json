@@ -1,0 +1,287 @@
+{
+  "tool": "specscore graph lint --severity info",
+  "specscore_version": "0.54.2",
+  "wrapper": "hcl/: one throwaway project per file (specscore init, specscore graph new module --id <file stem> --bare, file copied to models/, as datatug/chinookdb scripts/lint-modelspec.sh does); modules/: the case directory is a complete SpecScore project, copied unchanged",
+  "verdicts": {
+    "hcl/blank-property-name.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/case-only-difference.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/chinook.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/collection-bind-unresolved.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/duplicate-entity.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "duplicate-entity.modelspec.hcl:8 [error] graph-model-duplicate-concept: duplicate concept name \"User\" in the trio scope (also declared at line 1)"
+      ]
+    },
+    "hcl/empty-name.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/empty.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/entity-no-own-properties.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/entity-ref-to-enum.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/entity-reference-to-component.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/enum-duplicate-values.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "enum-duplicate-values.modelspec.hcl:1 [error] graph-model-enum-values: enum \"Dup\" has duplicate value \"a\""
+      ]
+    },
+    "hcl/enum-integer-values.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "enum-integer-values.modelspec.hcl:2 [error] graph-model-enum-values: enum \"Priority\" must declare at least one value"
+      ]
+    },
+    "hcl/enum-no-values.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "enum-no-values.modelspec.hcl:1 [error] graph-model-enum-values: enum \"Empty\" must declare at least one value"
+      ]
+    },
+    "hcl/expression-value.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/heredoc-pattern-brackets.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/map-style-properties.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/missing-key.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/names-not-identifiers.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/non-identifier-name.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/qualified-entity-self.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/reserved-entity-name.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "reserved-entity-name.modelspec.hcl:1 [error] graph-model-reserved-name: entity name \"entities\" is a reserved kind token (entities, components, enums, collections, recordsets) and cannot name a concept"
+      ]
+    },
+    "hcl/reserved-recordset-name.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "reserved-recordset-name.modelspec.hcl:8 [error] graph-model-reserved-name: recordset name \"recordsets\" is a reserved kind token (entities, components, enums, collections, recordsets) and cannot name a concept"
+      ]
+    },
+    "hcl/shared-components-and-enums.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/shop.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/standard-invoice.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/syntax-error.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "syntax-error.modelspec.hcl:1 [error] graph-model-ref-resolves: cannot parse ModelSpec source: Unclosed configuration block"
+      ]
+    },
+    "hcl/todo-aligned.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/todo.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/trio-name-clash.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "trio-name-clash.modelspec.hcl:8 [error] graph-model-duplicate-concept: duplicate concept name \"Status\" in the trio scope (also declared at line 1)"
+      ]
+    },
+    "hcl/unknown-attribute.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/unknown-module.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "unknown-module.modelspec.hcl:7 [error] graph-dependency-direction: model entity reference \"core.Space\" targets module \"core\" which is not in module \"unknown-module\" dependsOn",
+        "unknown-module.modelspec.hcl:7 [error] graph-model-ref-resolves: model entity reference \"core.Space\": unknown module \"core\""
+      ]
+    },
+    "hcl/unknown-type.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/unmapped-index.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/unmapped-migration.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/unmapped-projection.modelspec.hcl": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "hcl/unresolved-entity.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "unresolved-entity.modelspec.hcl:7 [error] graph-model-ref-resolves: model entity reference \"Customer\" does not resolve to a concept in module \"unresolved-entity\""
+      ]
+    },
+    "hcl/unresolved-enum.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "unresolved-enum.modelspec.hcl:8 [error] graph-model-ref-resolves: model enum reference \"OrderStatus\" does not resolve to a concept in module \"unresolved-enum\""
+      ]
+    },
+    "hcl/unresolved-use.modelspec.hcl": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "unresolved-use.modelspec.hcl:3 [error] graph-model-ref-resolves: model use reference \"Auditable\" does not resolve to a concept in module \"unresolved-use\""
+      ]
+    },
+    "modules/layout-cross-file-duplicate": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "spec/graph/modules/sales/models/extra.modelspec.hcl:1 [error] graph-model-duplicate-concept: duplicate concept name \"OrderStatus\" in the trio scope (also declared at line 1)"
+      ]
+    },
+    "modules/layout-duplicate-in-module": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "spec/graph/modules/sales/models/extra.modelspec.hcl:1 [error] graph-model-duplicate-concept: duplicate concept name \"OrderStatus\" in the trio scope (also declared at line 1)"
+      ]
+    },
+    "modules/layout-json-copy-in-models-dir": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "modules/layout-key-through-component": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "modules/layout-missing-sibling-concept": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "spec/graph/modules/sales/models/entities.modelspec.hcl:8 [error] graph-model-ref-resolves: model enum reference \"OrderStatus\" does not resolve to a concept in module \"sales\""
+      ]
+    },
+    "modules/layout-parts-of-one-module": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "modules/layout-same-name-in-two-modules": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "modules/layout-self-contained": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    },
+    "modules/layout-undeclared-dependency": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "spec/graph/modules/sales/models/entities.modelspec.hcl:11 [error] graph-dependency-direction: model entity reference \"core.Customer\" targets module \"core\" which is not in module \"sales\" dependsOn"
+      ]
+    },
+    "modules/layout-unknown-module": {
+      "verdict": "refuse",
+      "exit": 1,
+      "findings": [
+        "spec/graph/modules/sales/models/entities.modelspec.hcl:11 [error] graph-model-ref-resolves: model entity reference \"core.Customer\": unknown module \"core\""
+      ]
+    },
+    "modules/layout-valid": {
+      "verdict": "accept",
+      "exit": 0,
+      "findings": []
+    }
+  }
+}

@@ -1,0 +1,1578 @@
+{
+ "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why: specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item under parts/ is one file of another item, given alone (as an editor or a hook would): `path` is where it is under this directory, and a module is the unit, so its verdict is that of the whole module it belongs to. Parts are not compared with the other readers, which lint a whole project. An item without `differs` must have the same verdict as the reader recorded for it.",
+ "items": {
+  "hcl/blank-property-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "name-form",
+     "publish-name-form"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore accepts a property named by a blank string; no property of that name could ever be referenced, so the standard cannot mean it to be valid (spec/core-model.md: names identify)"
+   }
+  },
+  "hcl/case-only-difference.modelspec.hcl": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   }
+  },
+  "hcl/chinook.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/collection-bind-unresolved.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore does not resolve collection bind values; spec/json-format.md requires references, including bind, to resolve"
+   }
+  },
+  "hcl/duplicate-entity.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "hcl/empty-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form",
+     "publish-name-form",
+     "publish-properties"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore accepts an entity named by the empty string; nothing could ever refer to it, and the Directory's reader refuses the same model in JSON form"
+   }
+  },
+  "hcl/empty.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
+  },
+  "hcl/entity-no-own-properties.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-properties"
+    ]
+   }
+  },
+  "hcl/entity-ref-to-enum.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore resolves a bare entity reference to anything in the entity/component/enum scope without checking the kind; the property's `entity` attribute must name an entity"
+   }
+  },
+  "hcl/entity-reference-to-component.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore resolves a bare entity reference to anything in the entity/component/enum scope without checking the kind; the property's `entity` attribute must name an entity"
+   }
+  },
+  "hcl/enum-duplicate-values.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values",
+     "publish-entities"
+    ]
+   }
+  },
+  "hcl/enum-integer-values.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   },
+   "differs": {
+    "specscore": "lint accepts integer enum values and specscore refuses them; decision 0013 says an enum constrains a string or an int property, so the standard allows them"
+   }
+  },
+  "hcl/enum-no-values.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values",
+     "publish-entities"
+    ]
+   }
+  },
+  "hcl/expression-value.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "literal"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "literal"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore ignores attributes whose value is not a plain literal; lint refuses expressions (decision 0009)"
+   }
+  },
+  "hcl/heredoc-pattern-brackets.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/map-style-properties.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "literal"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "literal",
+     "publish-properties"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore ignores attributes it does not know; lint refuses map-style containers (decisions 0007, 0009), and the entity keeps a key naming a property that was never declared"
+   }
+  },
+  "hcl/missing-key.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore does not require an entity key; spec/core-model.md lists missing keys among the validation errors"
+   }
+  },
+  "hcl/names-not-identifiers.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
+  },
+  "hcl/non-identifier-name.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
+  },
+  "hcl/qualified-entity-self.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "hcl/reserved-entity-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   }
+  },
+  "hcl/reserved-recordset-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   }
+  },
+  "hcl/shared-components-and-enums.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
+  },
+  "hcl/shop.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-property",
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "hcl/standard-invoice.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-property"
+    ]
+   }
+  },
+  "hcl/syntax-error.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "hcl/todo-aligned.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/todo.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/trio-name-clash.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "hcl/unknown-attribute.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore ignores attributes it does not know; the JSON format requires constraints to use supported keys"
+   }
+  },
+  "hcl/unknown-module.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "hcl/unknown-type.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "differs": {
+    "specscore": "specscore does not check types; the JSON format requires the type to be in the supported set"
+   }
+  },
+  "hcl/unmapped-index.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/unmapped-migration.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/unmapped-projection.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "hcl/unresolved-entity.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "hcl/unresolved-enum.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "hcl/unresolved-use.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "json/case-only-difference.modelspec.json": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   }
+  },
+  "json/chinook.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/component-property.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-property"
+    ]
+   }
+  },
+  "json/duplicate-entity-key.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader keeps the last of two equal keys; names are unique, and readers disagree on which repeat wins"
+   }
+  },
+  "json/duplicate-key-in-property.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader takes the last of two equal keys, so it sees a valid `type`; lint refuses the repeat, which other readers resolve the other way"
+   }
+  },
+  "json/empty-entity-name.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form",
+     "publish-name-form",
+     "publish-properties"
+    ]
+   }
+  },
+  "json/entities-array.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities",
+     "shape"
+    ]
+   }
+  },
+  "json/entities-empty.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
+  },
+  "json/entity-empty-properties.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "publish-properties"
+    ]
+   }
+  },
+  "json/entity-name-not-identifier.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form",
+     "reference"
+    ]
+   }
+  },
+  "json/entity-no-key.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader does not use keys; core-model.md lists missing keys among the validation errors"
+   }
+  },
+  "json/entity-no-properties.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "publish-properties"
+    ]
+   }
+  },
+  "json/enum-duplicate-values.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader does not read enums; the format requires enum values to be unique"
+   }
+  },
+  "json/full-shape.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/integer-enum-values.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/invalid-utf8.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "encoding"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "encoding"
+    ]
+   }
+  },
+  "json/key-not-a-property.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader does not use keys; a key must name a property"
+   }
+  },
+  "json/modelspec-not-string.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   }
+  },
+  "json/module-id-missing.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader reads only module.name; the format requires module.id and module.version"
+   }
+  },
+  "json/module-name-missing.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name"
+    ]
+   }
+  },
+  "json/module-name-not-identifier.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name"
+    ]
+   }
+  },
+  "json/module-version-missing.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader reads only module.name; the format requires module.id and module.version"
+   }
+  },
+  "json/named-enum.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/names-not-identifiers.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name",
+     "publish-name-form"
+    ]
+   }
+  },
+  "json/no-entities.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
+  },
+  "json/no-modelspec.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   }
+  },
+  "json/no-module.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   }
+  },
+  "json/not-an-object.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   }
+  },
+  "json/not-json.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "json/notes.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/property-array-type.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader accepts any type spelled like a type name, `string[]` included; the standard's type vocabulary has no array types"
+   }
+  },
+  "json/property-bad-type-name.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   }
+  },
+  "json/property-name-not-identifier.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
+  },
+  "json/property-neither-type-nor-entity.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "member-kind"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "member-kind"
+    ]
+   }
+  },
+  "json/property-unknown-entity.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "json/property-unknown-type.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader checks only that a type is spelled like a type name; the format requires one of the supported types"
+   }
+  },
+  "json/qualified-entity-reference.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "json/schema-field.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/shape-wrong-types.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader reads only entities; the format requires every group to have the shape it defines"
+   }
+  },
+  "json/shared-module.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities",
+     "publish-module-name"
+    ]
+   }
+  },
+  "json/todo.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "json/trailing-garbage.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "json/unknown-top-level-field.modelspec.json": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "unknown-field"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "unknown-field"
+    ]
+   }
+  },
+  "json/wrong-attribute-type.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader ignores constraints; the format requires them to have valid value types"
+   }
+  },
+  "json/wrong-version.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "differs": {
+    "directory": "the Directory's reader accepts any string as the modelspec version; the format defines 1.0-draft"
+   }
+  },
+  "modules/layout-cross-file-duplicate": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name",
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "modules/layout-duplicate-in-module": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "modules/layout-json-copy-in-models-dir": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "modules/layout-key-through-component": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-properties"
+    ]
+   }
+  },
+  "modules/layout-missing-sibling-concept": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "modules/layout-parts-of-one-module": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-property"
+    ]
+   }
+  },
+  "modules/layout-same-name-in-two-modules": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-entities"
+    ]
+   }
+  },
+  "modules/layout-self-contained": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "modules/layout-undeclared-dependency": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   },
+   "differs": {
+    "specscore": "lint accepts and specscore refuses a qualified reference to a module missing from the referencing module's dependsOn (graph-dependency-direction); that rule is about SpecScore's own module metadata and is not part of ModelSpec, so lint does not apply it"
+   }
+  },
+  "modules/layout-unknown-module": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "modules/layout-valid": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "parts/layout-duplicate-in-module-entities": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/entities.modelspec.hcl"
+  },
+  "parts/layout-duplicate-in-module-enums": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/enums.modelspec.hcl"
+  },
+  "parts/layout-duplicate-in-module-extra": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/extra.modelspec.hcl"
+  },
+  "parts/layout-json-copy-json-alone": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   },
+   "path": "modules/layout-json-copy-in-models-dir/spec/graph/modules/sales/models/sales.modelspec.json"
+  },
+  "parts/layout-self-contained-entities": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   },
+   "path": "modules/layout-self-contained/spec/graph/modules/sales/models/entities.modelspec.hcl"
+  },
+  "parts/stale-twin-json-alone": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "path": "standalone/stale-twin/core.modelspec.json"
+  },
+  "parts/twin-name-differs-hcl-alone": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   },
+   "path": "standalone/twin-name-differs/todo.modelspec.hcl"
+  },
+  "standalone/backslash-before-dollar-in-label": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "standalone/backslash-before-dollar-in-pattern": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "standalone/carriage-return-after-dollar-in-heredoc": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/chinook-pair": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/cross-module-missing": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "standalone/explicit-module": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   },
+   "modules": [
+    "shop=parts"
+   ]
+  },
+  "standalone/explicit-module-unassigned": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "standalone/explicit-module-with-json-copy": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   },
+   "modules": [
+    "shop=parts"
+   ]
+  },
+  "standalone/name-over-255-bytes": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
+  "standalone/number-after-rewritten-dollar": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/number-exponent-over-100": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
+  "standalone/number-over-40-characters": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
+  "standalone/query-201-wildcards": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/query-334-placeholders": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/query-one-line-500-placeholders": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "standalone/stale-twin": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   }
+  },
+  "standalone/twin-and-reference": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "standalone/twin-and-two-modules": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  },
+  "standalone/twin-in-another-directory": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity",
+     "reference"
+    ]
+   }
+  },
+  "standalone/twin-name-differs": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-entity"
+    ]
+   }
+  }
+ }
+}

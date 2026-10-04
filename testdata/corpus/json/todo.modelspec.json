@@ -1,0 +1,108 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "github.com/specscore/modelspec/examples/todo",
+    "name": "Todo",
+    "version": "0.1.0"
+  },
+  "components": {
+    "Auditable": {
+      "fields": {
+        "createdAt": {
+          "type": "datetime",
+          "required": true
+        },
+        "updatedAt": {
+          "type": "datetime",
+          "required": true
+        }
+      }
+    }
+  },
+  "entities": {
+    "User": {
+      "key": ["id"],
+      "use": ["Auditable"],
+      "properties": {
+        "id": {
+          "type": "uuid"
+        },
+        "email": {
+          "type": "string",
+          "required": true,
+          "unique": true,
+          "format": "email"
+        }
+      }
+    },
+    "Task": {
+      "key": ["id"],
+      "use": ["Auditable"],
+      "properties": {
+        "id": {
+          "type": "uuid"
+        },
+        "title": {
+          "type": "string",
+          "required": true,
+          "max_len": 200
+        },
+        "completed": {
+          "type": "bool",
+          "required": true
+        },
+        "owner": {
+          "entity": "User",
+          "required": true
+        }
+      }
+    }
+  },
+  "collections": {
+    "tasks": {
+      "kind": "editable",
+      "source": "Task",
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "bind": "Task.id"
+        },
+        "title": {
+          "type": "string",
+          "bind": "Task.title"
+        },
+        "completed": {
+          "type": "bool",
+          "bind": "Task.completed"
+        },
+        "ownerId": {
+          "type": "uuid",
+          "bind": "Task.owner"
+        }
+      }
+    }
+  },
+  "recordsets": {
+    "taskSummary": {
+      "key": ["id"],
+      "query": "from tasks select id, title, completed",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "bind": "Task.id"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "bind": "Task.title"
+        },
+        {
+          "name": "completed",
+          "type": "bool",
+          "bind": "Task.completed"
+        }
+      ]
+    }
+  }
+}

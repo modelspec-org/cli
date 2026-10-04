@@ -1,0 +1,30 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "x/y",
+    "name": "y",
+    "version": "1"
+  },
+  "entities": {
+    "User": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "int"
+        }
+      }
+    },
+    "user": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "int"
+        }
+      }
+    }
+  }
+}

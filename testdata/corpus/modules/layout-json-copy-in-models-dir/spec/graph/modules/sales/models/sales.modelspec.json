@@ -1,0 +1,32 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "github.com/acme/sales",
+    "name": "sales",
+    "version": "0.1.0"
+  },
+  "entities": {
+    "Order": {
+      "key": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "int"
+        },
+        "status": {
+          "type": "string",
+          "enum": "OrderStatus"
+        }
+      }
+    }
+  },
+  "enums": {
+    "OrderStatus": {
+      "values": [
+        "open",
+        "paid"
+      ]
+    }
+  }
+}

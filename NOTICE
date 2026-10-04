@@ -1,0 +1,11 @@
+modelspec (github.com/modelspec-org/cli)
+
+This product includes software derived from the SpecScore CLI
+(https://github.com/specscore/specscore-cli), licensed under the Apache
+License, Version 2.0: the reading of ModelSpec HCL sources into concepts,
+members and references (pkg/modelspec/hcl.go, model.go), and the rules for
+name scopes, reserved names, duplicate concepts, enum values and reference
+resolution (pkg/modelspec/check.go), which follow specscore-cli's
+pkg/graph/model.go, lint.go and resolver.go. The derived code was rewritten
+for a standalone tool; the rule semantics and several diagnostic messages are
+kept.

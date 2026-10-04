@@ -1,0 +1,241 @@
+{
+  "tool": "parseModelSpec in scripts/lib/modelspec.mjs of openvaultdb/directory",
+  "directory_branch": "main",
+  "directory_commit": "f2dc393e68e7bd0e7ba81d9086e3a87794f69122",
+  "node_version": "v24.20.0",
+  "verdicts": {
+    "json/case-only-difference.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/chinook.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/component-property.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "Author.wallet has neither a type nor an entity"
+      ]
+    },
+    "json/duplicate-entity-key.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/duplicate-key-in-property.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/empty-entity-name.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "entity name \"\" must be an identifier (letters, digits and _, not starting with a digit)"
+      ]
+    },
+    "json/entities-array.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no entities"
+      ]
+    },
+    "json/entities-empty.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no entities"
+      ]
+    },
+    "json/entity-empty-properties.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "entity Author has no properties"
+      ]
+    },
+    "json/entity-name-not-identifier.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "Note.author references entity Author, which the ModelSpec does not have",
+        "entity name \"Bad Name\" must be an identifier (letters, digits and _, not starting with a digit)"
+      ]
+    },
+    "json/entity-no-key.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/entity-no-properties.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "entity Author has no properties"
+      ]
+    },
+    "json/enum-duplicate-values.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/full-shape.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/integer-enum-values.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/invalid-utf8.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "property name \"A.t�\" must be an identifier (letters, digits and _, not starting with a digit)"
+      ]
+    },
+    "json/key-not-a-property.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/modelspec-not-string.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no \"modelspec\" version"
+      ]
+    },
+    "json/module-id-missing.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/module-name-missing.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no module.name that is an identifier"
+      ]
+    },
+    "json/module-name-not-identifier.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no module.name that is an identifier"
+      ]
+    },
+    "json/module-version-missing.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/named-enum.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/names-not-identifiers.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no module.name that is an identifier",
+        "entity name \"Order-Item\" must be an identifier (letters, digits and _, not starting with a digit)"
+      ]
+    },
+    "json/no-entities.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no entities"
+      ]
+    },
+    "json/no-modelspec.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no \"modelspec\" version"
+      ]
+    },
+    "json/no-module.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no module.name that is an identifier"
+      ]
+    },
+    "json/not-an-object.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no \"modelspec\" version",
+        "has no module.name that is an identifier",
+        "has no entities"
+      ]
+    },
+    "json/not-json.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "is not JSON: Unexpected end of JSON input"
+      ]
+    },
+    "json/notes.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/property-array-type.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/property-bad-type-name.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "Author.id has type \"<b>string</b>\", which is not a type name"
+      ]
+    },
+    "json/property-name-not-identifier.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "property name \"Author.1st\" must be an identifier (letters, digits and _, not starting with a digit)"
+      ]
+    },
+    "json/property-neither-type-nor-entity.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "Author.id has neither a type nor an entity"
+      ]
+    },
+    "json/property-unknown-entity.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "Note.author references entity Missing, which the ModelSpec does not have"
+      ]
+    },
+    "json/property-unknown-type.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/qualified-entity-reference.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "Note.author references entity notes.Author, which the ModelSpec does not have"
+      ]
+    },
+    "json/schema-field.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/shape-wrong-types.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/shared-module.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "has no module.name that is an identifier",
+        "has no entities"
+      ]
+    },
+    "json/todo.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/trailing-garbage.modelspec.json": {
+      "verdict": "refuse",
+      "problems": [
+        "is not JSON: Unexpected non-whitespace character after JSON at position 348 (line 1 column 349)"
+      ]
+    },
+    "json/unknown-top-level-field.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/wrong-attribute-type.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    },
+    "json/wrong-version.modelspec.json": {
+      "verdict": "accept",
+      "problems": []
+    }
+  }
+}
