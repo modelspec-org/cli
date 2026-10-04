@@ -1149,3 +1149,18 @@ func TestExportRefusalNamesTheAssignedModule(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, h.errb)
 	}
 }
+
+// The refusal lists the skipped files of the module that was exported and no others: a
+// second module supplied with --module has a skipped file of its own, and neither its path
+// nor its finding is printed.
+func TestExportRefusalListsOnlyTheExportedModulesSkippedFiles(t *testing.T) {
+	t.Parallel()
+	const dir = "spec/modules/shop/models/"
+	h := newHarness(map[string]string{dir + "order.hcl": goodHCL, "real/customer.hcl": goodHCL, "ctx/x.modelspec.hcl": coreHCL, "real/y.hcl": goodHCL})
+	h.fsys.MapFS[dir+"customer.hcl"] = &fstest.MapFile{Data: []byte("../../../../real/customer.hcl"), Mode: fs.ModeSymlink}
+	h.fsys.MapFS["ctx/y.modelspec.hcl"] = &fstest.MapFile{Data: []byte("../real/y.hcl"), Mode: fs.ModeSymlink}
+	code := h.run(append([]string{"export", "--module", "core=ctx", dir + "order.hcl"}, exportID...)...)
+	if code != 1 || !strings.Contains(h.errb.String(), "module shop has 1 file(s) found and not read ("+dir+"customer.hcl)") || strings.Contains(h.errb.String(), "y.modelspec.hcl") {
+		t.Fatalf("exit %d, stderr %q", code, h.errb)
+	}
+}

@@ -389,3 +389,30 @@ func TestADisplacedCountingLineIsStillCounted(t *testing.T) {
 		t.Errorf("%d duplicates and %d skipped files listed of %d findings; summary %q", duplicates, skipped, len(res.Findings), summary.Message)
 	}
 }
+
+// A skipped-file finding takes the place of a warning before it takes that of any error,
+// wherever they are in the list: a full list that holds an error before its warnings
+// keeps the error, and the finding that is dropped is a warning.
+func TestSkippedFileTakesAWarningBeforeTheFirstError(t *testing.T) {
+	t.Parallel()
+	var l findingList
+	l.put(Finding{File: "f", Line: 1, Rule: "r", Severity: SeverityError, Message: "m"})
+	for i := 2; i <= MaxFindings; i++ {
+		l.put(Finding{File: "f", Line: i, Rule: "r", Severity: SeverityWarning, Message: "m"})
+	}
+	l.put(Finding{File: "g", Rule: RuleSkipped, Severity: SeverityError, Message: "m"})
+	got := l.result()
+	errs, skips := 0, 0
+	for _, f := range got[:MaxFindings] {
+		switch {
+		case f.Rule == RuleSkipped:
+			skips++
+		case f.Severity == SeverityError:
+			errs++
+		}
+	}
+	last := got[len(got)-1]
+	if errs != 1 || skips != 1 || last.Severity != SeverityWarning || !strings.Contains(last.Message, "1 more findings (0 errors, 1 warnings)") {
+		t.Errorf("%d errors and %d skipped files listed; summary %v", errs, skips, last)
+	}
+}
