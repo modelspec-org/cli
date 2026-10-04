@@ -404,7 +404,9 @@ modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.jso
 whole), and refuses a file with errors (exit 1, the findings for that file on standard error);
 `--check` refuses an invalid model too, so a check cannot pass on one. It exports any `.hcl` file of a
 layout module, whatever it is called, and refuses a JSON file given as the source. A file that refers to other modules needs them supplied with
-`--module <name>=<path>` (they are used to resolve references and are not exported).
+`--module <name>=<path>` (they are used to resolve references and are not exported). When such a module has a file that was
+found and not read (`skipped-file`), references into it were not checked: the export is the model's own and is written as
+before (exit 0), and standard error has that module's `skipped-file` finding and a note that says so.
 
 The JSON follows `spec/json-format.md`: `modelspec`, `module`, then components, enums,
 entities, collections, recordsets (concepts in source order, attributes in source order,

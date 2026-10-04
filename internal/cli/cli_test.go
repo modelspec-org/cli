@@ -1164,3 +1164,40 @@ func TestExportRefusalListsOnlyTheExportedModulesSkippedFiles(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, h.errb)
 	}
 }
+
+// A module that refers into one that was not read whole (a link in its directory, supplied
+// with --module) is exported as before, exit 0 and the same document, and standard error
+// says what was not checked: the skipped-file finding of every such file, and once for the
+// module that references into it were not checked.
+func TestExportSaysWhenReferencesIntoAnIncompleteModuleWereNotChecked(t *testing.T) {
+	t.Parallel()
+	app := "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    entity = \"core.Nothing\"\n  }\n}\n"
+	files := map[string]string{"app/app.modelspec.hcl": app, "core/space.hcl": coreHCL, "real/y.hcl": coreHCL, "real/z.hcl": coreHCL}
+	args := append([]string{"export", "app/app.modelspec.hcl", "--module", "core=core"}, exportID...)
+	whole := newHarness(files)
+	if code := whole.run(args...); code != 1 || !strings.Contains(whole.errb.String(), `unknown entity "Nothing" in module "core"`) {
+		t.Fatalf("core whole: exit %d, stderr %q", code, whole.errb)
+	}
+	h := newHarness(files)
+	h.fsys.MapFS["core/y.hcl"] = &fstest.MapFile{Data: []byte("../real/y.hcl"), Mode: fs.ModeSymlink}
+	h.fsys.MapFS["core/z.hcl"] = &fstest.MapFile{Data: []byte("../real/z.hcl"), Mode: fs.ModeSymlink}
+	code := h.run(args...)
+	stderr := h.errb.String()
+	if code != 0 || !strings.Contains(h.out.String(), `"entity": "core.Nothing"`) ||
+		!strings.Contains(stderr, "core/y.hcl: error: is a symbolic link") || !strings.Contains(stderr, "core/z.hcl: error: is a symbolic link") ||
+		strings.Count(stderr, "references into it were not checked") != 1 || !strings.Contains(stderr, "note: module core was not read whole") {
+		t.Fatalf("core incomplete: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// export --check says the same and still approves the document.
+	committed := h.out.String()
+	h = newHarness(files)
+	h.fsys.MapFS["core/y.hcl"] = &fstest.MapFile{Data: []byte("../real/y.hcl"), Mode: fs.ModeSymlink}
+	h.fsys.MapFS["committed.json"] = &fstest.MapFile{Data: []byte(committed)}
+	if code := h.run("export", "--check", "--module", "core=core", "app/app.modelspec.hcl", "committed.json"); code != 0 || !strings.Contains(h.errb.String(), "references into it were not checked") || !strings.HasPrefix(h.out.String(), "ok:") {
+		t.Fatalf("export --check: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// Nothing to say when every module was read whole.
+	if whole = newHarness(map[string]string{"app/app.modelspec.hcl": goodHCL}); whole.run(append([]string{"export", "app/app.modelspec.hcl"}, exportID...)...) != 0 || whole.errb.Len() != 0 {
+		t.Fatalf("no skipped file: stderr %q", whole.errb)
+	}
+}

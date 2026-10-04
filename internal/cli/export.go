@@ -34,7 +34,10 @@ export lints the file first, as lint does under the default profile (so the modu
 the file belongs to is checked whole, as lint checks it), and refuses a file with
 errors (exit 1, the findings for the file on standard error). A file that refers to
 other modules needs them supplied with --module <name>=<path> (repeatable), as
-for lint; those files are used to resolve references and are not exported.
+for lint; those files are used to resolve references and are not exported. If one
+of those modules has a file that was found and not read (a symbolic link, a pipe, a
+device), references into it were not checked: the export is written and the exit code
+is as before, and standard error has the skipped-file finding and a note.
 export reads HCL: any .hcl file of a SpecScore models directory is accepted, whatever
 it is called, and a JSON file is a usage error.
 
@@ -206,6 +209,16 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 	}
 	if modelspec.HasErrors(mine) {
 		return nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting", file)}
+	}
+	// What was skipped now belongs to other modules, supplied with --module: the model's own
+	// export is whole and stays as it is, but a reference into them was not checked.
+	noted := map[string]bool{}
+	for _, s := range res.Skipped {
+		fmt.Fprintln(env.Stderr, s.Finding)
+		if !noted[s.Module] {
+			noted[s.Module] = true
+			fmt.Fprintf(env.Stderr, "note: module %s was not read whole (see the skipped-file error above), so references into it were not checked\n", s.Module)
+		}
 	}
 	return model, nil
 }
