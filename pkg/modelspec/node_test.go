@@ -33,7 +33,7 @@ func TestParseNodeKeepsOrderAndLines(t *testing.T) {
 		t.Fatalf("a = %+v", a)
 	}
 	c, _ := n.Get("c")
-	if z, _ := c.Get("z"); z.Str != "1.5e3" {
+	if z, _ := c.Get("z"); z.Str != "1500" {
 		t.Fatalf("number text was not kept: %q", z.Str)
 	}
 }

@@ -2,8 +2,6 @@ package modelspec
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -50,22 +48,6 @@ var (
 	nameAttrs     = map[string]bool{"type": true, "entity": true, "component": true, "enum": true, "kind": true, "name": true}
 	listNameAttrs = map[string]bool{"key": true, "use": true}
 )
-
-// numberProblem returns what is wrong with a number literal, as a message, or ""
-// when it is within the limits. A leading minus sign is not counted.
-func numberProblem(text string) string {
-	digits := strings.TrimPrefix(text, "-")
-	if len(digits) > MaxNumberLength {
-		return fmt.Sprintf("a number is %d characters long; the limit is %d (a longer number cannot be read exactly)", len(digits), MaxNumberLength)
-	}
-	if i := strings.IndexAny(digits, "eE"); i >= 0 {
-		exp, err := strconv.Atoi(strings.TrimPrefix(digits[i+1:], "+"))
-		if err != nil || exp > MaxNumberExponent || exp < -MaxNumberExponent {
-			return fmt.Sprintf("a number has the exponent %s; the limit is %d either way (a larger number cannot be read exactly)", digits[i+1:], MaxNumberExponent)
-		}
-	}
-	return ""
-}
 
 // nameProblem returns what is wrong with a name of the given length in bytes, or
 // "".

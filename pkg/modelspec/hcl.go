@@ -2,9 +2,7 @@ package modelspec
 
 import (
 	"fmt"
-	"math/big"
 	"sort"
-	"strconv"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -25,8 +23,8 @@ func ParseHCL(file string, src []byte) (*Model, []Finding) {
 		m.Broken = true
 		return m, found
 	}
-	input, heredocs := parserInput(src, tokens)
-	p := &hclReader{m: m, heredocs: heredocs}
+	input, heredocs, numbers := parserInput(src, tokens)
+	p := &hclReader{m: m, heredocs: heredocs, numbers: numbers}
 	parsed, diags := hclsyntax.ParseConfig(input, file, hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
 		m.Broken = true
@@ -63,7 +61,8 @@ func diagLine(d *hcl.Diagnostic) int {
 type hclReader struct {
 	m *Model
 	findingList
-	heredocs map[int]bool // where, in the parsed source, a heredoc begins: see parserInput
+	heredocs map[int]bool   // where, in the parsed source, a heredoc begins: see parserInput
+	numbers  map[int]string // the text of the number that begins there
 }
 
 func (p *hclReader) add(line int, rule, msg string) {
@@ -232,8 +231,7 @@ func isLiteralExpr(expr hclsyntax.Expression) bool {
 func (p *hclReader) scalarNode(expr hclsyntax.Expression, line int) (*Node, string) {
 	if neg, ok := expr.(*hclsyntax.UnaryOpExpr); ok {
 		// hclLiterals lets `-` through only before a number.
-		num := neg.Val.(*hclsyntax.LiteralValueExpr).Val
-		return &Node{Type: NodeNumber, Str: numberText(new(big.Float).Neg(num.AsBigFloat())), Line: line}, ""
+		return &Node{Type: NodeNumber, Str: canonicalNumber("-" + p.numbers[neg.Val.Range().Start.Byte]), Line: line}, ""
 	}
 	val, _ := expr.Value(nil) // a literal evaluates without a context
 	switch t := val.Type(); {
@@ -248,16 +246,6 @@ func (p *hclReader) scalarNode(expr hclsyntax.Expression, line int) (*Node, stri
 	case t == cty.Bool:
 		return &Node{Type: NodeBool, Bool: val.True(), Line: line}, ""
 	default:
-		return &Node{Type: NodeNumber, Str: numberText(val.AsBigFloat()), Line: line}, ""
+		return &Node{Type: NodeNumber, Str: canonicalNumber(p.numbers[expr.Range().Start.Byte]), Line: line}, ""
 	}
-}
-
-// numberText writes a number as its shortest decimal. Integers that fit 64 bits,
-// nearly all numbers in a model, take a fast path: the general conversion of a
-// 512-bit value takes microseconds, which adds up in a list of a million items.
-func numberText(f *big.Float) string {
-	if i, accuracy := f.Int64(); accuracy == big.Exact {
-		return strconv.FormatInt(i, 10)
-	}
-	return f.Text('f', -1)
 }

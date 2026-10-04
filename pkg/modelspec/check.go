@@ -2,7 +2,6 @@ package modelspec
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -17,10 +16,6 @@ var PrimitiveTypes = map[string]bool{
 	"string": true, "int": true, "float": true, "bool": true, "decimal": true, "uuid": true,
 	"date": true, "time": true, "datetime": true, "document": true, "json": true, "any": true,
 }
-
-var nonNegativeInt = regexp.MustCompile(`^[0-9]+$`)
-
-var integerText = regexp.MustCompile(`^-?[0-9]+$`)
 
 // valueKind is the kind of value an attribute must have.
 type valueKind int
@@ -328,7 +323,7 @@ func enumValues(n *Node) ([]string, bool) {
 		switch {
 		case it.Type == NodeString:
 			keys = append(keys, "s:"+it.Str)
-		case it.Type == NodeNumber && integerText.MatchString(it.Str):
+		case it.Type == NodeNumber && isIntegerNumber(it.Str):
 			keys = append(keys, "n:"+it.Str)
 		default:
 			return nil, false
@@ -348,7 +343,7 @@ func valueProblem(kind valueKind, v *Node) string {
 			return "must be true or false, not " + v.typeName()
 		}
 	case vCount:
-		if v.Type != NodeNumber || !nonNegativeInt.MatchString(v.Str) {
+		if v.Type != NodeNumber || !isIntegerNumber(v.Str) || strings.HasPrefix(v.Str, "-") {
 			return "must be a non-negative integer"
 		}
 	case vStringList:

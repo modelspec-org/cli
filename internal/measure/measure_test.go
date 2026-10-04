@@ -199,3 +199,25 @@ func TestHostileInputDoesNotReachTheParserStack(t *testing.T) {
 		}
 	}
 }
+
+// Writing a number is a constant amount of work, whatever its spelling: a list of
+// fractions and of numbers with a negative exponent allocates in proportion to its
+// length, and the bytes for each number (the parser's own number among them, about
+// 3 to 4.5 KB) stay within a quarter of what they are. The HCL library's way of
+// printing a 512-bit value as the shortest decimal, which took 20 to 35
+// microseconds for each such number and made a megabyte of them take five seconds,
+// adds its own allocation to that. Bytes stand for steps, see allocated.
+func TestNumbersAreWrittenInConstantWork(t *testing.T) {
+	for item, perNumber := range map[string]float64{"0.1": 3700, "1e-99": 5600, "123.456e-7": 3800, "9e99": 5200} {
+		list := func(n int) string { return "enum \"E\" {\n  values = [" + rep(item+", ", n) + "0]\n}\n" }
+		small, large := list(800), list(6400)
+		a := allocated(func() { parseHCL(small) })
+		b := allocated(func() { parseHCL(large) })
+		if ratio := float64(b) / float64(a); ratio > 14 {
+			t.Errorf("%s: 8 times the numbers allocated %.1f times the memory (%d and %d bytes)", item, ratio, a, b)
+		}
+		if each := float64(b) / 6400; each > perNumber {
+			t.Errorf("%s: %.0f bytes allocated for each number, want at most %.0f", item, each, perNumber)
+		}
+	}
+}

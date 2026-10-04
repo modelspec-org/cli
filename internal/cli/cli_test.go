@@ -931,3 +931,63 @@ func exportIDIfExport(args []string) []string {
 	}
 	return nil
 }
+
+// Numbers have one form, and export writes one that lint reads back: 1e41 through
+// 1e100 are not written as integers of 42 to 101 digits, which lint refuses.
+func TestExportWritesNumbersLintReadsBack(t *testing.T) {
+	t.Parallel()
+	hcl := `entity "E" {
+  key = ["id"]
+  property "id" {
+    type    = "string"
+    max_len = 1e41
+    min_len = 10e-1
+  }
+}
+
+enum "N" {
+  values = [1e41, 1e100, 5, 100000000000000000000000000000000000000, 1.0e2, -0]
+}
+`
+	h := newHarness(map[string]string{"a.modelspec.hcl": hcl})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}, exportID...)...); code != 0 {
+		t.Fatalf("export: exit %d: %s", code, h.errb)
+	}
+	twin := string(h.fsys.written["a.modelspec.json"])
+	for _, want := range []string{`"max_len": 1e41`, "\"min_len\": 1\n", `1e100`, `100000000000000000000000000000000000000`, `100,`, "0\n"} {
+		if !strings.Contains(twin, want) {
+			t.Errorf("the twin has no %q:\n%s", want, twin)
+		}
+	}
+	h.fsys.MapFS["a.modelspec.json"] = &fstest.MapFile{Data: h.fsys.written["a.modelspec.json"]}
+	for _, profile := range []string{"default", "publish"} {
+		h.errb.Reset()
+		h.out.Reset()
+		if code := h.run("lint", "--profile", profile, "a.modelspec.hcl", "a.modelspec.json"); code != 0 {
+			t.Errorf("lint of the pair under %s: exit %d: %s%s", profile, code, h.out, h.errb)
+		}
+	}
+	h.errb.Reset()
+	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 0 {
+		t.Errorf("export --check: exit %d: %s", code, h.errb)
+	}
+}
+
+// The difference export --check reports is cut like a finding is, with its values.
+func TestExportCheckCutsItsMessage(t *testing.T) {
+	t.Parallel()
+	model := func(pattern string) string {
+		return "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"string\"\n    pattern = \"" + pattern + "\"\n  }\n}\n"
+	}
+	h := newHarness(map[string]string{"a.modelspec.hcl": model(strings.Repeat("a", 200000) + "x")})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}, exportID...)...); code != 0 {
+		t.Fatalf("export: exit %d: %s", code, h.errb)
+	}
+	twin := strings.Replace(string(h.fsys.written["a.modelspec.json"]), "ax", "ay", 1)
+	h.fsys.MapFS["a.modelspec.json"] = &fstest.MapFile{Data: []byte(twin)}
+	h.errb.Reset()
+	code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json")
+	if code != 1 || h.errb.Len() > modelspec.MaxMessageBytes+200 || !strings.Contains(h.errb.String(), "bytes in all]") {
+		t.Fatalf("exit %d, %d bytes of stderr: %.300s", code, h.errb.Len(), h.errb)
+	}
+}

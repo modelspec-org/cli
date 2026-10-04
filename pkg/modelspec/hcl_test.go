@@ -1,7 +1,7 @@
 package modelspec
 
 import (
-	"math/big"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -155,38 +155,111 @@ func TestModuleNameFromFile(t *testing.T) {
 	}
 }
 
-// Numbers are written as their shortest decimal, and a negative zero is zero: the
-// same number in two spellings is the same value (so `[-0, 0]` repeats a value).
-func TestNumberText(t *testing.T) {
+// Numbers have one canonical form (number.go), whichever way they are spelled and
+// in whichever reader: a sign only on a number that is not zero, no leading zero
+// but the one before a point, no trailing zero after it, a plain decimal when that
+// has at most 40 characters, and otherwise digits and an exponent.
+var canonicalTable = []struct{ in, want string }{
+	{"0", "0"}, {"-0", "0"}, {"-00", "0"}, {"-0.0", "0"}, {"-0e0", "0"}, {"0.0", "0"}, {"00", "0"}, {"0e100", "0"}, {"0.000e-5", "0"},
+	{"1", "1"}, {"1.0", "1"}, {"1e0", "1"}, {"10e-1", "1"}, {"01", "1"}, {"1.e0", "1"}, {"0.1e1", "1"}, {"100e-2", "1"},
+	{"-1", "-1"}, {"-1.0", "-1"}, {"-10e-1", "-1"}, {"007", "7"}, {"1.5", "1.5"}, {"-1.5", "-1.5"}, {"1.50", "1.5"}, {"15e-1", "1.5"},
+	{"1e3", "1000"}, {"-1e3", "-1000"}, {"1e+3", "1000"}, {"1E3", "1000"}, {"1e-3", "0.001"}, {"2.5e2", "250"}, {"0.5", "0.5"}, {"00.50", "0.5"},
+	{"0.1", "0.1"}, {"0.01", "0.01"}, {"100", "100"}, {"100.00", "100"}, {"1e2", "100"}, {"1e+100", "1e100"}, {"1e100", "1e100"}, {"10e99", "1e100"},
+	{"0.1e101", "1e100"}, {"1e-100", "1e-100"}, {"0.1e-99", "1e-100"}, {"1e-99", "1e-99"}, {"15e-50", "15e-50"}, {"-123e60", "-123e60"},
+	{"9223372036854775807", "9223372036854775807"}, {"-9223372036854775808", "-9223372036854775808"},
+	{"9223372036854775808", "9223372036854775808"}, {"-9223372036854775809", "-9223372036854775809"},
+	{"123456789012345678901234567890", "123456789012345678901234567890"},
+	// The plain decimal is used up to 40 characters, and the exponent form beyond.
+	{"1e39", "1" + strings.Repeat("0", 39)}, {"1e40", "1e40"}, {"1e41", "1e41"}, {"12e39", "12e39"},
+	{"1" + strings.Repeat("0", 39), "1" + strings.Repeat("0", 39)}, {"12e38", "12" + strings.Repeat("0", 38)},
+	{"1e-39", "1e-39"}, {"12e-39", "12e-39"}, {"0." + strings.Repeat("0", 36) + "12", "0." + strings.Repeat("0", 36) + "12"},
+	{"1e-37", "0." + strings.Repeat("0", 36) + "1"}, {"1e-38", "0." + strings.Repeat("0", 37) + "1"},
+	{"1234567890123456789012345678901234567e1", "1234567890123456789012345678901234567" + "0"},
+	{"1234567890123456789012345678901234567.5", "1234567890123456789012345678901234567.5"},
+	{"1.2345678901234567890123456e-30", "12345678901234567890123456e-55"},
+}
+
+var jsonNumber = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
+
+func TestCanonicalNumber(t *testing.T) {
 	t.Parallel()
-	for src, want := range map[string]string{
-		"0": "0", "-0": "0", "-00": "0", "-0.0": "0", "-0e0": "0", "0.0": "0", "00": "0",
-		"1": "1", "-1": "-1", "007": "7", "1.5": "1.5", "-1.5": "-1.5", "1.50": "1.5", "1e3": "1000", "-1e3": "-1000", "1e-3": "0.001", "2.5e2": "250",
-		"9223372036854775807": "9223372036854775807", "-9223372036854775808": "-9223372036854775808",
-		"9223372036854775808": "9223372036854775808", "-9223372036854775809": "-9223372036854775809",
-		"123456789012345678901234567890": "123456789012345678901234567890", "0.1": "0.1", "1e100": "1" + strings.Repeat("0", 100), "1e-100": "0." + strings.Repeat("0", 99) + "1",
-	} {
-		m, fs := ParseHCL("a"+hclExt, []byte("entity \"A\" {\n  key = []\n  x = "+src+"\n}\n"))
-		if len(fs) != 0 || len(m.Concepts) != 1 {
-			t.Errorf("%s: findings %v", src, fs)
+	for _, tc := range canonicalTable {
+		if problem := numberProblem(tc.in); problem != "" {
+			t.Errorf("%q is refused: %s", tc.in, problem)
 			continue
 		}
-		a, _ := m.Concepts[0].Attr("x")
-		if a.Value.Type != NodeNumber || a.Value.Str != want {
-			t.Errorf("%s: read as %q, want %q", src, a.Value.Str, want)
+		got := canonicalNumber(tc.in)
+		if got != tc.want {
+			t.Errorf("canonicalNumber(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		// Written again, it is read back as the same number, and is within the limits.
+		if problem := numberProblem(got); problem != "" || canonicalNumber(got) != got {
+			t.Errorf("%q: the canonical form %q is refused (%q) or changes (%q)", tc.in, got, problem, canonicalNumber(got))
 		}
 	}
-	// Both spellings of zero are one value.
-	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [-0, 0]\n}\n"}), `duplicate value "0"`)
-	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [1, 1.0]\n}\n"}), `duplicate value`) // 1.0 is the integer 1
-	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [-1, 1]\n}\n"}))
-	// The helper alone.
-	for f, want := range map[float64]string{0: "0", -0.5: "-0.5", 3: "3", 1e15: "1000000000000000"} {
-		if got := numberText(big.NewFloat(f)); got != want {
-			t.Errorf("numberText(%v) = %q, want %q", f, got, want)
+}
+
+// Both readers read a number to the same canonical form, and the same value is the
+// same text: the HCL reader (a model of the table) and the JSON reader.
+func TestReadersAgreeOnNumbers(t *testing.T) {
+	t.Parallel()
+	for _, tc := range canonicalTable {
+		src := "entity \"A\" {\n  key = []\n  x = " + tc.in + "\n}\n"
+		if !strings.HasPrefix(tc.in, "-") { // a sign before a sign is not a number
+			src = "entity \"A\" {\n  key = []\n  x = " + tc.in + "\n  y = -" + tc.in + "\n}\n"
+		}
+		m, fs := ParseHCL("a"+hclExt, []byte(src))
+		if len(fs) != 0 || len(m.Concepts) != 1 {
+			t.Errorf("%s: findings %v", tc.in, fs)
+			continue
+		}
+		x, _ := m.Concepts[0].Attr("x")
+		if x.Value.Type != NodeNumber || x.Value.Str != tc.want {
+			t.Errorf("HCL %s: read as %q, want %q", tc.in, x.Value.Str, tc.want)
+		}
+		if y, ok := m.Concepts[0].Attr("y"); ok {
+			wantNeg := "-" + tc.want
+			if tc.want == "0" {
+				wantNeg = "0"
+			}
+			if y.Value.Str != wantNeg {
+				t.Errorf("HCL -%s: read as %q, want %q", tc.in, y.Value.Str, wantNeg)
+			}
+		}
+		if !jsonNumber.MatchString(tc.in) {
+			continue // not a number in JSON: leading zeros, a point with no digit after it
+		}
+		n, err := ParseNode([]byte(`{"x": ` + tc.in + `}`))
+		if err != nil {
+			t.Errorf("JSON %s: %v", tc.in, err)
+			continue
+		}
+		if v, _ := n.Get("x"); v.Str != tc.want {
+			t.Errorf("JSON %s: read as %q, want %q", tc.in, v.Str, tc.want)
 		}
 	}
-	if got := numberText(new(big.Float).Neg(big.NewFloat(0))); got != "0" {
-		t.Errorf("numberText(-0) = %q", got)
+	// Equal values are duplicates in the checker whatever they are spelled, in both readers.
+	for _, group := range [][]string{{"1", "1.0", "1e0", "10e-1"}, {"0", "-0", "0.0"}, {"100", "1e2", "1E+2", "0.1e3"}} {
+		hcl := "enum \"E\" {\n  values = [" + strings.Join(group, ", ") + "]\n}\n"
+		json := `{"modelspec": "1.0-draft", "module": {"id": "x", "name": "x", "version": "1"}, "enums": {"E": {"values": [` + strings.Join(group, ", ") + `]}}}`
+		for name, files := range map[string]map[string]string{"HCL": {"a" + hclExt: hcl}, "JSON": {"a" + jsonExt: json}} {
+			got := run(files)
+			if len(got) != len(group)-1 {
+				t.Errorf("%s %v: %d findings, want %d duplicates: %v", name, group, len(got), len(group)-1, got)
+			}
+		}
+	}
+	// A negative zero is zero in a count too, and a fraction is not a count.
+	expect(t, run(map[string]string{"a" + jsonExt: `{"modelspec": "1.0-draft", "module": {"id": "x", "name": "x", "version": "1"}, "entities": {"E": {"key": ["id"], "properties": {"id": {"type": "string", "max_len": -0, "min_len": 1e1}}}}}`}))
+	expect(t, run(map[string]string{"a" + jsonExt: `{"modelspec": "1.0-draft", "module": {"id": "x", "name": "x", "version": "1"}, "entities": {"E": {"key": ["id"], "properties": {"id": {"type": "string", "max_len": 1.5}}}}}`}), `"max_len"`)
+}
+
+// Writing a number takes a few small allocations, whatever the spelling: no
+// floating point value is built to print it.
+func TestCanonicalNumberAllocatesLittle(t *testing.T) { // not parallel: AllocsPerRun
+	for _, in := range []string{"0.1", "1e-99", "123.456e-7", "9e99", "-1234567890123456789012345678901234567e1"} {
+		if allocs := testing.AllocsPerRun(100, func() { canonicalNumber(in) }); allocs > 6 {
+			t.Errorf("canonicalNumber(%q) makes %.0f allocations", in, allocs)
+		}
 	}
 }

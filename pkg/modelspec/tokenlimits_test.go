@@ -40,11 +40,11 @@ func TestNumberLimitBoundary(t *testing.T) {
 		{"a decimal of 40 characters", "0." + rep("1", 38), ""},
 		{"a decimal of 41 characters", "0." + rep("1", 39), "41 characters"},
 		{"exponent 100", "1e100", ""},
-		{"exponent 101", "1e101", "the exponent 101; the limit is 100"},
+		{"exponent 101", "1e101", "the exponent 101 ("},
 		{"exponent -100", "1e-100", ""},
-		{"exponent -101", "1e-101", "the exponent -101; the limit is 100"},
+		{"exponent -101", "1e-101", "the exponent -101 ("},
 		{"exponent +100", "1E+100", ""},
-		{"exponent +101", "1E+101", "the exponent +101"},
+		{"exponent +101", "1E+101", "the exponent 101 ("},
 		{"the reviewer's number", "1e10000000", "the exponent 10000000"},
 		{"an exponent that overflows an integer", "1e" + rep("9", 30), "the exponent"},
 		{"4000 digits", rep("9", 4000), "a number is 4000 characters long"},
@@ -76,7 +76,7 @@ func TestNumberLimitBoundary(t *testing.T) {
 func TestAcceptedNumbersAreExact(t *testing.T) {
 	t.Parallel()
 	rnd := rand.New(rand.NewSource(7))
-	spell := func() string {
+	spellOnce := func() string {
 		digits := 1 + rnd.Intn(MaxNumberLength-8)
 		point := -1
 		if digits > 1 && rnd.Intn(2) == 0 {
@@ -93,6 +93,13 @@ func TestAcceptedNumbersAreExact(t *testing.T) {
 			fmt.Fprintf(&b, "e%+d", rnd.Intn(2*MaxNumberExponent+1)-MaxNumberExponent)
 		}
 		return b.String()
+	}
+	spell := func() string {
+		for { // a spelling past the limits is not one of the accepted numbers
+			if text := spellOnce(); numberProblem(text) == "" {
+				return text
+			}
+		}
 	}
 	exact := func(text string) *big.Rat {
 		r, ok := new(big.Rat).SetString(text)
@@ -127,6 +134,9 @@ func TestAcceptedNumbersAreExact(t *testing.T) {
 				b = a[:len(last)-1] + string(c+1) + a[len(last):]
 			}
 		}
+		if numberProblem(b) != "" {
+			b = spell()
+		}
 		texts, fs := read(a, b)
 		if len(texts) != 2 {
 			t.Fatalf("%q, %q: %v", a, b, fs)
@@ -134,6 +144,11 @@ func TestAcceptedNumbersAreExact(t *testing.T) {
 		for j, in := range []string{a, b} {
 			if exact(texts[j]).Cmp(exact(in)) != 0 {
 				t.Fatalf("%q was read as %q", in, texts[j])
+			}
+			// The canonical form is within the limits, and is its own canonical form: written
+			// by export and read again, it is the same number.
+			if numberProblem(texts[j]) != "" || canonicalNumber(texts[j]) != texts[j] {
+				t.Fatalf("%q was read as %q, which is refused (%q) or changes to %q", in, texts[j], numberProblem(texts[j]), canonicalNumber(texts[j]))
 			}
 		}
 		accepted += 2
@@ -152,6 +167,7 @@ func TestAcceptedNumbersAreExact(t *testing.T) {
 		{nines[:MaxNumberLength-2] + "e0", nines[:MaxNumberLength-2] + "e1"},
 		{"0." + rep("0", MaxNumberLength-3) + "1", "0." + rep("0", MaxNumberLength-3) + "2"},
 		{"1e100", "1e-100"},
+		{"9" + rep("9", 34) + "e65", "9" + rep("9", 34) + "e66"},
 		{"1" + rep("0", MaxNumberLength-1), "1" + rep("0", MaxNumberLength-2) + "1"},
 	} {
 		texts, fs := read(pair[0], pair[1])
@@ -320,5 +336,34 @@ func TestMessagesAreCutWhereTheyAreMade(t *testing.T) {
 	got = run(map[string]string{"a" + hclExt: "entity \"E\" {\n  key = [\"" + rep("k", MaxNameLength) + "\"]\n}\n"})
 	if len(got) != 1 || !strings.Contains(got[0], rep("k", MaxNameLength)+`" is not a property`) {
 		t.Errorf("findings %v", got)
+	}
+}
+
+// A name is limited by its text, whatever its spelling: a heredoc in the place of a
+// name (the value of type, kind, entity, component or enum, or an item of key or
+// use) is refused past 255 bytes, counting the line break the heredoc ends with, as
+// a quoted string is. A heredoc elsewhere (a pattern, a query) is not a name.
+func TestNameLimitAppliesToHeredocs(t *testing.T) {
+	t.Parallel()
+	templates := map[string]string{
+		"type":      "entity \"x\" {\n  property \"p\" {\n    type = <<EOT\n%s\nEOT\n  }\n}\n",
+		"kind":      "collection \"x\" {\n  kind = <<EOT\n%s\nEOT\n}\n",
+		"entity":    "entity \"x\" {\n  property \"p\" {\n    entity = <<EOT\n%s\nEOT\n  }\n}\n",
+		"key item":  "entity \"x\" {\n  key = [<<EOT\n%s\nEOT\n  ]\n}\n",
+		"key later": "entity \"x\" {\n  key = [\"a\", <<EOT\n%s\nEOT\n  ]\n}\n",
+		"use item":  "entity \"x\" {\n  use = [<<EOT\n%s\nEOT\n  ]\n}\n",
+	}
+	for name, tmpl := range templates {
+		// 254 characters and the line break are 255 bytes: at the limit.
+		if fs := hclFindings(fmt.Sprintf(tmpl, rep("a", MaxNameLength-1))); len(fs) != 0 {
+			t.Errorf("%s at the limit: %v", name, fs)
+		}
+		limitFinding(t, hclFindings(fmt.Sprintf(tmpl, rep("a", MaxNameLength))), "a name is 256 bytes long; the limit is 255")
+		limitFinding(t, hclFindings(fmt.Sprintf(tmpl, rep("a", 20000))), "a name is 20001 bytes long")
+	}
+	for _, line := range []string{"pattern = <<EOT\n" + rep("a", 5000) + "\nEOT", "query = <<EOT\n" + rep("a", 5000) + "\nEOT", "enum = [<<EOT\n" + rep("a", 5000) + "\nEOT\n]"} {
+		if fs := hclFindings(hclWith(line)); len(fs) != 0 {
+			t.Errorf("%.20s...: %v", line, fs)
+		}
 	}
 }

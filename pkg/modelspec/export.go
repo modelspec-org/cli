@@ -114,6 +114,11 @@ func conceptNode(k *Concept, membersKey string) *Node {
 // JSON's own module object supplies it, so the comparison covers everything
 // except the identity; pass id to compare that too.
 func (m *Model) ExportDrift(committed []byte, id ModuleIdentity) string {
+	return clipText(m.exportDrift(committed, id), MaxMessageBytes)
+}
+
+// exportDrift is ExportDrift without the cut of the message.
+func (m *Model) exportDrift(committed []byte, id ModuleIdentity) string {
 	want, err := ParseNode(committed)
 	if err != nil {
 		return fmt.Sprintf("the committed JSON is not valid JSON: %v", err)

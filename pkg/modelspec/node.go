@@ -229,7 +229,7 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int, ctx 
 		if msg := numberProblem(t.String()); msg != "" {
 			return nil, &limitError{line, msg}
 		}
-		return &Node{Type: NodeNumber, Str: t.String(), Line: line}, nil
+		return &Node{Type: NodeNumber, Str: canonicalNumber(t.String()), Line: line}, nil
 	default: // nil
 		return &Node{Type: NodeNull, Line: line}, nil
 	}
@@ -342,7 +342,7 @@ func diffAt(a, b *Node, path string) string {
 
 func quoteNode(n *Node) string {
 	if n.Type == NodeString {
-		return encodeString(n.Str)
+		return encodeString(clipText(n.Str, MaxEchoBytes))
 	}
 	return n.Str
 }

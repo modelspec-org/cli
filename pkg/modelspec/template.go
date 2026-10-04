@@ -39,11 +39,14 @@ const (
 	heredocEscape  = '\ue002'
 )
 
-// parserInput returns the source to give the HCL parser, and the offsets (in
-// that source) at which a heredoc begins, whose values need unescapeHeredoc.
-func parserInput(src []byte, tokens hclsyntax.Tokens) ([]byte, map[int]bool) {
+// parserInput returns the source to give the HCL parser, the offsets (in that
+// source) at which a heredoc begins, whose values need unescapeHeredoc, and the
+// text of the number that begins at each offset (the reader writes a number from
+// its own text, see canonicalNumber).
+func parserInput(src []byte, tokens hclsyntax.Tokens) ([]byte, map[int]bool, map[int]string) {
 	var out []byte
 	heredocs := map[int]bool{}
+	numbers := map[int]string{}
 	last := 0
 	for _, t := range tokens {
 		var rewritten string
@@ -52,6 +55,9 @@ func parserInput(src []byte, tokens hclsyntax.Tokens) ([]byte, map[int]bool) {
 			out = append(out, src[last:t.Range.Start.Byte]...)
 			last = t.Range.Start.Byte
 			heredocs[len(out)] = true
+			continue
+		case hclsyntax.TokenNumberLit:
+			numbers[len(out)+t.Range.Start.Byte-last] = string(t.Bytes)
 			continue
 		case hclsyntax.TokenQuotedLit:
 			rewritten = rewriteText(string(t.Bytes), `\u0024`, `\u0025`, false)
@@ -67,7 +73,7 @@ func parserInput(src []byte, tokens hclsyntax.Tokens) ([]byte, map[int]bool) {
 		out = append(out, rewritten...)
 		last = t.Range.End.Byte
 	}
-	return append(out, src[last:]...), heredocs
+	return append(out, src[last:]...), heredocs, numbers
 }
 
 // rewriteText replaces `$` and `%` in the text of a literal token by dollar and

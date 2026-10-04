@@ -149,15 +149,16 @@ func hclLiterals(file string, lexed hclsyntax.Tokens) []Finding {
 			if prev == hclsyntax.TokenIdent {
 				attr = string(tok(i - 1).Bytes)
 			}
-		case hclsyntax.TokenOQuote:
+		case hclsyntax.TokenOQuote, hclsyntax.TokenOHeredoc:
 			// A string is a name when it labels a block (after the block type or
 			// another label), is the value of an attribute that holds a name, or an
-			// item of one that holds a list of them.
-			isName := prev == hclsyntax.TokenIdent || prev == hclsyntax.TokenCQuote ||
-				(nameAttrs[attr] && prev == hclsyntax.TokenEqual) ||
-				(listNameAttrs[attr] && (prev == hclsyntax.TokenOBrack || prev == hclsyntax.TokenComma))
+			// item of one that holds a list of them. A heredoc is a name in the same
+			// places, whatever its spelling: the limit is on the text.
+			isName := (nameAttrs[attr] && prev == hclsyntax.TokenEqual) ||
+				(listNameAttrs[attr] && (prev == hclsyntax.TokenOBrack || prev == hclsyntax.TokenComma)) ||
+				(t.Type == hclsyntax.TokenOQuote && (prev == hclsyntax.TokenIdent || prev == hclsyntax.TokenCQuote))
 			if isName {
-				problem = nameProblem("a name", quotedLength(tok, i, len(significant)))
+				problem = nameProblem("a name", textLength(tok, i, len(significant)))
 			}
 		}
 		switch t.Type {
@@ -218,12 +219,13 @@ func hclLiterals(file string, lexed hclsyntax.Tokens) []Finding {
 	return out
 }
 
-// quotedLength returns the length in bytes, as written, of the quoted string
-// whose opening quote is the significant token i of n: the text between the
-// quotes (interpolations and directives were refused before, so it is all text).
-func quotedLength(tok func(int) hclsyntax.Token, i, n int) int {
+// textLength returns the length in bytes, as written, of the quoted string or
+// heredoc whose opening is the significant token i of n: the text between the
+// quotes, or the lines of the heredoc (interpolations and directives were refused
+// before, so it is all text).
+func textLength(tok func(int) hclsyntax.Token, i, n int) int {
 	length := 0
-	for j := i + 1; j < n && tok(j).Type == hclsyntax.TokenQuotedLit; j++ {
+	for j := i + 1; j < n && (tok(j).Type == hclsyntax.TokenQuotedLit || tok(j).Type == hclsyntax.TokenStringLit); j++ {
 		length += len(tok(j).Bytes)
 	}
 	return length
