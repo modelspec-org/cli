@@ -13,12 +13,15 @@
 //  4. one input costs a bounded amount of work: the bytes allocated reading and
 //     checking it stay within allocBase plus allocPerByte for each byte of the
 //     input (a count of the work done, which does not depend on the load of the
-//     machine, as time does), and no input takes ten seconds. An input over either
-//     fails the run, as a crash does; a fuzzer that is only given a time limit
-//     reports a pass after an input that stalled it.
+//     machine, as time does), and no input is still running after ten seconds (a
+//     watchdog stops the process while the input runs). An input over either fails
+//     the run, as a crash does; a fuzzer that is only given a time limit reports a
+//     pass after an input that stalled it. A run that stalls as a whole is judged
+//     by scripts/fuzz.sh (internal/fuzzjudge).
 package fuzz
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,20 +41,28 @@ const (
 	maxTime      = 10 * time.Second
 )
 
+// guard runs work and calls stalled, from another goroutine, if work has not
+// returned within limit: the input is stopped while it runs, not judged after it
+// returns, which an input that never returns would escape.
+func guard(limit time.Duration, stalled func(), work func()) {
+	timer := time.AfterFunc(limit, stalled)
+	defer timer.Stop()
+	work()
+}
+
 // within runs the work for one input and fails when it cost more than the budget.
+// An input still running after maxTime ends the process, which the fuzzer reports
+// as a failing input and keeps.
 func within(t *testing.T, src []byte, work func()) {
 	t.Helper()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	start := time.Now()
-	work()
-	elapsed := time.Since(start)
+	guard(maxTime, func() {
+		panic(fmt.Sprintf("an input of %d bytes is still running after %v", len(src), maxTime))
+	}, work)
 	runtime.ReadMemStats(&after)
 	if used, limit := after.TotalAlloc-before.TotalAlloc, uint64(allocBase+allocPerByte*len(src)); used > limit {
 		t.Fatalf("an input of %d bytes allocated %d bytes, over the budget of %d", len(src), used, limit)
-	}
-	if elapsed > maxTime {
-		t.Fatalf("an input of %d bytes took %v, over the limit of %v", len(src), elapsed, maxTime)
 	}
 }
 
