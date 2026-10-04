@@ -1201,3 +1201,34 @@ func TestExportSaysWhenReferencesIntoAnIncompleteModuleWereNotChecked(t *testing
 		t.Fatalf("no skipped file: stderr %q", whole.errb)
 	}
 }
+
+// --out is not one of the inputs: writing the model's own file, however it is spelled, or a
+// file supplied with --module, would replace a source with its JSON. It is refused, exit 2,
+// and nothing is written. The JSON copy beside the model is an output, not a source.
+func TestExportOutRefusesAnInput(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"m/booking.modelspec.hcl": bookingHCL, "shared/core.hcl": coreHCL, "shared/more.hcl": "enum \"E\" {\n  values = [\"x\"]\n}\n", "m/booking.modelspec.json": "{}"}
+	for _, tc := range []struct {
+		name string
+		out  string
+		want string
+	}{
+		{"the model", "m/booking.modelspec.hcl", "--out m/booking.modelspec.hcl is the input m/booking.modelspec.hcl"},
+		{"the model, spelled otherwise", "./m/../m/booking.modelspec.hcl", "is the input m/booking.modelspec.hcl"},
+		{"a file supplied with --module", "shared/core.hcl", "is the input shared/core.hcl"},
+		{"a file of a directory supplied with --module", "shared/more.hcl", "is the input shared/more.hcl"},
+	} {
+		h := newHarness(files)
+		code := h.run(append([]string{"export", "m/booking.modelspec.hcl", "--module", "core=shared", "--out", tc.out}, exportID...)...)
+		if code != 2 || len(h.fsys.written) != 0 || h.out.Len() != 0 || !strings.Contains(h.errb.String(), tc.want) || !strings.Contains(h.errb.String(), "replace") {
+			t.Errorf("%s: exit %d, written %v, stderr %q", tc.name, code, h.fsys.written, h.errb)
+		}
+	}
+	// The copy beside the model, and a path that is nothing yet, are written.
+	for _, out := range []string{"m/booking.modelspec.json", "m/new.json"} {
+		h := newHarness(files)
+		if code := h.run(append([]string{"export", "m/booking.modelspec.hcl", "--module", "core=shared", "--out", out}, exportID...)...); code != 0 || len(h.fsys.written[out]) == 0 {
+			t.Errorf("--out %s: exit %d, written %v, stderr %q", out, code, h.fsys.written, h.errb)
+		}
+	}
+}

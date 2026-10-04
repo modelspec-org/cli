@@ -435,6 +435,14 @@ regular file, which would send the write elsewhere), a named pipe (which would w
 device. `/dev/null` is a device, so `--out /dev/null` is refused; write to standard output and redirect it
 (`export ... > /dev/null`). A path that does not exist, and a regular file, are written as before.
 
+`--out` is not one of the inputs: the path of the model itself (however it is spelled, or reached by a hard
+link), or of a file read as a source through `--module`, is refused (exit 2, nothing written), because it would
+replace the model with its JSON. The JSON copy beside the model is not an input; that is what `export` is for.
+The file is written through a temporary file in the same directory (`.modelspec-<random>.tmp`, created
+exclusively and removed when anything fails) and renamed over the path, so a link put at the path between the
+check and the write is replaced and not followed, and an interrupted run leaves the old file whole. The directory
+must be one a file can be created in, and a replaced file keeps its permission bits as far as the umask allows.
+
 Every file a command reads has the 1 MiB limit, the committed JSON that `--check` reads too (one over it is
 refused without being read, exit 1), and every one is read through one reader that refuses what is not a regular
 file (exit 2) and reads at most one byte over the limit. `export` refuses to write a JSON twin over the limit, since `lint` would refuse

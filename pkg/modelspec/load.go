@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +23,9 @@ type FS interface {
 	// Stat follows symbolic links; Lstat does not.
 	Stat(name string) (fs.FileInfo, error)
 	Lstat(name string) (fs.FileInfo, error)
+	// WriteFile replaces the file name with data, through a temporary file in the same
+	// directory (created exclusively, removed on failure) and a rename, so that what is
+	// at name is replaced and never followed, and a reader never sees half a file.
 	WriteFile(name string, data []byte, perm fs.FileMode) error
 	// Abs returns the absolute form of a path, cleaned, with symbolic links left
 	// as they are: the path as the file was given or found. The SpecScore layout
@@ -140,7 +144,8 @@ func ReadSource(fsys FS, name string) ([]byte, error) {
 
 // OSFS is the operating system's filesystem. The zero value is ready to use.
 type OSFS struct {
-	getwd func() (string, error) // os.Getwd when nil; a seam for tests
+	getwd    func() (string, error) // os.Getwd when nil; a seam for tests
+	tempName func() string          // the name of WriteFile's temporary file, random when nil; a seam for tests
 }
 
 // Open opens without waiting: opening a named pipe for reading otherwise blocks
@@ -151,8 +156,44 @@ func (OSFS) Open(name string) (fs.File, error) {
 func (OSFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
 func (OSFS) Stat(name string) (fs.FileInfo, error)      { return os.Stat(name) }
 func (OSFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) }
-func (OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
-	return os.WriteFile(name, data, perm)
+
+// WriteFile writes data to a temporary file in the directory of name, created with
+// O_EXCL (a name that exists, a link planted at it included, is an error and is left
+// alone), and renames it over name. A rename replaces a link at name and does not follow
+// it, so a link put there after a check cannot redirect the write. A file that is replaced
+// keeps its permission bits (as far as the umask allows); the temporary file is removed
+// when anything fails.
+func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	if info, err := os.Lstat(name); err == nil && info.Mode().IsRegular() {
+		perm = info.Mode().Perm()
+	}
+	tempName := o.tempName
+	if tempName == nil {
+		tempName = func() string { return fmt.Sprintf(".modelspec-%016x.tmp", rand.Uint64()) }
+	}
+	temp := filepath.Join(filepath.Dir(name), tempName())
+	f, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	err = writeAndClose(f, data)
+	if err == nil {
+		err = os.Rename(temp, name)
+	}
+	if err != nil {
+		os.Remove(temp)
+	}
+	return err
+}
+
+// writeAndClose writes data and closes w, whether or not the write worked, and returns the
+// first error.
+func writeAndClose(w io.WriteCloser, data []byte) error {
+	_, err := w.Write(data)
+	if closeErr := w.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 func (OSFS) SameFile(a, b fs.FileInfo) bool { return os.SameFile(a, b) }
 func (o OSFS) Abs(name string) (string, error) {

@@ -1300,3 +1300,117 @@ func TestAModelsDirectoryThatIsALinkOnTheRealFileSystem(t *testing.T) {
 		}
 	}
 }
+
+// OSFS.WriteFile writes through a temporary file in the same directory, created exclusively,
+// and a rename, so that what is at the name is replaced and never followed, and a temporary
+// file does not stay.
+func TestOSFSWriteFileReplacesThroughATemporaryFile(t *testing.T) {
+	t.Parallel()
+	listing := func(dir string) string {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return strings.Join(names, " ")
+	}
+	read := func(name string) string {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	// A new file and an existing one: the content is the new data, nothing else is left, and a replaced file keeps its permissions.
+	dir := t.TempDir()
+	file := filepath.Join(dir, "out.json")
+	if err := (OSFS{}).WriteFile(file, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(file); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&^0o644 != 0 {
+		t.Fatalf("a new file: %v, %v", info, err)
+	}
+	if err := os.Chmod(file, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (OSFS{}).WriteFile(file, []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(file); err != nil || read(file) != "second" || info.Mode().Perm() != 0o600 || listing(dir) != "out.json" {
+		t.Fatalf("a replaced file: %q, %v, listing %q", read(file), info.Mode(), listing(dir))
+	}
+	// A link at the name is replaced, and what it pointed to is left as it was: a link swapped in after a check cannot redirect the write.
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	if err := (OSFS{}).WriteFile(link, []byte("through"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || !info.Mode().IsRegular() || read(link) != "through" || read(victim) != "mine" {
+		t.Fatalf("a link at the name: %v, %q, victim %q", info, read(link), read(victim))
+	}
+	// The temporary file is created exclusively: one that is already there, or a link planted at its name, is not written through, and is left alone.
+	fixed := OSFS{tempName: func() string { return ".planted" }}
+	if err := os.WriteFile(filepath.Join(dir, ".planted"), []byte("planted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixed.WriteFile(file, []byte("x"), 0o644); !errors.Is(err, fs.ErrExist) || read(filepath.Join(dir, ".planted")) != "planted" || read(file) != "second" {
+		t.Fatalf("a temporary file that exists: %v, %q, %q", err, read(filepath.Join(dir, ".planted")), read(file))
+	}
+	if err := os.Remove(filepath.Join(dir, ".planted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dir, ".planted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixed.WriteFile(file, []byte("x"), 0o644); !errors.Is(err, fs.ErrExist) || read(victim) != "mine" {
+		t.Fatalf("a link at the temporary name: %v, victim %q", err, read(victim))
+	}
+	// A failure leaves nothing behind: the name is a directory (the rename fails), or its directory is not there.
+	other := t.TempDir()
+	if err := os.Mkdir(filepath.Join(other, "out.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (OSFS{}).WriteFile(filepath.Join(other, "out.json"), []byte("x"), 0o644); err == nil || listing(other) != "out.json" {
+		t.Fatalf("a directory at the name: %v, listing %q", err, listing(other))
+	}
+	if err := (OSFS{}).WriteFile(filepath.Join(dir, "no", "such", "out.json"), []byte("x"), 0o644); err == nil {
+		t.Fatal("a directory that is not there: no error")
+	}
+}
+
+// writeAndClose reports a failed write and a failed close, and closes in every case.
+func TestWriteAndClose(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("write failed")
+	closeErr := errors.New("close failed")
+	for name, tc := range map[string]struct {
+		w    *fakeWriter
+		want error
+	}{
+		"both succeed": {&fakeWriter{}, nil},
+		"write fails":  {&fakeWriter{writeErr: boom}, boom},
+		"close fails":  {&fakeWriter{closeErr: closeErr}, closeErr},
+		"both fail":    {&fakeWriter{writeErr: boom, closeErr: closeErr}, boom},
+	} {
+		if err := writeAndClose(tc.w, []byte("data")); !errors.Is(err, tc.want) && err != tc.want || !tc.w.closed {
+			t.Errorf("%s: %v, closed %v", name, err, tc.w.closed)
+		}
+	}
+}
+
+type fakeWriter struct {
+	writeErr, closeErr error
+	closed             bool
+}
+
+func (f *fakeWriter) Write(p []byte) (int, error) { return len(p), f.writeErr }
+func (f *fakeWriter) Close() error                { f.closed = true; return f.closeErr }
