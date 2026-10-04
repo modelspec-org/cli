@@ -229,6 +229,10 @@ and "do not use dynamic HCL expressions or functions". A reference to another mo
   commas, newlines and comments between items; a bare word (a reference) is read and refused with the
   message that it must be a literal.
 
+A heredoc keeps its final line break, so a one-line heredoc (`type = <<EOT`, `string`, `EOT`) is the value
+`"string\n"` and never a valid name. The finding about a name (a type, a reference, a key, a `kind`) in an HCL file
+that ends with a line break says so and says to write a quoted string.
+
 **What is refused before parsing.** The HCL parser is recursive, and a stack overflow in Go is fatal, so
 the source is lexed first (the lexer does not recurse) and refused, without being parsed, if it holds any
 token a literal cannot contain. That closes the whole class instead of the recursive constructs one by one.

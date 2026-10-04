@@ -865,3 +865,51 @@ func TestPropSetStrategy(t *testing.T) {
 		t.Fatalf("F: %+v", plain)
 	}
 }
+
+// HCL keeps the final line break of a heredoc, so a heredoc is never a valid name: the
+// finding for a name that ends with a line break says so and says to write a quoted
+// string. JSON has no heredoc and gets no such hint, and neither does a finding about a
+// value that is not a name (an enum value), or a name that does not end with a line break.
+func TestAHeredocInANamePositionSaysToUseAQuotedString(t *testing.T) {
+	t.Parallel()
+	const hint = "the name ends with a line break; HCL keeps the final line break of a heredoc, so a heredoc is never a valid name: write it as a quoted string"
+	entity := func(property string) string {
+		return "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"p\" {\n    " + property + "\n  }\n}\n"
+	}
+	for name, tc := range map[string]struct{ src, want string }{
+		"type":      {entity("type = <<EOT\nstring\nEOT"), `has type "string\n", which is not a ModelSpec type`},
+		"entity":    {entity("entity = <<EOT\nA\nEOT"), `entity reference "A\n" does not resolve`},
+		"component": {entity("component = <<EOT\nC\nEOT"), `component reference "C\n" does not resolve`},
+		"key":       {"entity \"A\" {\n  key = [<<EOT\nid\nEOT\n  ]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n", `key "id\n" is not a property`},
+		"kind":      {"collection \"c\" {\n  kind = <<EOT\neditable\nEOT\n}\n", `"editable\n"`},
+	} {
+		got := run(map[string]string{"m.modelspec.hcl": tc.src})
+		found := false
+		for _, g := range got {
+			if strings.Contains(g, tc.want) {
+				found = true
+				if !strings.Contains(g, hint) {
+					t.Errorf("%s: no hint in %s", name, g)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: no finding contains %q: %v", name, tc.want, got)
+		}
+	}
+	// No hint where there is no heredoc to blame, or the value is not a name.
+	for name, got := range map[string][]string{
+		"JSON":            run(map[string]string{"m.modelspec.json": doc(`"entities": {"A": {"key": ["id"], "properties": {"id": {"type": "string\n"}}}}`)}),
+		"an enum value":   run(map[string]string{"m.modelspec.hcl": "enum \"E\" {\n  values = [<<EOT\nx\nEOT\n, <<EOT\nx\nEOT\n]\n}\n"}),
+		"an unknown type": run(map[string]string{"m.modelspec.hcl": entity(`type = "nope"`)}),
+	} {
+		if len(got) == 0 {
+			t.Errorf("%s: no finding", name)
+		}
+		for _, g := range got {
+			if strings.Contains(g, "heredoc") {
+				t.Errorf("%s: %s", name, g)
+			}
+		}
+	}
+}
