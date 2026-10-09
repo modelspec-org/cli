@@ -110,15 +110,20 @@ decision 0022). `modelspec` reads both spellings, in the files of one module and
 A component's members are `field` in both. Either member word is accepted in either block
 spelling, and a member that has both `record` and `entity` is an error. Messages use the new
 words whichever spelling the source used, and the Go library holds one vocabulary, the new one
-(`KindRecord`; `KindEntity` is kept as a deprecated alias of it).
+(`KindRecord`; there is no alias for the old `KindEntity`, so a program written against it fails
+to compile and is changed on purpose).
 
 **The old spelling is a warning** (rule `deprecated-spelling`, both profiles, never the exit code):
 one finding for each file, at the line of the first old spelling (for JSON, at the `modelspec`
-line), saying how many the file holds and that `modelspec rewrite <file>` rewrites it. Nothing
-registered changes meaning: a model in the old spelling lints as before. The severity is decided in
-one place, `OldSpellingSeverity` in `pkg/modelspec/finding.go`; making the old spelling an error is
-a later, separate step (decision 0022) and changes that constant and the corpus test that pairs each
-old item with its copy in the new spelling, nothing else.
+line), saying how many the file holds and that `modelspec rewrite --write <file>` rewrites it.
+Nothing registered changes meaning: a model in the old spelling lints as before. The severity is
+decided in one place in the code, `OldSpellingSeverity` in `pkg/modelspec/finding.go`. Making the old
+spelling an error is a later, separate step: the owner approved it in advance (2026-10-09), and
+decision 0022 gives it a condition, that no registered model is pinned in the old spelling. It changes
+that constant, which touches no other production code (`rewrite` does not look at it), and the tests that
+pin a warning: the lint and export tests, the corpus test that pairs each old item with its copy in the
+new spelling (`oldSpellingVerdict`), and the manifest's old items, with the `differs` entries that
+the parity test then needs for the items the recorded readers accept.
 
 **The JSON identifier decides the vocabulary.** A `1.0-draft-2` document with `entities`,
 `properties` or a member key `entity`, and a `1.0-draft` document with `records`, a record's
@@ -230,7 +235,7 @@ Both forms, on the same typed model:
 | `name-case` | warning: two names of one scope that differ only by case (`User` and `user`; a collision on a case-insensitive store). Not an error, because the standard keeps names case-sensitive |
 | `stale-twin` | warning: a JSON twin is not what its HCL exports to |
 | `skipped-file` | error, both profiles: a search found a model-named file that is not a regular file (a symbolic link, a named pipe, a device), or a SpecScore `models` directory that is a symbolic link to a directory, and did not read it. The finding names the path and what it is, and the way out: replace the link with the file or the directory, or name it on the command line. The module the file belongs to is not checked at all in that run (no reference, twin or other finding is reported from a partial load, and none from another module into it, whether the module is a layout module, a `--module` assignment or a standalone file that is itself the link), and `export` and `export --check` refuse it; other modules in the run are checked as usual |
-| `enum-values` | an enum has at least one value and no repeats, also for an inline `enum = [...]`. Values are strings or integers (decision 0013: an enum constrains a string or an int property) |
+| `enum-values` | an enum has at least one value and no repeats, also for an inline `enum = [...]`. Values are strings or integers (decision 0013: an enum constrains a string or an int field) |
 | `unknown-type` | `type` is one of the ModelSpec types |
 | `attribute` | only supported attributes, with values of the right type |
 | `member-kind` | a field of a record or of a component has exactly one of `type`, `record`, `component` |
@@ -430,7 +435,7 @@ refused token. A new version of the `hcl` library, which could add tokens or rec
 `scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
 crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
 lints clean, a clean model is rewritten to a clean model that rewriting again does not change, and one input costs a bounded amount of work (the reading, the checks, the export, the read of the
-export and the comparison all count): at most 4 MiB plus 1,000 bytes allocated for each
+export and the comparison all count): at most 8 MiB plus 2,500 bytes allocated for each
 byte of input, counted by the allocator and not by time, and a watchdog ends the process, which the fuzzer reports
 as a failing input, if one input is still running after ten seconds: while it runs, not after it returns). `scripts/fuzz.sh`
 runs the fuzzer with `-fuzzminimizetime 5s`: by default it minimises a new input for up to a minute, with no execution
@@ -470,10 +475,12 @@ of its source**: an HCL file with no old spelling exports as `"modelspec": "1.0-
 `entity =`) as `"1.0-draft"` with `entities`, `properties` and `entity`. So a repository whose
 `export --check` passes keeps passing, and passes again after `modelspec rewrite` has been run on
 both its files; the order of the two rewrites does not matter, but between them the pair is in two
-vocabularies, and the `stale-twin` warning and the `--check` message say that `modelspec rewrite`
-brings it in line. (An HCL file with no record, field or reference in it, only components and enums,
-has no old spelling and so exports as `1.0-draft-2`: beside a `1.0-draft` copy it is a stale twin until
-the copy is rewritten.) Nothing that lints clean lacks a JSON form: every construct the reader still accepts has one,
+vocabularies, and the `stale-twin` warning and the `--check` message give one instruction,
+`modelspec rewrite --write` on both files. This holds without exception: an HCL file with no record, no
+reference to one and no old spelling (only components and enums, or nothing) is the same text in both
+vocabularies, so a plain `export` writes it as `1.0-draft-2`, and `--check` and `stale-twin` compare it with a
+copy written as `1.0-draft` in that vocabulary; the copy keeps its own `deprecated-spelling` warning until
+it is rewritten. Nothing that lints clean lacks a JSON form: every construct the reader still accepts has one,
 and the words with none (`index`, `projection`, `migration`) are errors. The output of `export` for
 datatug/chinookdb's `model/chinook.modelspec.hcl`, in the old spelling, is byte-identical to its committed
 `model/chinook.modelspec.json`, and the export of the same file after `modelspec rewrite` is byte-identical
@@ -531,16 +538,22 @@ changes nothing. The default is a dry run that prints, for each file that would 
 of replacements, and exits 0; `--write` applies them; `--check` writes nothing and exits 1 when any file would change.
 
 A file is rewritten whatever else is wrong with it (the rewrite is syntactic, and `lint` reports the
-rest), except a file `rewrite` cannot rewrite safely: one that does not parse, one with a removed construct or a
+rest; the old spellings inside a block with a wrong label, or in a member whose value is refused, are rewritten too), except a file `rewrite` cannot rewrite safely: one that does not parse, one with a removed construct or a
 reserved word (no rewriting fixes it), one that mixes the vocabularies in a way the format does not allow
 (`records` in a `1.0-draft` document, a member with both `record` and `entity`, two lists of members in one
 record), and a JSON file whose identifier is neither `1.0-draft` nor `1.0-draft-2`. It is named on
 standard error with the reason, nothing is written for it, and the exit code is 1; the other files are still
 rewritten. Before a file is written its rewritten text is read again and must be the same model (the same
-concepts, members and attributes) with no old spelling left. The write goes through a temporary file in the
-same directory and a rename, and the file keeps its permissions. A symbolic link named on the command line is
-followed (its target is rewritten and the link stays a link); a link found by a directory search is not
-written through and is reported. An HCL file and its JSON copy are each rewritten when both are named or found;
+concepts, members and attributes) with no old spelling left.
+
+How a file is written. The files are written one after another, each through a temporary file in its directory
+(synced, given the file's permission bits exactly whatever the umask, and renamed over the file), so a reader never
+sees half a file. If writing one fails the run stops there with exit 2 and no summary: the files already written stay
+written, and `rewrite` can be run again, since it changes nothing that is already rewritten. The rename replaces the
+file, so a read-only file in a directory you can write is replaced, and a hard link to a rewritten file keeps the old
+content (it is a different file now). A symbolic link named on the command line is followed (its target is replaced and
+the link stays a link); a link found by a directory search is not written through and is reported. A file the tool
+would rewrite to more than the 1 MiB limit (the JSON identifier is two bytes longer) is refused with that reason. An HCL file and its JSON copy are each rewritten when both are named or found;
 rewriting one of a pair leaves the other as `lint` will report it (`stale-twin`). The files are limited as
 `lint` limits them (1 MiB, UTF-8).
 
@@ -563,7 +576,7 @@ The standard does not settle these, so `modelspec` does not invent an answer (ea
   exported (the other files are named in the refusal). The module is linted whole whichever file is given.
 - **Names.** Empty and blank names are errors (nothing could refer to them), names that differ only by
   case are warnings, and a field name with a dot is accepted.
-- **Integer enum values** are accepted (decision 0013 mentions int properties); the format does
+- **Integer enum values** are accepted (decision 0013 mentions int fields); the format does
   not say what an enum's values may be.
 - **Unknown top-level JSON fields** are accepted with a warning.
 
@@ -573,8 +586,8 @@ The standard does not settle these, so `modelspec` does not invent an answer (ea
 in `testdata/corpus` (**251 manifest items**; each is a file, a SpecScore-layout tree or a set of standalone files, or an
 entry under `parts/` that is one file of another item given alone and must give the verdict of its whole module;
 `testdata/corpus/manifest.json` is the expected verdict of each, under both profiles; a test fails when this
-number is not the manifest's). Half of the items are in the old spelling, the other half under `new/` are the same
-items in the new one: where `modelspec rewrite` can rewrite every model file of an item, the copy is what it
+number is not the manifest's). 121 items are in the old spelling; under `new/` are their 121 copies in the new
+one and 9 items that have no old twin: where `modelspec rewrite` can rewrite every model file of an item, the copy is what it
 makes of the item, byte for byte (a test checks it), and the item's verdict is the copy's with the warning
 `deprecated-spelling` added; where it cannot (a file that does not parse, or one that holds a collection, a
 recordset or a reserved word), the copy was written by hand. The two readers below do not read the new

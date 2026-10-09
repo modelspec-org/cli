@@ -12,7 +12,11 @@
 //     and lints clean under the same name;
 //  4. a model that lints clean is rewritten (modelspec rewrite) to the same model,
 //     which lints clean, and rewriting that again changes nothing;
-//  5. one input costs a bounded amount of work: the bytes allocated reading and
+//  5. a file that rewrite accepts, clean or not, is rewritten at the old spellings
+//     the reader found and nowhere else, with the count it reports, to the same
+//     concepts, and rewriting that again changes nothing; rewrite never refuses
+//     with its "defect" message;
+//  6. one input costs a bounded amount of work: the bytes allocated reading and
 //     checking it, exporting it and reading the export back (FuzzHCL does all of
 //     that inside within) stay within allocBase plus allocPerByte for each byte of
 //     the input (a count of the work done, which does not depend on the load of the
@@ -37,11 +41,12 @@ import (
 )
 
 // The budget of one input. Reading and checking a large valid file (under both
-// profiles, as refusal does) allocates about 470 times its size; the budget is twice
-// that, and a fixed amount for the smallest inputs.
+// profiles, as refusal does) allocates about 470 times its size, and the rewrite
+// oracle reads it about five times more; the budget is twice the sum, and a fixed
+// amount for the smallest inputs.
 const (
-	allocBase    = 4 << 20
-	allocPerByte = 1000
+	allocBase    = 8 << 20
+	allocPerByte = 2500
 	maxTime      = 10 * time.Second
 )
 
@@ -114,6 +119,49 @@ func seeds(f *testing.F, dir, suffix string) {
 	f.Add([]byte("{\"modelspec\": \"1.0-draft-2\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}}"))
 }
 
+// rewriteAccepted checks the fifth oracle for any source. A refusal is no failure
+// (rewrite refuses files it cannot rewrite safely), except the one that says the
+// result was not the same model: that is a defect.
+func rewriteAccepted(t *testing.T, file string, src []byte) {
+	t.Helper()
+	out, n, err := modelspec.Rewrite(file, src)
+	if err != nil {
+		if strings.Contains(err.Error(), "does not read as the same model") {
+			t.Fatalf("rewrite found its own result wrong: %v\n%s", err, src)
+		}
+		return
+	}
+	m, _ := modelspec.Parse(file, src)
+	if len(m.Old) != n {
+		t.Fatalf("rewrite counted %d replacements, the reader found %d", n, len(m.Old))
+	}
+	var want []byte
+	pos := 0
+	for _, o := range m.Old {
+		if o.Start < pos || o.End < o.Start || o.End > len(src) {
+			t.Fatalf("old spelling %+v is out of place", o)
+		}
+		want = append(append(want, src[pos:o.Start]...), o.New...)
+		pos = o.End
+	}
+	want = append(want, src[pos:]...)
+	if !bytes.Equal(want, out) {
+		t.Fatalf("rewrite changed more than the old spellings:\n%s\n---\n%s", src, out)
+	}
+	back, _ := modelspec.Parse(file, out)
+	if len(back.Concepts) != len(m.Concepts) || len(back.Old) != 0 {
+		t.Fatalf("the rewritten file has %d concepts (was %d) and %d old spellings", len(back.Concepts), len(m.Concepts), len(back.Old))
+	}
+	for i, k := range m.Concepts {
+		if b := back.Concepts[i]; b.Kind != k.Kind || b.Name != k.Name || len(b.Members) != len(k.Members) {
+			t.Fatalf("concept %q changed in the rewrite", k.Name)
+		}
+	}
+	if again, n, err := modelspec.Rewrite(file, out); err != nil || n != 0 || !bytes.Equal(again, out) {
+		t.Fatalf("rewriting the rewrite changed it (%d replacements, %v)", n, err)
+	}
+}
+
 // rewritten checks the fourth oracle for a source that lints clean: it is rewritten
 // to a source that reads as clean, and rewriting that changes nothing.
 func rewritten(t *testing.T, file string, src []byte) {
@@ -155,6 +203,7 @@ func FuzzHCL(f *testing.F) {
 		// export, the read of the export and the comparison, so the watchdog and the
 		// allocation budget cover all of it.
 		within(t, src, func() {
+			rewriteAccepted(t, "fuzz.modelspec.hcl", src)
 			m, parse := modelspec.ParseHCL("fuzz.modelspec.hcl", src)
 			if !refusal(t, m, parse) {
 				return
@@ -182,6 +231,7 @@ func FuzzJSON(f *testing.F) {
 	seeds(f, "new/json", ".modelspec.json")
 	f.Fuzz(func(t *testing.T, src []byte) {
 		within(t, src, func() {
+			rewriteAccepted(t, "fuzz.modelspec.json", src)
 			m, parse := modelspec.ParseJSON("fuzz.modelspec.json", src)
 			if refusal(t, m, parse) {
 				rewritten(t, "fuzz.modelspec.json", src)
