@@ -1,4 +1,4 @@
-// Package cli is the modelspec command line: lint, export, version and
+// Package cli is the modelspec command line: lint, export, rewrite, version and
 // self-update. Everything the commands touch (filesystem, output streams,
 // build information, the update source) comes in through Env, so tests run
 // them in memory.
@@ -123,11 +123,13 @@ func wantsJSON(args []string) bool {
 func newRoot(env *Env) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "modelspec",
-		Short: "Validate and export ModelSpec models",
-		Long: `modelspec validates ModelSpec models and exports them to their JSON form.
+		Short: "Validate, export and rewrite ModelSpec models",
+		Long: `modelspec validates ModelSpec models, exports them to their JSON form and
+rewrites them from the old spelling to the new one.
 
-Exit codes: 0 clean, 1 findings at error severity (or export drift),
-2 usage or I/O error. modelspec makes no network request except
+Exit codes: 0 clean, 1 findings at error severity (or export drift, or a file
+rewrite would change under --check, or one it cannot rewrite), 2 usage or I/O
+error. modelspec makes no network request except
 self-update, and sends no telemetry.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -135,7 +137,7 @@ self-update, and sends no telemetry.`,
 	root.SetOut(env.Stdout)
 	root.SetErr(env.Stderr)
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return &exitError{code: ExitUsage, err: err} })
-	root.AddCommand(lintCommand(env), exportCommand(env))
+	root.AddCommand(lintCommand(env), exportCommand(env), rewriteCommand(env))
 	vercmd.WireCobra(root, env.Build)
 	root.AddCommand(cobracmd.New(env.Update, cobracmd.CommandOptions{
 		Short:       "Update modelspec to the latest release",

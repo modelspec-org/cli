@@ -71,9 +71,15 @@ Profiles. The default profile checks the standard (spec/core-model.md,
 spec/hcl-authoring.md, spec/json-format.md and the decisions) and nothing else.
 --profile publish adds what a model needs to be listed in public catalogues
 (the requirements of the Directory's JSON reader): a module.name that is an
-identifier, at least one entity, properties on every entity, identifier names
-for entities and properties, no component-valued properties, and entity
-references only within the module.
+identifier, at least one record, fields on every record, identifier names
+for records and fields, no component-valued fields, and record references only
+within the module.
+
+The old spelling (entity, property and entity = in HCL; format 1.0-draft with
+entities, properties and entity in JSON) is still read, with one warning for each
+file that uses it (rule deprecated-spelling), and modelspec rewrite brings the file
+up to date. collection and recordset blocks, and the words projection, index and
+migration, are errors (decision 0019).
 
 Output is text by default, or one JSON object with --format json; with
 --format json an I/O or usage error (exit 2) is also JSON on standard output:
