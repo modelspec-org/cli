@@ -321,12 +321,12 @@ func TestExportOfAModelWithNoVocabularyMarker(t *testing.T) {
 	if d := m.ExportDrift([]byte(stale), ModuleIdentity{}); !strings.Contains(d, "values[0]") || strings.Contains(d, "vocabular") {
 		t.Errorf("drift = %q", d)
 	}
-	// The same through lint: the copy is a stale twin of nothing, and says only that it is old.
+	// The same through lint: the copy is a stale twin of nothing, and is an error only for being old.
 	got := run(map[string]string{"core" + hclExt: src, "core.modelspec.json": strings.Replace(oldCopy, `"id": "x/y"`, `"id": "x/core"`, 1)})
 	for _, g := range got {
 		if strings.Contains(g, "stale") {
 			t.Errorf("a stale twin: %s", g)
 		}
 	}
-	expect(t, got, "core.modelspec.json:2: warning: is in format 1.0-draft and holds 1 old spelling")
+	expect(t, got, "core.modelspec.json:2: error: is in format 1.0-draft and holds 1 old spelling")
 }

@@ -251,7 +251,7 @@ func (c *checker) unit(u *unit) {
 // deprecated gives the one finding about the old spelling a file uses (decisions
 // 0018, 0020 and 0022): at the line of the first one, or for JSON at the line of
 // the format identifier, with how many the file holds. Its severity is
-// OldSpellingSeverity.
+// OldSpellingSeverity of the file, and its last clause says which it is and why.
 func (c *checker) deprecated(m *Model) {
 	if len(m.Old) == 0 {
 		return
@@ -268,7 +268,12 @@ func (c *checker) deprecated(m *Model) {
 	} else {
 		what = fmt.Sprintf("holds %s: entity, property and entity = are the old spellings of record, field and record =", plural(len(m.Old), "old spelling", "old spellings"))
 	}
-	c.add(line, RuleDeprecated, OldSpellingSeverity, "%s (decision 0018, decision 0020); modelspec rewrite --write %s rewrites the file", what, quote1(m.File))
+	sev := OldSpellingSeverity(m.ReferenceOnly)
+	why := "the old spelling is an error in a model that is being checked"
+	if sev == SeverityWarning {
+		why = "this file is read only so that references into its module resolve (--module), so the old spelling is a warning here"
+	}
+	c.add(line, RuleDeprecated, sev, "%s (decision 0018, decision 0020); %s (decision 0022); modelspec rewrite --write %s rewrites the file", what, why, quote1(m.File))
 }
 
 // duplicates reports a concept name declared twice in one name scope of the

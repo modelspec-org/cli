@@ -1,24 +1,20 @@
 {
- "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). Every item in the old spelling (entity, property, entity =; format 1.0-draft) has the warning deprecated-spelling; that is the only difference between its verdict and the verdict of its copy in the new spelling, where there is a copy. `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why: specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item under parts/ is one file of another item, given alone (as an editor or a hook would): `path` is where it is under this directory, and a module is the unit, so its verdict is that of the whole module it belongs to. Parts are not compared with the other readers, which lint a whole project. An item without `differs` must have the same verdict as the reader recorded for it. An item under new/ is the item of the same path in the new spelling (record, field, record =; format 1.0-draft-2). Where `modelspec rewrite` can rewrite every model file of the old item, the copy is what rewrite makes of it, byte for byte (a test checks it). Where it cannot, because a file does not parse, repeats a key in a JSON object, or holds a removed construct or a reserved word (decision 0019), the copy was written by hand: the old words replaced, and for an item whose removed construct was only a part of its purpose (a collection beside records) without it; the old item keeps the construct and so refuses. The items listed in the test as new only have no old twin: they hold both spellings together. Items under new/ are not compared with the other readers, which do not read the new spelling yet; the same goes for new/parts/.",
+ "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). Every item in the old spelling (entity, property, entity =; format 1.0-draft) is refused, with the error deprecated-spelling (decision 0022, step 4: the old spelling is an error in a model that is being checked, and the whole item is named to lint) - except in a file that only the item's `modules` supply (parts/a.hcl and parts/b.hcl of standalone/explicit-module and standalone/explicit-module-with-json-copy), which is read so that the references into it resolve and keeps the warning; that is the only difference between its verdict and the verdict of its copy in the new spelling, where there is a copy. `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why (the recorded readers still read the old spelling, so an old item that lint refuses for the spelling alone has an entry): specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item under parts/ is one file of another item, given alone (as an editor or a hook would): `path` is where it is under this directory, and a module is the unit, so its verdict is that of the whole module it belongs to. Parts are not compared with the other readers, which lint a whole project. An item without `differs` must have the same verdict as the reader recorded for it. An item under new/ is the item of the same path in the new spelling (record, field, record =; format 1.0-draft-2). Where `modelspec rewrite` can rewrite every model file of the old item, the copy is what rewrite makes of it, byte for byte (a test checks it). Where it cannot, because a file does not parse, repeats a key in a JSON object, or holds a removed construct or a reserved word (decision 0019), the copy was written by hand: the old words replaced, and for an item whose removed construct was only a part of its purpose (a collection beside records) without it; the old item keeps the construct and so refuses. The items listed in the test as new only have no old twin: they hold both spellings together. Items under new/ are not compared with the other readers, which do not read the new spelling yet; the same goes for new/parts/.",
  "items": {
   "hcl/blank-property-name.modelspec.hcl": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "name-form",
      "publish-name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -27,51 +23,57 @@
   },
   "hcl/case-only-difference.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "name-case"
     ]
    },
    "publish": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "name-case"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/chinook.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/collection-bind-unresolved.modelspec.hcl": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -82,19 +84,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -102,23 +100,19 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key",
      "name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key",
      "name-form",
      "publish-fields",
      "publish-name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -138,38 +132,35 @@
   },
   "hcl/entity-no-own-properties.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-fields"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/entity-ref-to-enum.modelspec.hcl": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -180,19 +171,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -216,19 +203,16 @@
   },
   "hcl/enum-integer-values.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "specscore": "lint accepts integer enum values and specscore refuses them; decision 0013 says an enum constrains a string or an int property, so the standard allows them"
    }
   },
   "hcl/enum-no-values.modelspec.hcl": {
@@ -265,38 +249,37 @@
   },
   "hcl/heredoc-pattern-brackets.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/map-style-properties.modelspec.hcl": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key",
      "literal"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key",
      "literal",
      "publish-fields"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -305,36 +288,35 @@
   },
   "hcl/missing-key.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/names-not-identifiers.modelspec.hcl": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-name-form",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -343,55 +325,53 @@
   },
   "hcl/non-identifier-name.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/qualified-entity-self.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/reserved-entity-name.modelspec.hcl": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reserved-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reserved-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -399,19 +379,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -430,21 +406,17 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-component-field",
      "publish-qualified-record",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -453,19 +425,20 @@
   },
   "hcl/standard-invoice.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-component-field"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/syntax-error.modelspec.hcl": {
@@ -486,19 +459,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -509,19 +478,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -532,19 +497,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -552,18 +513,14 @@
    "default": {
     "verdict": "refuse",
     "rules": [
-     "attribute"
-    ],
-    "warnings": [
+     "attribute",
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "attribute"
-    ],
-    "warnings": [
+     "attribute",
      "deprecated-spelling"
     ]
    },
@@ -575,20 +532,16 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -596,19 +549,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "unknown-type"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "unknown-type"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -619,19 +568,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reserved-word"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reserved-word"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -642,19 +587,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reserved-word"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reserved-word"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -665,19 +606,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reserved-word"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reserved-word"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -688,19 +625,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -708,19 +641,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -728,66 +657,70 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "json/case-only-difference.modelspec.json": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "name-case"
     ]
    },
    "publish": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "name-case"
     ]
+   },
+   "differs": {
+    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/chinook.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
-     "deprecated-spelling"
-    ]
-   },
-   "publish": {
-    "verdict": "accept",
-    "warnings": [
-     "deprecated-spelling"
-    ]
-   }
-  },
-  "json/component-property.modelspec.json": {
-   "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-component-field"
-    ],
-    "warnings": [
      "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
+   }
+  },
+  "json/component-property.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling",
+     "publish-component-field"
     ]
    }
   },
@@ -795,19 +728,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -818,19 +747,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -841,23 +766,19 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key",
      "name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key",
      "name-form",
      "publish-fields",
      "publish-name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -865,37 +786,31 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "shape"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-records",
      "shape"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "json/entities-empty.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-records"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -903,20 +818,16 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key",
      "publish-fields"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -924,55 +835,50 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling",
+     "publish-name-form",
+     "reference"
+    ]
+   }
+  },
+  "json/entity-no-key.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-name-form",
-     "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
-    ]
-   }
-  },
-  "json/entity-no-key.modelspec.json": {
-   "default": {
-    "verdict": "accept",
-    "warnings": [
      "deprecated-spelling"
     ]
    },
-   "publish": {
-    "verdict": "accept",
-    "warnings": [
-     "deprecated-spelling"
-    ]
+   "differs": {
+    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/entity-no-properties.modelspec.json": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key",
      "publish-fields"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -980,19 +886,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "enum-values"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "enum-values"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1003,21 +905,17 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct",
      "reserved-word"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct",
      "reserved-word"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1026,16 +924,19 @@
   },
   "json/integer-enum-values.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/invalid-utf8.modelspec.json": {
@@ -1056,19 +957,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "key"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1093,19 +990,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "module"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "module"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1114,35 +1007,31 @@
   },
   "json/module-name-missing.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-module-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "json/module-name-not-identifier.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-module-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -1150,19 +1039,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "module"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "module"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1171,50 +1056,49 @@
   },
   "json/named-enum.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
-     "deprecated-spelling"
-    ]
-   },
-   "publish": {
-    "verdict": "accept",
-    "warnings": [
-     "deprecated-spelling"
-    ]
-   }
-  },
-  "json/names-not-identifiers.modelspec.json": {
-   "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
+   }
+  },
+  "json/names-not-identifiers.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling",
      "publish-module-name",
      "publish-name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "json/no-entities.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-records"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -1236,19 +1120,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "module"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "module"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -1282,35 +1162,34 @@
   },
   "json/notes.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/property-array-type.modelspec.json": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "unknown-type"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "unknown-type"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1321,36 +1200,30 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "unknown-type"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "unknown-type"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "json/property-name-not-identifier.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-name-form"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -1358,19 +1231,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "member-kind"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "member-kind"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -1378,19 +1247,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -1398,19 +1263,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "unknown-type"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "unknown-type"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1419,56 +1280,53 @@
   },
   "json/qualified-entity-reference.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "json/schema-field.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/shape-wrong-types.modelspec.json": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct",
      "reserved-word",
      "shape"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct",
      "reserved-word",
      "shape"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1477,19 +1335,17 @@
   },
   "json/shared-module.modelspec.json": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-module-name",
      "publish-records"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -1497,19 +1353,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1532,36 +1384,39 @@
   },
   "json/unknown-top-level-field.modelspec.json": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "unknown-field"
     ]
    },
    "publish": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "unknown-field"
     ]
+   },
+   "differs": {
+    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/wrong-attribute-type.modelspec.json": {
    "default": {
     "verdict": "refuse",
     "rules": [
-     "attribute"
-    ],
-    "warnings": [
+     "attribute",
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "attribute"
-    ],
-    "warnings": [
+     "attribute",
      "deprecated-spelling"
     ]
    },
@@ -1590,20 +1445,16 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -1611,54 +1462,49 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling",
+     "duplicate-name"
+    ]
+   }
+  },
+  "modules/layout-json-copy-in-models-dir": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
-    ]
-   }
-  },
-  "modules/layout-json-copy-in-models-dir": {
-   "default": {
-    "verdict": "accept",
-    "warnings": [
      "deprecated-spelling"
     ]
    },
-   "publish": {
-    "verdict": "accept",
-    "warnings": [
-     "deprecated-spelling"
-    ]
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "modules/layout-key-through-component": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-fields",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1669,38 +1515,35 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "modules/layout-parts-of-one-module": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-component-field"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "modules/layout-same-name-in-two-modules": {
@@ -1716,93 +1559,84 @@
   },
   "modules/layout-self-contained": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
-     "deprecated-spelling"
-    ]
-   },
-   "publish": {
-    "verdict": "accept",
-    "warnings": [
-     "deprecated-spelling"
-    ]
-   }
-  },
-  "modules/layout-undeclared-dependency": {
-   "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-record"
-    ],
-    "warnings": [
      "deprecated-spelling"
     ]
    },
    "differs": {
-    "specscore": "lint accepts and specscore refuses a qualified reference to a module missing from the referencing module's dependsOn (graph-dependency-direction); that rule is about SpecScore's own module metadata and is not part of ModelSpec, so lint does not apply it"
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
+   }
+  },
+  "modules/layout-undeclared-dependency": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling",
+     "publish-qualified-record"
+    ]
    }
   },
   "modules/layout-unknown-module": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "modules/layout-valid": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "parts/layout-duplicate-in-module-entities": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/entities.modelspec.hcl"
@@ -1811,19 +1645,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/enums.modelspec.hcl"
@@ -1832,33 +1662,29 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "duplicate-name"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/extra.modelspec.hcl"
   },
   "parts/layout-json-copy-json-alone": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
@@ -1866,14 +1692,14 @@
   },
   "parts/layout-self-contained-entities": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
@@ -1881,16 +1707,20 @@
   },
   "parts/stale-twin-json-alone": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "stale-twin"
     ]
    },
    "publish": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "stale-twin"
     ]
    },
@@ -1898,18 +1728,16 @@
   },
   "parts/twin-name-differs-hcl-alone": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "path": "standalone/twin-name-differs/todo.modelspec.hcl"
@@ -1944,28 +1772,28 @@
   },
   "standalone/carriage-return-after-dollar-in-heredoc": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    }
   },
   "standalone/chinook-pair": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    }
@@ -1974,26 +1802,25 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "standalone/explicit-module": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
      "deprecated-spelling"
     ]
@@ -2001,6 +1828,7 @@
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
     ],
     "warnings": [
@@ -2015,26 +1843,25 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "standalone/explicit-module-with-json-copy": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
      "deprecated-spelling"
     ]
@@ -2042,6 +1869,7 @@
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
     ],
     "warnings": [
@@ -2068,14 +1896,14 @@
   },
   "standalone/number-after-rewritten-dollar": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    }
@@ -2112,19 +1940,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -2132,19 +1956,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -2152,69 +1972,65 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "removed-construct"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "standalone/stale-twin": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "stale-twin"
     ]
    },
    "publish": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "stale-twin"
     ]
    }
   },
   "standalone/twin-and-reference": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "standalone/twin-and-two-modules": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -2222,37 +2038,31 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record",
      "reference"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
   "standalone/twin-name-differs": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -3777,14 +3587,14 @@
   },
   "new/hcl/mixed-spellings.modelspec.hcl": {
    "default": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    },
    "publish": {
-    "verdict": "accept",
-    "warnings": [
+    "verdict": "refuse",
+    "rules": [
      "deprecated-spelling"
     ]
    }
@@ -3793,18 +3603,14 @@
    "default": {
     "verdict": "refuse",
     "rules": [
-     "attribute"
-    ],
-    "warnings": [
+     "attribute",
      "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "attribute"
-    ],
-    "warnings": [
+     "attribute",
      "deprecated-spelling"
     ]
    }
@@ -3859,19 +3665,15 @@
    "default": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "modelspec-version"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "deprecated-spelling",
      "modelspec-version"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    }
   },
@@ -3894,32 +3696,40 @@
   },
   "new/standalone/twin-new-hcl-old-json": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "stale-twin"
     ]
    },
    "publish": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "stale-twin"
     ]
    }
   },
   "new/standalone/twin-old-hcl-new-json": {
    "default": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "stale-twin"
     ]
    },
    "publish": {
-    "verdict": "accept",
+    "verdict": "refuse",
+    "rules": [
+     "deprecated-spelling"
+    ],
     "warnings": [
-     "deprecated-spelling",
      "stale-twin"
     ]
    }

@@ -725,8 +725,11 @@ func TestAHeredocInANamePositionSaysToUseAQuotedString(t *testing.T) {
 	}
 }
 
-// A file in the old spelling gets one warning, at the line of the first old
-// spelling, with how many there are; it never changes whether the model is valid.
+// A file in the old spelling gets one finding, at the line of the first old
+// spelling, with how many there are. In a model that is being checked it is an
+// error under both profiles (decision 0022, step 4); in a file that is only read so
+// that references into its module resolve it is a warning. The severity is decided
+// in one place, OldSpellingSeverity.
 func TestDeprecatedSpelling(t *testing.T) {
 	t.Parallel()
 	const old = `# The first old spelling is on line 9.
@@ -747,29 +750,118 @@ entity "Old" {
   }
 }
 `
-	const warning = `: warning: holds 3 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); modelspec rewrite --write "a.modelspec.hcl" rewrites the file [deprecated-spelling]`
+	const checked = `error: holds 3 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "a.modelspec.hcl" rewrites the file [deprecated-spelling]`
 	// Under both profiles.
-	expect(t, run(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9"+warning)
-	expect(t, runPublish(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9"+warning)
-	expect(t, run(map[string]string{"a" + hclExt: "record \"A\" {\n  key = [\"p\"]\n  property \"p\" {\n    type = \"int\"\n  }\n}\n"}), `a.modelspec.hcl:3: warning: holds 1 old spelling: entity, property and entity =`)
+	expect(t, run(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9: "+checked)
+	expect(t, runPublish(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9: "+checked)
+	expect(t, run(map[string]string{"a" + hclExt: "record \"A\" {\n  key = [\"p\"]\n  property \"p\" {\n    type = \"int\"\n  }\n}\n"}), `a.modelspec.hcl:3: error: holds 1 old spelling: entity, property and entity =`)
 	// In JSON the finding is at the line of the identifier, which need not be the first key.
 	const key = `"entities": {"A": {"key": [], "properties": {}}}`
 	src := "{\n\"module\": {\"id\": \"x\", \"version\": \"1\"},\n" + key + ",\n\"modelspec\": \"1.0-draft\"\n}"
-	jsonWarning := func(n string) string {
-		return `: warning: is in format 1.0-draft and holds ` + n + `: that identifier, and the keys entities, properties and entity, are the old spellings of 1.0-draft-2, records, fields and record (decision 0018, decision 0020); modelspec rewrite --write "a.modelspec.json" rewrites the file [deprecated-spelling]`
+	jsonFinding := func(n string) string {
+		return `: error: is in format 1.0-draft and holds ` + n + `: that identifier, and the keys entities, properties and entity, are the old spellings of 1.0-draft-2, records, fields and record (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "a.modelspec.json" rewrites the file [deprecated-spelling]`
 	}
-	expect(t, run(map[string]string{"a" + jsonExt: src}), "a.modelspec.json:4"+jsonWarning("3 old spellings"), "has an empty key")
-	expect(t, run(map[string]string{"a" + jsonExt: oldDoc()}), "a.modelspec.json:2"+jsonWarning("1 old spelling"))
+	expect(t, run(map[string]string{"a" + jsonExt: src}), "a.modelspec.json:4"+jsonFinding("3 old spellings"), "has an empty key")
+	expect(t, run(map[string]string{"a" + jsonExt: oldDoc()}), "a.modelspec.json:2"+jsonFinding("1 old spelling"))
 	// Nothing to say about the new spelling, and a file that was not read has no spellings.
 	expect(t, run(map[string]string{"a" + hclExt: okRecord, "b" + jsonExt: doc(jRecords)}))
 	expect(t, run(map[string]string{"a" + hclExt: "entity {"}), "a.modelspec.hcl:1: error")
-	// It is a warning: the model is as valid as without it, and the severity is decided in one place.
+	// The model is invalid because of it, and Check, which Lint calls, says the same of a model
+	// read on its own.
 	res, err := Lint(newMemFS(map[string]string{"a" + hclExt: old}), []string{"."}, LintOptions{})
-	if err != nil || len(res.Findings) != 1 || res.Findings[0].Severity != OldSpellingSeverity || HasErrors(res.Findings) {
+	if err != nil || len(res.Findings) != 1 || res.Findings[0].Severity != SeverityError || !HasErrors(res.Findings) {
 		t.Fatalf("findings = %v, %v", res.Findings, err)
 	}
-	if OldSpellingSeverity != SeverityWarning {
-		t.Errorf("OldSpellingSeverity = %s; the old spelling is a warning until the owner's later step", OldSpellingSeverity)
+	m, parse := ParseHCL("a"+hclExt, []byte(old))
+	if len(parse) != 0 {
+		t.Fatal(parse)
+	}
+	if got := Check([]*Model{m}, Options{}); len(got) != 1 || got[0].Severity != SeverityError {
+		t.Errorf("a model checked on its own: %v", got)
+	}
+	// The one exception, a warning: a file that is only read for the references into
+	// its module. Its last clause says so.
+	m.ReferenceOnly = true
+	got := Check([]*Model{m}, Options{})
+	if len(got) != 1 || got[0].Severity != SeverityWarning || HasErrors(got) || !strings.HasSuffix(got[0].Message, `(--module), so the old spelling is a warning here (decision 0022); modelspec rewrite --write "a.modelspec.hcl" rewrites the file`) {
+		t.Errorf("a model that is only referred to: %v", got)
+	}
+	// The severity is decided in one place.
+	if OldSpellingSeverity(false) != SeverityError || OldSpellingSeverity(true) != SeverityWarning {
+		t.Errorf("OldSpellingSeverity = %s, %s; want error for a model being checked and warning for one only referred to", OldSpellingSeverity(false), OldSpellingSeverity(true))
+	}
+}
+
+// Which files are only referred to is decided when the files are found, and is a fact
+// about each file (Model.ReferenceOnly): a file that only --module supplies, while a
+// path names another. The rest of the module of a file follows the file: a file a path
+// names pulls the rest of its module in as checked (the module is the unit of
+// checking), and a file that is only referred to pulls it in as referred to.
+func TestReferenceOnlyFollowsTheModule(t *testing.T) {
+	t.Parallel()
+	const layout = "spec/graph/modules/app/models/"
+	lint := func(files map[string]string, paths []string, assign ...Assignment) map[string]Severity {
+		t.Helper()
+		res, err := Lint(newMemFS(files), paths, LintOptions{Modules: assign})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]Severity{}
+		for _, f := range res.Findings {
+			if f.Rule == RuleDeprecated {
+				got[f.File] = f.Severity
+			}
+		}
+		return got
+	}
+	same := func(name string, got, want map[string]Severity) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Errorf("%s: %v, want %v", name, got, want)
+			return
+		}
+		for file, sev := range want {
+			if got[file] != sev {
+				t.Errorf("%s: %v, want %v", name, got, want)
+			}
+		}
+	}
+	old := strings.NewReplacer("record", "entity", "field", "property").Replace(recordWith("Old"))
+	// A layout module: the file a path names is checked, and the others of its directory
+	// are found in a --module assignment first and pulled in as checked when it is done.
+	layoutFiles := map[string]string{layout + "a.hcl": old, layout + "b.hcl": strings.Replace(old, "Old", "Other", 1)}
+	checked := map[string]Severity{layout + "a.hcl": SeverityError, layout + "b.hcl": SeverityError}
+	same("a layout module", lint(layoutFiles, []string{layout + "a.hcl"}), checked)
+	same("a layout module, assigned whole", lint(layoutFiles, []string{layout + "a.hcl"}, Assignment{"app", strings.TrimSuffix(layout, "/")}), checked)
+	same("a layout module, assigned only", lint(layoutFiles, nil, Assignment{"app", strings.TrimSuffix(layout, "/")}), checked)
+	// Another model is named, and the layout module is only supplied: it is referred to as a whole.
+	files := map[string]string{"main" + hclExt: okRecord, layout + "a.hcl": old, layout + "b.hcl": strings.Replace(old, "Old", "Other", 1)}
+	same("a layout module that is only referred to", lint(files, []string{"main" + hclExt}, Assignment{"app", strings.TrimSuffix(layout, "/")}), map[string]Severity{layout + "a.hcl": SeverityWarning, layout + "b.hcl": SeverityWarning})
+	// An HCL file and its JSON copy: the copy follows the HCL, whichever is named or assigned.
+	oldJSON := oldDoc(jEntities)
+	pair := map[string]string{"main" + hclExt: okRecord, "core" + hclExt: old, "core.modelspec.json": oldJSON}
+	same("a pair that is only referred to", lint(pair, []string{"main" + hclExt}, Assignment{"core", "core" + hclExt}), map[string]Severity{"core.modelspec.hcl": SeverityWarning, "core.modelspec.json": SeverityWarning})
+	same("a pair named by its HCL", lint(pair, []string{"core" + hclExt}), map[string]Severity{"core.modelspec.hcl": SeverityError, "core.modelspec.json": SeverityError})
+	same("a pair named by its HCL and assigned by its JSON", lint(pair, []string{"core" + hclExt}, Assignment{"core", "core.modelspec.json"}), map[string]Severity{"core.modelspec.hcl": SeverityError, "core.modelspec.json": SeverityError})
+	// Whatever is named is checked, wherever else it is also supplied.
+	same("a file that is named and assigned", lint(pair, []string{"main" + hclExt, "core" + hclExt}, Assignment{"core", "core" + hclExt}), map[string]Severity{"core.modelspec.hcl": SeverityError, "core.modelspec.json": SeverityError})
+	// The flag is on the models Lint returns, and is off for a model that is read on its own.
+	res, err := Lint(newMemFS(pair), []string{"main" + hclExt}, LintOptions{Modules: []Assignment{{"core", "core" + hclExt}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flags []string
+	for _, m := range res.Models {
+		if m.ReferenceOnly {
+			flags = append(flags, m.File)
+		}
+	}
+	sortStrings(flags)
+	if strings.Join(flags, ",") != "core.modelspec.hcl,core.modelspec.json" {
+		t.Errorf("models only referred to: %v", flags)
+	}
+	if m, _ := ParseHCL("x"+hclExt, []byte(old)); m.ReferenceOnly {
+		t.Error("a model read on its own is being checked")
 	}
 }
 
@@ -784,7 +876,7 @@ func TestStaleTwinInAnotherVocabulary(t *testing.T) {
 	expect(t, run(map[string]string{"core" + hclExt: recordWith("Space"), "core.modelspec.json": oldJSON}),
 		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft-2" in the first and "1.0-draft" in the second)`+note, "[deprecated-spelling]")
 	expect(t, run(map[string]string{"core" + hclExt: oldHCL, "core.modelspec.json": newJSON}),
-		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft" in the first and "1.0-draft-2" in the second)`+note, "core.modelspec.hcl:1: warning: holds 2 old spellings")
+		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft" in the first and "1.0-draft-2" in the second)`+note, "core.modelspec.hcl:1: error: holds 2 old spellings")
 	// The same vocabulary, or an identifier it does not know: no note.
 	for name, files := range map[string]map[string]string{
 		"old":     {"core" + hclExt: oldHCL, "core.modelspec.json": strings.Replace(oldJSON, `"type": "int"`, `"type": "string"`, 1)},

@@ -62,11 +62,14 @@ module (the SpecScore layout, or --module) is refused, with the other files name
 A model that refers to its own module by name cannot be exported under another
 module.name (the JSON would not lint clean on its own) and is refused.
 
-The JSON is written in the vocabulary of the HCL: a file with no old spelling
-exports as format 1.0-draft-2 (records, fields, record), and a file with any old
-spelling (entity, property, entity =) as 1.0-draft (entities, properties, entity),
-so a committed copy stays what its source exports to until modelspec rewrite brings
-both files up to date.`,
+The JSON is written in format 1.0-draft-2 (records, fields, record). A file with
+any old spelling (entity, property, entity =) is refused, as lint refuses it (rule
+deprecated-spelling, an error; decision 0022): run modelspec rewrite --write on the
+HCL file and on its committed JSON copy, then export. A file supplied with --module
+is not exported, and keeps the old spelling as a warning, as for lint. A model with
+no record and no reference to one is the same text in both formats, so --check
+accepts a copy of it written as 1.0-draft; lint refuses that copy until
+modelspec rewrite has brought it up to date.`,
 		Example: `  modelspec export model/chinook.modelspec.hcl --out model/chinook.modelspec.json \
     --module-id github.com/acme/chinook/model/chinook --module-name chinook --module-version 0.1.0
   modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json`,
@@ -239,7 +242,13 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 		}
 	}
 	if modelspec.HasErrors(mine) {
-		return nil, nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting", file)}
+		hint := ""
+		for _, f := range mine {
+			if f.Rule == modelspec.RuleDeprecated && f.Severity == modelspec.SeverityError {
+				hint = fmt.Sprintf("; the old spelling is one of them: modelspec rewrite --write %q brings the file up to date, and then it can be exported", file)
+			}
+		}
+		return nil, nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting%s", file, hint)}
 	}
 	// What was skipped now belongs to other modules, supplied with --module: the model's own
 	// export is whole and stays as it is, but a reference into them was not checked.

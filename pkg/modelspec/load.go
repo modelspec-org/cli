@@ -302,6 +302,12 @@ type discovery struct {
 	findings []Finding
 	skipped  []SkippedFile // files met and not read, see skip
 	module   string        // the module being assigned (--module), while its path is searched
+	// referenceOnly holds, by Abs, the files that only a --module assignment brought
+	// in while paths named other files, and that no checked file pulls in (see
+	// Model.ReferenceOnly). refer is set while the files added are of that kind:
+	// those of an assignment, and the rest of the module of such a file (see expand).
+	referenceOnly map[string]bool
+	refer         bool
 }
 
 // SkippedFile is a model-named file that a search met and did not read (rule
@@ -316,7 +322,7 @@ type SkippedFile struct {
 }
 
 func newDiscovery(fsys FS) *discovery {
-	return &discovery{fsys: fsys, warned: map[string]bool{}, seen: map[string]bool{}, infos: map[string][]fs.FileInfo{}}
+	return &discovery{fsys: fsys, warned: map[string]bool{}, seen: map[string]bool{}, infos: map[string][]fs.FileInfo{}, referenceOnly: map[string]bool{}}
 }
 
 // add records a file unless the same file is already there; it reports whether
@@ -332,6 +338,7 @@ func (d *discovery) add(s Source, info fs.FileInfo) bool {
 		}
 	}
 	d.seen[s.Abs] = true
+	d.referenceOnly[s.Abs] = d.refer
 	d.infos[key] = append(d.infos[key], info)
 	d.out = append(d.out, s)
 	return true
@@ -479,8 +486,17 @@ func (d *discovery) found(full, name string, anyHCL bool) bool {
 		}
 		return false
 	}
-	if d.seen[abs] || !isModel(name, abs, anyHCL) {
-		return false // met already (a link named on the command line, then met in its directory)
+	if d.seen[abs] {
+		// Met already (a link named on the command line, then met in its directory). Met
+		// again on behalf of a file that is checked, a file that was only referred to is
+		// checked too: the module is the unit of checking.
+		if !d.refer {
+			d.referenceOnly[abs] = false
+		}
+		return false
+	}
+	if !isModel(name, abs, anyHCL) {
+		return false
 	}
 	switch {
 	case info.Mode()&fs.ModeSymlink != 0:
@@ -529,7 +545,9 @@ func discover(fsys FS, paths []string, anyHCL bool) ([]Source, []Finding, error)
 func (d *discovery) expand() ([]string, error) {
 	var notes []string
 	doneDir := map[string]bool{}
+	defer func() { d.refer = false }()
 	for _, s := range append([]Source(nil), d.sorted()...) {
+		d.refer = d.referenceOnly[s.Abs] // the rest of a module is checked when a file of it is, and referred to when it is
 		dir := filepath.Dir(s.Path)
 		if id, absDir, ok := layoutDir(s.Abs); ok && !doneDir[absDir] {
 			doneDir[absDir] = true
@@ -574,13 +592,14 @@ func (d *discovery) addAll(paths []string, assign []Assignment) error {
 			return err
 		}
 	}
+	defer func() { d.module, d.refer = "", false }()
 	for _, a := range assign {
 		d.module = a.Module
+		d.refer = len(paths) > 0 // with no path named, the assigned files are what is checked
 		if err := d.addPath(a.Path, true); err != nil {
 			return err
 		}
 	}
-	d.module = ""
 	return nil
 }
 
@@ -812,6 +831,9 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	models, parse, err := Load(fsys, sources, opts.Modules)
 	if err != nil {
 		return res, err
+	}
+	for i, m := range models {
+		m.ReferenceOnly = d.referenceOnly[sources[i].Abs]
 	}
 	if len(d.skipped) > 0 {
 		explicit, _ := explicitModules(fsys, opts.Modules) // Load has just read them without error

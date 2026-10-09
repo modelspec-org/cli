@@ -56,9 +56,12 @@ across all its files:
   - otherwise <name>.modelspec.hcl is module <name>, and a JSON file is
     module.name (or its file name without .modelspec.json when it has none);
   - --module <name>=<path> (repeatable; a file or a directory) assigns files to
-    a module explicitly and wins over both rules. Assigned files are linted too.
-    Assigning only part of a layout module's directory is refused: it would split
-    the module.
+    a module explicitly and wins over both rules. Assigned files are linted too,
+    and with no path named they are all that is checked. When paths name other
+    files, a file that only --module supplies is read so that references into its
+    module resolve, and keeps the old spelling as a warning (below); name it as a
+    path too to have it checked. Assigning only part of a layout module's
+    directory is refused: it would split the module.
   - X.modelspec.json beside X.modelspec.hcl is the interchange copy of the same
     module, not a second module (a stale copy is a warning). A JSON file in a
     layout module's models directory, or in a directory assigned to a module that
@@ -76,10 +79,14 @@ for records and fields, no component-valued fields, and record references only
 within the module.
 
 The old spelling (entity, property and entity = in HCL; format 1.0-draft with
-entities, properties and entity in JSON) is still read, with one warning for each
-file that uses it (rule deprecated-spelling), and modelspec rewrite brings the file
-up to date. collection and recordset blocks, and the words projection, index and
-migration, are errors (decision 0019).
+entities, properties and entity in JSON) is still read, and in a model that is
+being checked it is an error, one for each file that uses it (rule
+deprecated-spelling, both profiles; decision 0022). modelspec rewrite brings the
+file up to date. The exception is a file that only --module supplies while paths
+name others: a model may refer to another model pinned at a past commit, which
+keeps its old spelling and stays readable, so there it is one warning. collection
+and recordset blocks, and the words projection, index and migration, are errors
+(decision 0019).
 
 Output is text by default, or one JSON object with --format json; with
 --format json an I/O or usage error (exit 2) is also JSON on standard output:
