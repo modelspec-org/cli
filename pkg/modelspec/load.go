@@ -165,6 +165,7 @@ func (OSFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) 
 // keeps its permission bits exactly (the temporary file is given them with a chmod, so the
 // umask does not narrow them); a file that is new gets perm as far as the umask allows. The
 // data is synced before the rename, and the temporary file is removed when anything fails.
+// A chmod that fails is an error unless the temporary file already has the mode wanted.
 func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	keep := false
 	if info, err := os.Lstat(name); err == nil && info.Mode().IsRegular() {
@@ -185,6 +186,12 @@ func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 			chmod = (*os.File).Chmod
 		}
 		err = chmod(f, perm)
+		if err != nil {
+			// A file system may refuse a chmod; that is no failure when the file already has the mode.
+			if info, statErr := f.Stat(); statErr == nil && info.Mode().Perm() == perm {
+				err = nil
+			}
+		}
 	}
 	if err == nil {
 		err = writeAndClose(f, data)

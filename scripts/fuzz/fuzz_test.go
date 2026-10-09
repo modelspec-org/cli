@@ -41,13 +41,23 @@ import (
 )
 
 // The budget of one input. Reading and checking a large valid file (under both
-// profiles, as refusal does) allocates about 470 times its size, and the rewrite
-// oracle reads it about five times more; the budget is twice the sum, and a fixed
-// amount for the smallest inputs.
+// profiles, as refusal does) allocates about 470 times its size; the budget is
+// twice that, and a fixed amount for the smallest inputs. It bounds the reader, the
+// checks, the export and the read of the export (within).
+//
+// The rewrite oracles have a budget of their own (withinRewrite), so that the
+// margin of the first is not spent on them. They read the input many times over: the
+// reader for the count and for the check of the result, the rewrite and the second
+// rewrite of its result, and for a clean model the same again under both profiles.
+// Measured on the seeds, the worst (7.6 KB) allocates 1.7 MB for the first (15% of
+// its budget) and 10.4 MB for the second (54% of its budget).
 const (
-	allocBase    = 8 << 20
-	allocPerByte = 2500
+	allocBase    = 4 << 20
+	allocPerByte = 1000
 	maxTime      = 10 * time.Second
+
+	rewriteAllocBase    = 4 << 20
+	rewriteAllocPerByte = 2000
 )
 
 // guard runs work and calls stalled, from another goroutine, if work has not
@@ -64,13 +74,24 @@ func guard(limit time.Duration, stalled func(), work func()) {
 // as a failing input and keeps.
 func within(t *testing.T, src []byte, work func()) {
 	t.Helper()
+	bounded(t, src, allocBase, allocPerByte, work)
+}
+
+// withinRewrite is within with the budget of the rewrite oracles.
+func withinRewrite(t *testing.T, src []byte, work func()) {
+	t.Helper()
+	bounded(t, src, rewriteAllocBase, rewriteAllocPerByte, work)
+}
+
+func bounded(t *testing.T, src []byte, base, perByte int, work func()) {
+	t.Helper()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	guard(maxTime, func() {
 		panic(fmt.Sprintf("an input of %d bytes is still running after %v", len(src), maxTime))
 	}, work)
 	runtime.ReadMemStats(&after)
-	if used, limit := after.TotalAlloc-before.TotalAlloc, uint64(allocBase+allocPerByte*len(src)); used > limit {
+	if used, limit := after.TotalAlloc-before.TotalAlloc, uint64(base+perByte*len(src)); used > limit {
 		t.Fatalf("an input of %d bytes allocated %d bytes, over the budget of %d", len(src), used, limit)
 	}
 }
@@ -115,6 +136,7 @@ func seeds(f *testing.F, dir, suffix string) {
 	// The old spelling, the removed constructs and the reserved words.
 	f.Add([]byte("entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"r\" {\n    entity = \"A\"\n  }\n}\n"))
 	f.Add([]byte("record \"A\" {\n  field \"r\" {\n    entity = \"A\"\n    record = \"A\"\n  }\n  index \"i\" {\n  }\n}\ncollection \"c\" {\n}\nprojection \"p\" {\n}\n"))
+	f.Add([]byte("entity {\n  property \"p\" {\n    record = \"A\"\n    entity = \"A\"\n  }\n}\nrecord \"B\" {\n  field \"x\" {\n    record = \"A\"\n    entity = { a = \"b\" }\n  }\n}\n"))
 	f.Add([]byte("{\"modelspec\": \"1.0-draft\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}, \"records\": {}, \"collections\": {}, \"projections\": {}}"))
 	f.Add([]byte("{\"modelspec\": \"1.0-draft-2\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}}"))
 }
@@ -202,13 +224,13 @@ func FuzzHCL(f *testing.F) {
 		// Everything one input costs runs inside within: the reading and the checks, the
 		// export, the read of the export and the comparison, so the watchdog and the
 		// allocation budget cover all of it.
+		clean := false
 		within(t, src, func() {
-			rewriteAccepted(t, "fuzz.modelspec.hcl", src)
 			m, parse := modelspec.ParseHCL("fuzz.modelspec.hcl", src)
 			if !refusal(t, m, parse) {
 				return
 			}
-			rewritten(t, "fuzz.modelspec.hcl", src)
+			clean = true
 			node, err := m.JSON(modelspec.ModuleIdentity{ID: "x/fuzz", Name: "fuzz", Version: "1"})
 			if err != nil {
 				t.Fatalf("a clean model does not export: %v", err)
@@ -222,6 +244,12 @@ func FuzzHCL(f *testing.F) {
 				t.Fatalf("the export does not round-trip: %v %s", err, modelspec.Diff(node, again))
 			}
 		})
+		withinRewrite(t, src, func() {
+			rewriteAccepted(t, "fuzz.modelspec.hcl", src)
+			if clean {
+				rewritten(t, "fuzz.modelspec.hcl", src)
+			}
+		})
 	})
 }
 
@@ -230,10 +258,14 @@ func FuzzJSON(f *testing.F) {
 	seeds(f, "json", ".modelspec.json")
 	seeds(f, "new/json", ".modelspec.json")
 	f.Fuzz(func(t *testing.T, src []byte) {
+		clean := false
 		within(t, src, func() {
-			rewriteAccepted(t, "fuzz.modelspec.json", src)
 			m, parse := modelspec.ParseJSON("fuzz.modelspec.json", src)
-			if refusal(t, m, parse) {
+			clean = refusal(t, m, parse)
+		})
+		withinRewrite(t, src, func() {
+			rewriteAccepted(t, "fuzz.modelspec.json", src)
+			if clean {
 				rewritten(t, "fuzz.modelspec.json", src)
 			}
 		})

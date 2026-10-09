@@ -184,7 +184,18 @@ func (p *hclReader) checkNoBlocks(blk *hclsyntax.Block) {
 // block is not read (its labels are wrong).
 func (p *hclReader) oldInMember(body *hclsyntax.Body) {
 	if a, ok := body.Attributes["entity"]; ok {
-		p.old(a.NameRange, "entity", "record")
+		p.oldEntity(body, a)
+	}
+}
+
+// oldEntity records the old spelling of the reference setting in a member, and
+// refuses a rewrite of a member that has the new one beside it: the rewrite would
+// make two. It is called wherever the old setting is recorded, whether or not the
+// member is read or its value is a literal.
+func (p *hclReader) oldEntity(body *hclsyntax.Body, a *hclsyntax.Attribute) {
+	p.old(a.NameRange, "entity", "record")
+	if _, both := body.Attributes["record"]; both {
+		p.refuse(fmt.Sprintf("a member has both record and entity (line %d)", a.SrcRange.Start.Line))
 	}
 }
 
@@ -211,7 +222,7 @@ func (p *hclReader) attrs(body *hclsyntax.Body, member bool) []Attr {
 		a := body.Attributes[name]
 		line := a.SrcRange.Start.Line
 		if member && name == "entity" {
-			p.old(a.NameRange, "entity", "record") // before the value is judged: a value that is refused is still spelled the old way
+			p.oldEntity(body, a) // before the value is judged: a value that is refused is still spelled the old way
 		}
 		n, msg := p.literalNode(a.Expr, line)
 		if msg != "" {
@@ -221,7 +232,6 @@ func (p *hclReader) attrs(body *hclsyntax.Body, member bool) []Attr {
 		if member && name == "entity" {
 			if _, both := body.Attributes["record"]; both {
 				p.add(line, RuleAttribute, "has both record and entity; entity is the old spelling of record (decision 0018), and a member refers to one record")
-				p.refuse(fmt.Sprintf("a member has both record and entity (line %d)", line))
 				continue
 			}
 			name = "record"

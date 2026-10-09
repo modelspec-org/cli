@@ -1468,6 +1468,36 @@ func TestWriteFileKeepsTheModeWhateverTheUmask(t *testing.T) {
 	if err := (OSFS{chmod: func(*os.File, fs.FileMode) error { return boom }}).WriteFile(file, []byte("x"), 0o644); !errors.Is(err, boom) {
 		t.Errorf("a failing chmod: %v", err)
 	}
+	// A file system that refuses chmod is no failure when the temporary file has the mode
+	// already (here the mode of a new file under the umask equals the wanted one), and is
+	// one when it has not.
+	refuse := OSFS{chmod: func(*os.File, fs.FileMode) error { return boom }}
+	same := filepath.Join(dir, "same.modelspec.hcl")
+	if err := os.WriteFile(same, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(same, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuse.WriteFile(same, []byte("new"), 0o644); err != nil {
+		t.Errorf("a refused chmod of a file that has the mode: %v", err)
+	}
+	if got, _ := os.ReadFile(same); string(got) != "new" {
+		t.Errorf("content %q", got)
+	}
+	// A refused chmod after which the file has some other mode is a failure.
+	other := OSFS{chmod: func(f *os.File, _ fs.FileMode) error {
+		if err := f.Chmod(0o640); err != nil {
+			return err
+		}
+		return boom
+	}}
+	if err := other.WriteFile(same, []byte("newer"), 0o644); !errors.Is(err, boom) {
+		t.Errorf("a refused chmod of a file that has another mode: %v", err)
+	}
+	if got, _ := os.ReadFile(same); string(got) != "new" {
+		t.Errorf("the failed write changed the file: %q", got)
+	}
 	for _, e := range mustReadDir(t, dir) {
 		if strings.HasSuffix(e, ".tmp") {
 			t.Errorf("a temporary file is left: %s", e)

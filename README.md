@@ -435,8 +435,8 @@ refused token. A new version of the `hcl` library, which could add tokens or rec
 `scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
 crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
 lints clean, a clean model is rewritten to a clean model that rewriting again does not change, and one input costs a bounded amount of work (the reading, the checks, the export, the read of the
-export and the comparison all count): at most 8 MiB plus 2,500 bytes allocated for each
-byte of input, counted by the allocator and not by time, and a watchdog ends the process, which the fuzzer reports
+export and the comparison all count): at most 4 MiB plus 1,000 bytes allocated for each
+byte of input (the rewrite oracles, which read the input many times over, have a budget of their own: 4 MiB plus 2,000 bytes), counted by the allocator and not by time, and a watchdog ends the process, which the fuzzer reports
 as a failing input, if one input is still running after ten seconds: while it runs, not after it returns). `scripts/fuzz.sh`
 runs the fuzzer with `-fuzzminimizetime 5s`: by default it minimises a new input for up to a minute, with no execution
 reported (30 to 42 seconds of nothing, with two workers), which no judge can tell from a stall. A

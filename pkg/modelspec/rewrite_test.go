@@ -166,6 +166,11 @@ func TestRewriteRefusals(t *testing.T) {
 		{"a projection", "a" + hclExt, "projection \"c\" {\n}\n", "it holds the projection block at line 1, a word decision 0019 reserved"},
 		{"a migration", "a" + hclExt, "entity \"A\" {\n}\nmigration \"m\" {\n}\n", "migration block at line 3"},
 		{"an index", "a" + hclExt, "entity \"A\" {\n  index \"i\" {\n  }\n}\n", "it holds the index block at line 2, a word decision 0019 reserved"},
+		// The conflict is found wherever the old setting is recorded, not only where it is read.
+		{"both, the old one with a value that is refused", "a" + hclExt, "entity \"A\" {\n  property \"x\" {\n    record = \"A\"\n    entity = A\n  }\n}\n", "a member has both record and entity (line 4)"},
+		{"both, in a member with two labels", "a" + hclExt, "entity \"A\" {\n  property \"a\" \"b\" {\n    record = \"A\"\n    entity = \"A\"\n  }\n}\n", "a member has both record and entity (line 4)"},
+		{"both, in a record with no label", "a" + hclExt, "entity {\n  property \"p\" {\n    record = \"A\"\n    entity = \"A\"\n  }\n}\n", "a member has both record and entity (line 4)"},
+		{"both, the old one an object", "a" + hclExt, "record \"A\" {\n  field \"x\" {\n    record = \"A\"\n    entity = { a = \"b\" }\n  }\n}\n", "a member has both record and entity (line 4)"},
 		{"a member with both record and entity", "a" + hclExt, "record \"A\" {\n  field \"f\" {\n    record = \"A\"\n    entity = \"A\"\n  }\n}\n", "a member has both record and entity (line 4)"},
 		{"JSON that does not parse", "a" + jsonExt, "{", "does not parse (not valid JSON"},
 		{"JSON that is not an object", "a" + jsonExt, "[]", "does not parse (a ModelSpec JSON document must be an object"},
