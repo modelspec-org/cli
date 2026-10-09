@@ -136,6 +136,7 @@ func seeds(f *testing.F, dir, suffix string) {
 	// The old spelling, the removed constructs and the reserved words.
 	f.Add([]byte("entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"r\" {\n    entity = \"A\"\n  }\n}\n"))
 	f.Add([]byte("record \"A\" {\n  field \"r\" {\n    entity = \"A\"\n    record = \"A\"\n  }\n  index \"i\" {\n  }\n}\ncollection \"c\" {\n}\nprojection \"p\" {\n}\n"))
+	f.Add([]byte("{\"modelspec\":\"1.0-draft\",\"module\":{\"id\":\"e\",\"version\":\"1\"},\"entities\":{\"A\":{\"properties\":{\"a\":{\"type\":\"string\"}}},\"A\":{\"properties\":{\"a\":{\"entity\":\"X\",\"record\":\"Y\"}}}}}"))
 	f.Add([]byte("entity {\n  property \"p\" {\n    record = \"A\"\n    entity = \"A\"\n  }\n}\nrecord \"B\" {\n  field \"x\" {\n    record = \"A\"\n    entity = { a = \"b\" }\n  }\n}\n"))
 	f.Add([]byte("{\"modelspec\": \"1.0-draft\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}, \"records\": {}, \"collections\": {}, \"projections\": {}}"))
 	f.Add([]byte("{\"modelspec\": \"1.0-draft-2\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}}"))

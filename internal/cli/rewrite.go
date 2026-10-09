@@ -61,7 +61,9 @@ A file that rewrite cannot rewrite safely is named, with the reason, on standard
 error, and the exit code is 1; nothing is written for it. That is a file that
 does not parse, one with a removed construct (collection, recordset) or a
 reserved word (projection, index, migration), which no rewriting fixes, and one
-that mixes the two vocabularies. A file with other mistakes is rewritten: the
+that mixes the two vocabularies, and a JSON file that repeats a key in any object
+(readers disagree on which of two equal keys wins, so there is no one model to
+rewrite; remove the duplicate first). A file with other mistakes is rewritten: the
 rewrite is syntactic, and lint reports the mistakes.`,
 		Example: `  modelspec rewrite                       # what would change in this directory
   modelspec rewrite --write model/        # rewrite the files under model/

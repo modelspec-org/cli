@@ -110,6 +110,12 @@ func ParseJSON(file string, src []byte) (*Model, []Finding) {
 	for _, d := range root.Dups {
 		p.add(d.Line, RuleDuplicate, fmt.Sprintf("duplicate key %q in one object; names are unique, and JSON readers disagree on which of two equal keys wins", d.Key))
 	}
+	if len(root.Dups) > 0 {
+		// There is no one model to rewrite: readers disagree on which of two equal keys
+		// wins, and this reader reads only one of them.
+		d := root.Dups[0]
+		p.refuse(fmt.Sprintf("it repeats the key %q (line %d), and JSON readers disagree on which of two equal keys wins, so there is no one model to rewrite; remove the duplicate first", d.Key, d.Line))
+	}
 	p.top(root)
 	sort.Slice(m.Old, func(i, j int) bool { return m.Old[i].Start < m.Old[j].Start })
 	return m, p.result()
@@ -166,6 +172,9 @@ func (p *jsonReader) versionOf(root *Node) {
 		p.refuse(fmt.Sprintf(`its "modelspec" is %s, which is neither %q nor %q`, quote1(v.Str), OldSpecVersion, SpecVersion))
 	default:
 		p.version = v.Str
+		if v.Str == OldSpecVersion {
+			p.old(v.Line, v.Start, v.End, encodeString(SpecVersion))
+		}
 	}
 }
 
@@ -306,19 +315,14 @@ func (p *jsonReader) memberAttrs(n *Node) []Attr {
 	return out
 }
 
-// oldEdits lists the old spellings of a document in format 1.0-draft: every
-// identifier, the key entities, the key properties of each of its
-// objects, and the key entity of each member of those and of the components. It
-// walks every key, repeated ones too, so that rewriting one leaves no other.
+// oldEdits lists the old spellings of a document in format 1.0-draft, besides the
+// identifier: the key entities, the key properties of each of its objects, and the
+// key entity of each member of those and of the components. A document with a
+// repeated key is not rewritten (ParseJSON refuses it), so every key is unique here
+// and this walk reads the same keys the reader does.
 func (p *jsonReader) oldEdits(root *Node) {
 	for _, f := range root.Fields {
 		switch f.Key {
-		case "modelspec":
-			// Every old identifier, a repeated key too: a reader that keeps the last of
-			// two equal keys must not find one left.
-			if f.Value.Type == NodeString && f.Value.Str == OldSpecVersion {
-				p.old(f.Value.Line, f.Value.Start, f.Value.End, encodeString(SpecVersion))
-			}
 		case "entities":
 			p.oldKey(f, "records")
 			p.oldMembers(f.Value, "properties", "fields")

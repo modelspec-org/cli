@@ -541,7 +541,9 @@ A file is rewritten whatever else is wrong with it (the rewrite is syntactic, an
 rest; the old spellings inside a block with a wrong label, or in a member whose value is refused, are rewritten too), except a file `rewrite` cannot rewrite safely: one that does not parse, one with a removed construct or a
 reserved word (no rewriting fixes it), one that mixes the vocabularies in a way the format does not allow
 (`records` in a `1.0-draft` document, a member with both `record` and `entity`, two lists of members in one
-record), and a JSON file whose identifier is neither `1.0-draft` nor `1.0-draft-2`. It is named on
+record), a JSON file that repeats a key in any object (JSON readers disagree on which of two equal keys wins, so there is
+no one model to rewrite; remove the duplicate first; `lint` still reports it as `duplicate-name`), and a JSON file
+whose identifier is neither `1.0-draft` nor `1.0-draft-2`. It is named on
 standard error with the reason, nothing is written for it, and the exit code is 1; the other files are still
 rewritten. Before a file is written its rewritten text is read again and must be the same model (the same
 concepts, members and attributes) with no old spelling left.
@@ -589,7 +591,7 @@ entry under `parts/` that is one file of another item given alone and must give 
 number is not the manifest's). 121 items are in the old spelling; under `new/` are their 121 copies in the new
 one and 9 items that have no old twin: where `modelspec rewrite` can rewrite every model file of an item, the copy is what it
 makes of the item, byte for byte (a test checks it), and the item's verdict is the copy's with the warning
-`deprecated-spelling` added; where it cannot (a file that does not parse, or one that holds a collection, a
+`deprecated-spelling` added; where it cannot (a file that does not parse, a JSON file that repeats a key, or one that holds a collection, a
 recordset or a reserved word), the copy was written by hand. The two readers below do not read the new
 spelling yet, so only the items in the old spelling are compared with them, and the items that now hold a
 removed or reserved construct are recorded as differences ("removed by decision 0019", "reserved by decision 0019"):

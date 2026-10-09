@@ -411,8 +411,9 @@ func oldSpellingVerdict(newSpelling verdict) verdict {
 }
 
 // The items whose copy in new/ was not made by `modelspec rewrite`, because rewrite
-// refuses a file of the item: it does not parse, or holds a construct that no
-// rewriting fixes (decision 0019). Their copies were written by hand: the same text
+// refuses a file of the item: it does not parse, repeats a key in a JSON object (there
+// is no one model to rewrite), or holds a construct that no rewriting fixes (decision
+// 0019). Their copies were written by hand: the same text
 // with the old words replaced, and where the removed or reserved construct was only
 // a part of the item's purpose (a collection beside records), without it.
 var handWrittenCopies = []string{
@@ -421,7 +422,8 @@ var handWrittenCopies = []string{
 	"hcl/todo.modelspec.hcl", "hcl/unmapped-index.modelspec.hcl", "hcl/unmapped-migration.modelspec.hcl", "hcl/unmapped-projection.modelspec.hcl",
 	"json/full-shape.modelspec.json", "json/invalid-utf8.modelspec.json", "json/modelspec-not-string.modelspec.json", "json/no-modelspec.modelspec.json",
 	"json/not-an-object.modelspec.json", "json/not-json.modelspec.json", "json/shape-wrong-types.modelspec.json", "json/todo.modelspec.json",
-	"json/trailing-garbage.modelspec.json", "json/wrong-version.modelspec.json", "modules/layout-key-through-component",
+	"json/trailing-garbage.modelspec.json", "json/wrong-version.modelspec.json", "json/duplicate-entity-key.modelspec.json",
+	"json/duplicate-key-in-property.modelspec.json", "modules/layout-key-through-component",
 	"standalone/backslash-before-dollar-in-label", "standalone/backslash-before-dollar-in-pattern", "standalone/name-over-255-bytes",
 	"standalone/number-exponent-over-100", "standalone/number-over-40-characters", "standalone/query-201-wildcards",
 	"standalone/query-334-placeholders", "standalone/query-one-line-500-placeholders",
