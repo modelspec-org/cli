@@ -166,9 +166,6 @@ func (p *jsonReader) versionOf(root *Node) {
 		p.refuse(fmt.Sprintf(`its "modelspec" is %s, which is neither %q nor %q`, quote1(v.Str), OldSpecVersion, SpecVersion))
 	default:
 		p.version = v.Str
-		if v.Str == OldSpecVersion {
-			p.old(v.Line, v.Start, v.End, encodeString(SpecVersion))
-		}
 	}
 }
 
@@ -309,13 +306,19 @@ func (p *jsonReader) memberAttrs(n *Node) []Attr {
 	return out
 }
 
-// oldEdits lists the old spellings of a document in format 1.0-draft that the
-// identifier does not cover: the key entities, the key properties of each of its
+// oldEdits lists the old spellings of a document in format 1.0-draft: every
+// identifier, the key entities, the key properties of each of its
 // objects, and the key entity of each member of those and of the components. It
 // walks every key, repeated ones too, so that rewriting one leaves no other.
 func (p *jsonReader) oldEdits(root *Node) {
 	for _, f := range root.Fields {
 		switch f.Key {
+		case "modelspec":
+			// Every old identifier, a repeated key too: a reader that keeps the last of
+			// two equal keys must not find one left.
+			if f.Value.Type == NodeString && f.Value.Str == OldSpecVersion {
+				p.old(f.Value.Line, f.Value.Start, f.Value.End, encodeString(SpecVersion))
+			}
 		case "entities":
 			p.oldKey(f, "records")
 			p.oldMembers(f.Value, "properties", "fields")

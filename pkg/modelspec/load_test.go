@@ -2,6 +2,7 @@ package modelspec
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -658,10 +659,10 @@ func TestOSFS(t *testing.T) {
 	}
 	// A symbolic link is followed to the file, every link on the way resolved.
 	wantTarget, _ := filepath.EvalSymlinks(file)
-	if got, err := fsys.EvalSymlinks(link); err != nil || got != wantTarget {
+	if got, err := (OSFS{}).EvalSymlinks(link); err != nil || got != wantTarget {
 		t.Fatalf("EvalSymlinks = %q, %v; want %q", got, err, wantTarget)
 	}
-	if _, err := fsys.EvalSymlinks(filepath.Join(dir, "missing")); err == nil {
+	if _, err := (OSFS{}).EvalSymlinks(filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("EvalSymlinks of a missing file succeeded")
 	}
 	a, _ := fsys.Stat(link)
@@ -1439,3 +1440,72 @@ func TestDiscoverModules(t *testing.T) {
 		t.Error("a missing path was accepted")
 	}
 }
+
+// A file that is replaced keeps its permission bits exactly, whatever the umask does
+// to the mode of a new file; the data is synced; a failure leaves nothing behind.
+func TestWriteFileKeepsTheModeWhateverTheUmask(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, mode := range []fs.FileMode{0o664, 0o666, 0o600, 0o640, 0o755, 0o444, 0o400} {
+		file := filepath.Join(dir, fmt.Sprintf("m%o.modelspec.hcl", mode))
+		if err := os.WriteFile(file, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(file, mode); err != nil { // a chmod is not narrowed by the umask
+			t.Fatal(err)
+		}
+		if err := (OSFS{}).WriteFile(file, []byte("new"), 0o644); err != nil {
+			t.Fatalf("%o: %v", mode, err)
+		}
+		info, err := os.Stat(file)
+		if got, _ := os.ReadFile(file); err != nil || info.Mode().Perm() != mode || string(got) != "new" {
+			t.Errorf("%o: mode %v, content %q, %v", mode, info.Mode().Perm(), got, err)
+		}
+	}
+	// A chmod that fails is an error, and the temporary file is removed.
+	boom := errors.New("chmod failed")
+	file := filepath.Join(dir, "m664.modelspec.hcl")
+	if err := (OSFS{chmod: func(*os.File, fs.FileMode) error { return boom }}).WriteFile(file, []byte("x"), 0o644); !errors.Is(err, boom) {
+		t.Errorf("a failing chmod: %v", err)
+	}
+	for _, e := range mustReadDir(t, dir) {
+		if strings.HasSuffix(e, ".tmp") {
+			t.Errorf("a temporary file is left: %s", e)
+		}
+	}
+}
+
+func mustReadDir(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// writeAndClose syncs what can be synced before it closes, and reports a failed sync.
+func TestWriteAndCloseSyncs(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("sync failed")
+	w := &syncWriter{fakeWriter: fakeWriter{}, syncErr: boom}
+	if err := writeAndClose(w, []byte("data")); !errors.Is(err, boom) || !w.closed || !w.synced {
+		t.Errorf("sync failure: %v, closed %v, synced %v", err, w.closed, w.synced)
+	}
+	w = &syncWriter{fakeWriter: fakeWriter{writeErr: boom}}
+	if err := writeAndClose(w, []byte("data")); !errors.Is(err, boom) || !w.closed || w.synced {
+		t.Errorf("write failure: %v, closed %v, synced %v", err, w.closed, w.synced)
+	}
+}
+
+type syncWriter struct {
+	fakeWriter
+	syncErr error
+	synced  bool
+}
+
+func (s *syncWriter) Sync() error { s.synced = true; return s.syncErr }

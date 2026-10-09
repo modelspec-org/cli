@@ -112,8 +112,8 @@ func TestParseJSONModel(t *testing.T) {
 	if !IsModelFile("x"+hclExt) || !IsModelFile("x"+jsonExt) || IsModelFile("x.json") {
 		t.Fatal("IsModelFile wrong")
 	}
-	if KindEntity != KindRecord || KindRecord != "record" {
-		t.Fatal("KindEntity is not the old name of KindRecord")
+	if KindRecord != "record" {
+		t.Fatal("KindRecord is not record")
 	}
 }
 

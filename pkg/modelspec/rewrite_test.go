@@ -84,7 +84,12 @@ record "B" {
 		{"names and strings that look like the old words", "record \"entity\" {\n  property \"entity\" {\n    type = \"entity\"\n    pattern = \"property\"\n  }\n  field \"property\" {\n    entity = \"entity\"\n  }\n}\n", "record \"entity\" {\n  field \"entity\" {\n    type = \"entity\"\n    pattern = \"property\"\n  }\n  field \"property\" {\n    record = \"entity\"\n  }\n}\n", 2},
 		{"an attribute of the block itself is not a member's", "entity \"A\" {\n  entity = \"B\"\n}\n", "record \"A\" {\n  entity = \"B\"\n}\n", 1},
 		{"a component's members are not renamed, their references are", "component \"C\" {\n  field \"f\" {\n    entity = \"A\"\n  }\n}\n", "component \"C\" {\n  field \"f\" {\n    record = \"A\"\n  }\n}\n", 1},
-		{"a label that is wrong still has its block type renamed", "entity {\n}\nentity \"A\" \"B\" {\n  property {\n  }\n}\nentity \"C\" {\n  property \"a\" \"b\" {\n  }\n}\n", "record {\n}\nrecord \"A\" \"B\" {\n  property {\n  }\n}\nrecord \"C\" {\n  field \"a\" \"b\" {\n  }\n}\n", 4},
+		{"a label that is wrong still has its block type renamed", "entity {\n}\nentity \"A\" \"B\" {\n  property {\n  }\n}\nentity \"C\" {\n  property \"a\" \"b\" {\n  }\n}\n", "record {\n}\nrecord \"A\" \"B\" {\n  field {\n  }\n}\nrecord \"C\" {\n  field \"a\" \"b\" {\n  }\n}\n", 5},
+		// An old spelling inside a construct that has another mistake is rewritten too.
+		{"a value that is refused", "entity \"A\" {\n  property \"x\" { entity = A }\n}\n", "record \"A\" {\n  field \"x\" { record = A }\n}\n", 3},
+		{"a record with no label, its members and their references", "entity {\n  property \"x\" {\n    entity = \"C\"\n  }\n  field \"y\" {\n    entity = \"C\"\n  }\n}\n", "record {\n  field \"x\" {\n    record = \"C\"\n  }\n  field \"y\" {\n    record = \"C\"\n  }\n}\n", 4},
+		{"a component with no label", "component {\n  property \"x\" {\n    entity = \"C\"\n  }\n  field \"y\" {\n    entity = \"C\"\n  }\n}\nenum {\n  field \"z\" {\n    entity = \"C\"\n  }\n}\n", "component {\n  property \"x\" {\n    entity = \"C\"\n  }\n  field \"y\" {\n    record = \"C\"\n  }\n}\nenum {\n  field \"z\" {\n    entity = \"C\"\n  }\n}\n", 1},
+		{"a member with two labels and a reference", "record \"A\" {\n  property \"a\" \"b\" {\n    entity = \"C\"\n  }\n}\n", "record \"A\" {\n  field \"a\" \"b\" {\n    record = \"C\"\n  }\n}\n", 2},
 		{"already in the new spelling", "record \"A\" {\n  field \"f\" {\n    record = \"A\"\n  }\n}\n", "record \"A\" {\n  field \"f\" {\n    record = \"A\"\n  }\n}\n", 0},
 		{"nothing at all", "", "", 0},
 		{"only a comment, no final newline", "# entity", "# entity", 0},
@@ -124,6 +129,7 @@ func TestRewriteJSONReplacesOnlyTheOldSpellings(t *testing.T) {
 		{"values that are not objects are left as they are", `{"modelspec": "1.0-draft", "module": {"id": "a", "version": "1"}, "components": [], "entities": {"A": 1, "B": {"key": []}, "C": {"properties": []}, "D": {"properties": {"p": 1}}}}`,
 			`{"modelspec": "1.0-draft-2", "module": {"id": "a", "version": "1"}, "components": [], "records": {"A": 1, "B": {"key": []}, "C": {"fields": []}, "D": {"fields": {"p": 1}}}}`, 4},
 		{"entities that is not an object", `{"modelspec": "1.0-draft", "module": {"id": "a", "version": "1"}, "entities": []}`, `{"modelspec": "1.0-draft-2", "module": {"id": "a", "version": "1"}, "records": []}`, 2},
+		{"a repeated identifier is rewritten wherever it is", `{"modelspec":"1.0-draft","modelspec":"1.0-draft","module":{"id":"a","version":"1"},"entities":{}}`, `{"modelspec":"1.0-draft-2","modelspec":"1.0-draft-2","module":{"id":"a","version":"1"},"records":{}}`, 3},
 		{"the identifier alone", `{"modelspec": "1.0-draft", "module": {"id": "a", "version": "1"}}`, `{"modelspec": "1.0-draft-2", "module": {"id": "a", "version": "1"}}`, 1},
 		{"already in the new format", `{"modelspec": "1.0-draft-2", "module": {"id": "a", "version": "1"}, "records": {"A": {"fields": {"p": {"record": "A"}}}}}`, `{"modelspec": "1.0-draft-2", "module": {"id": "a", "version": "1"}, "records": {"A": {"fields": {"p": {"record": "A"}}}}}`, 0},
 	}
@@ -311,5 +317,24 @@ func TestOldSpellingsAreRecordedWhereTheSourceHasThem(t *testing.T) {
 	}
 	if strings.Join(got, " ") != `"1.0-draft">"1.0-draft-2" "entities">"records" "properties">"fields" "entity">"record"` {
 		t.Errorf("Old = %v", got)
+	}
+}
+
+// The identifier grows by two bytes: a file at the size limit would be over it once
+// rewritten, and that is said plainly, not as a defect.
+func TestRewriteRefusesAResultOverTheLimit(t *testing.T) {
+	t.Parallel()
+	head := `{"modelspec":"1.0-draft","module":{"id":"a","version":"1"}}`
+	src := head + strings.Repeat(" ", MaxInputBytes-len(head))
+	if m, parse := ParseJSON("a"+jsonExt, []byte(src)); m.Broken || len(parse) != 0 || len(m.Old) != 1 {
+		t.Fatalf("the file at the limit does not read: %v", parse)
+	}
+	out, n, err := Rewrite("a"+jsonExt, []byte(src))
+	if err == nil || !strings.Contains(err.Error(), "the rewritten file would be 1048578 bytes, over the limit of 1048576 bytes") || strings.Contains(err.Error(), "defect") || out != nil || n != 0 {
+		t.Errorf("got %d bytes, %d, %v", len(out), n, err)
+	}
+	// One byte less fits.
+	if out, n, err := Rewrite("a"+jsonExt, []byte(src[:len(src)-2])); err != nil || n != 1 || len(out) != MaxInputBytes {
+		t.Errorf("two bytes less: %d bytes, %d, %v", len(out), n, err)
 	}
 }

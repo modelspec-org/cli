@@ -202,6 +202,21 @@ func TestRewriteOnTheRealFilesystem(t *testing.T) {
 	if err := os.WriteFile(other, []byte(oldDoc), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	// Modes a umask would narrow, set exactly.
+	loose := filepath.Join(dir, "loose.modelspec.hcl")
+	open := filepath.Join(dir, "open.modelspec.json")
+	for path, mode := range map[string]fs.FileMode{real: 0o600, other: 0o640, loose: 0o664, open: 0o666} {
+		text := oldHCL
+		if strings.HasSuffix(path, ".json") {
+			text = oldDoc
+		}
+		if err := os.WriteFile(path, []byte(text), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
 	elsewhere := filepath.Join(t.TempDir(), "target.modelspec.hcl")
 	if err := os.WriteFile(elsewhere, []byte(oldHCL), 0o644); err != nil {
 		t.Fatal(err)
@@ -212,13 +227,13 @@ func TestRewriteOnTheRealFilesystem(t *testing.T) {
 	}
 	h := newHarness(nil)
 	h.env.FS = modelspec.OSFS{}
-	if code := h.run("rewrite", "--write", real, other, link); code != 0 {
+	if code := h.run("rewrite", "--write", real, other, loose, open, link); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, h.errb)
 	}
 	for path, want := range map[string]struct {
 		text string
 		mode fs.FileMode
-	}{real: {newHCL, 0o600}, other: {newDoc, 0o640}, elsewhere: {newHCL, 0o644}} {
+	}{real: {newHCL, 0o600}, other: {newDoc, 0o640}, loose: {newHCL, 0o664}, open: {newDoc, 0o666}, elsewhere: {newHCL, 0o644}} {
 		got, err := os.ReadFile(path)
 		info, _ := os.Stat(path)
 		if err != nil || string(got) != want.text || info.Mode().Perm() != want.mode {
@@ -228,7 +243,7 @@ func TestRewriteOnTheRealFilesystem(t *testing.T) {
 	if info, err := os.Lstat(link); err != nil || info.Mode()&fs.ModeSymlink == 0 {
 		t.Errorf("the link is no longer a link: %v, %v", info, err)
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 3 {
+	if entries, _ := os.ReadDir(dir); len(entries) != 5 {
 		t.Errorf("files left in the directory: %v", entries)
 	}
 	// A search does not write through the link; it says so.
@@ -242,5 +257,16 @@ func TestRewriteOnTheRealFilesystem(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(elsewhere); string(got) != oldHCL {
 		t.Errorf("the link was written through: %q", got)
+	}
+}
+
+// A file system that cannot follow a link does not write one: it would replace the link.
+func TestRewriteWithAFileSystemThatCannotFollowALink(t *testing.T) {
+	t.Parallel()
+	h := newHarness(map[string]string{"real.modelspec.hcl": oldHCL, "alias.modelspec.hcl": oldHCL})
+	h.fsys.links = map[string]string{"alias.modelspec.hcl": "real.modelspec.hcl"}
+	h.env.FS = struct{ modelspec.FS }{h.fsys} // the same file system, without the method that follows a link
+	if code := h.run("rewrite", "--write", "alias.modelspec.hcl"); code != 2 || !strings.Contains(h.errb.String(), "is a symbolic link, and this file system cannot follow one") || len(h.fsys.written) != 0 {
+		t.Errorf("exit %d, stderr %q, written %v", code, h.errb, h.fsys.written)
 	}
 }

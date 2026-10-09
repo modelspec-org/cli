@@ -268,7 +268,7 @@ func (c *checker) deprecated(m *Model) {
 	} else {
 		what = fmt.Sprintf("holds %s: entity, property and entity = are the old spellings of record, field and record =", plural(len(m.Old), "old spelling", "old spellings"))
 	}
-	c.add(line, RuleDeprecated, OldSpellingSeverity, "%s (decision 0018, decision 0020); modelspec rewrite %s rewrites the file", what, quote1(m.File))
+	c.add(line, RuleDeprecated, OldSpellingSeverity, "%s (decision 0018, decision 0020); modelspec rewrite --write %s rewrites the file", what, quote1(m.File))
 }
 
 // duplicates reports a concept name declared twice in one name scope of the
@@ -731,10 +731,10 @@ func (c *checker) publishRecord(u *unit, k *Concept) {
 			c.errorf(mem.Line, RulePublishNameForm, "field name %q of record %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue turns field names into column names", mem.Name, k.Name)
 		}
 		if a, ok := mem.Attr("component"); ok {
-			c.errorf(a.Line, RulePublishComponent, "%s has a component value; the catalogue lists only scalar and record-reference fields", who)
+			c.errorf(a.Line, RulePublishComponentField, "%s has a component value; the catalogue lists only scalar and record-reference fields", who)
 		}
 		if a, ok := mem.Attr("record"); ok && a.Value.Type == NodeString && strings.Contains(a.Value.Str, ".") {
-			c.errorf(a.Line, RulePublishQualified, "%s refers to %q in another module; the catalogue resolves record references inside the one model only", who, a.Value.Str)
+			c.errorf(a.Line, RulePublishQualifiedRecord, "%s refers to %q in another module; the catalogue resolves record references inside the one model only", who, a.Value.Str)
 		}
 	}
 }
@@ -752,5 +752,9 @@ func (c *checker) staleTwin(m *Model) {
 	if err != nil || diff == "" {
 		return // an HCL file that cannot be exported cannot have a twin to compare with
 	}
-	c.add(1, RuleStaleTwin, SeverityWarning, "stale twin: %s is not what %s exports to (%s); run modelspec export%s", m.File, h.File, diff, vocabularyNote(h, m.Root))
+	fix := "; run modelspec export"
+	if note := vocabularyNote(h, m.Root); note != "" {
+		fix = note // one instruction: exporting again would write the old vocabulary or the new one, not the other
+	}
+	c.add(1, RuleStaleTwin, SeverityWarning, "stale twin: %s is not what %s exports to (%s)%s", m.File, h.File, diff, fix)
 }

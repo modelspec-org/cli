@@ -27,10 +27,6 @@ type FS interface {
 	// directory (created exclusively, removed on failure) and a rename, so that what is
 	// at name is replaced and never followed, and a reader never sees half a file.
 	WriteFile(name string, data []byte, perm fs.FileMode) error
-	// EvalSymlinks returns the file that a symbolic link names, every link on the
-	// way followed. modelspec rewrite writes there, so that a link named on the
-	// command line stays a link and its target is rewritten.
-	EvalSymlinks(name string) (string, error)
 	// Abs returns the absolute form of a path, cleaned, with symbolic links left
 	// as they are: the path as the file was given or found. The SpecScore layout
 	// is read from it.
@@ -148,8 +144,9 @@ func ReadSource(fsys FS, name string) ([]byte, error) {
 
 // OSFS is the operating system's filesystem. The zero value is ready to use.
 type OSFS struct {
-	getwd    func() (string, error) // os.Getwd when nil; a seam for tests
-	tempName func() string          // the name of WriteFile's temporary file, random when nil; a seam for tests
+	getwd    func() (string, error)            // os.Getwd when nil; a seam for tests
+	tempName func() string                     // the name of WriteFile's temporary file, random when nil; a seam for tests
+	chmod    func(*os.File, fs.FileMode) error // sets a replaced file's mode on the temporary file, (*os.File).Chmod when nil; a seam for tests
 }
 
 // Open opens without waiting: opening a named pipe for reading otherwise blocks
@@ -165,11 +162,13 @@ func (OSFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) 
 // O_EXCL (a name that exists, a link planted at it included, is an error and is left
 // alone), and renames it over name. A rename replaces a link at name and does not follow
 // it, so a link put there after a check cannot redirect the write. A file that is replaced
-// keeps its permission bits (as far as the umask allows); the temporary file is removed
-// when anything fails.
+// keeps its permission bits exactly (the temporary file is given them with a chmod, so the
+// umask does not narrow them); a file that is new gets perm as far as the umask allows. The
+// data is synced before the rename, and the temporary file is removed when anything fails.
 func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	keep := false
 	if info, err := os.Lstat(name); err == nil && info.Mode().IsRegular() {
-		perm = info.Mode().Perm()
+		perm, keep = info.Mode().Perm(), true
 	}
 	tempName := o.tempName
 	if tempName == nil {
@@ -180,7 +179,18 @@ func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	err = writeAndClose(f, data)
+	if keep {
+		chmod := o.chmod
+		if chmod == nil {
+			chmod = (*os.File).Chmod
+		}
+		err = chmod(f, perm)
+	}
+	if err == nil {
+		err = writeAndClose(f, data)
+	} else {
+		f.Close()
+	}
 	if err == nil {
 		err = os.Rename(temp, name)
 	}
@@ -190,10 +200,13 @@ func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	return err
 }
 
-// writeAndClose writes data and closes w, whether or not the write worked, and returns the
-// first error.
+// writeAndClose writes data, syncs w when it can be synced, and closes it, whether or not
+// the write worked, and returns the first error.
 func writeAndClose(w io.WriteCloser, data []byte) error {
 	_, err := w.Write(data)
+	if s, ok := w.(interface{ Sync() error }); ok && err == nil {
+		err = s.Sync()
+	}
 	if closeErr := w.Close(); err == nil {
 		err = closeErr
 	}

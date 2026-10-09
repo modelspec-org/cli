@@ -11,11 +11,6 @@ const (
 	KindEnum      Kind = "enum"
 )
 
-// KindEntity is the old name of KindRecord, with the same value.
-//
-// Deprecated: use KindRecord (decision 0018).
-const KindEntity = KindRecord
-
 // Form is the serialisation a model was read from.
 type Form string
 

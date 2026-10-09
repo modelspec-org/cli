@@ -268,7 +268,7 @@ func TestExportDriftNamesTheVocabulary(t *testing.T) {
 	}
 	good := string(n.Encode())
 	old := strings.Replace(strings.Replace(strings.Replace(strings.Replace(good, "1.0-draft-2", "1.0-draft", 1), `"records"`, `"entities"`, 1), `"fields"`, `"properties"`, 1), `"int"`, `"string"`, 1)
-	const note = "modelspec rewrite on both files brings the pair in line"
+	const note = "modelspec rewrite --write on both files brings the pair in line"
 	if d := m.ExportDrift([]byte(old), ModuleIdentity{}); !strings.Contains(d, note) {
 		t.Errorf("another vocabulary: %q", d)
 	}
@@ -282,4 +282,51 @@ func TestExportDriftNamesTheVocabulary(t *testing.T) {
 			t.Errorf("%s: %q", name, d)
 		}
 	}
+}
+
+// A model that is the same text in both vocabularies (components and enums only, or
+// nothing) exports as 1.0-draft-2, and is compared with a copy written as 1.0-draft
+// in that vocabulary: the copy was right before the rename, and is not drift.
+func TestExportOfAModelWithNoVocabularyMarker(t *testing.T) {
+	t.Parallel()
+	const src = "component \"Audit\" {\n  field \"at\" {\n    type = \"datetime\"\n  }\n}\nenum \"S\" {\n  values = [\"a\", \"b\"]\n}\n"
+	for name, tc := range map[string]struct {
+		model *Model
+		free  bool
+	}{
+		"components and enums":                   {mustHCL(t, src), true},
+		"nothing":                                {mustHCL(t, ""), true},
+		"a record":                               {mustHCL(t, okRecord), false},
+		"an old spelling":                        {mustHCL(t, "entity \"E\" {\n}\n"), false},
+		"a reference to a record in a component": {mustHCL(t, "component \"C\" {\n  field \"r\" {\n    record = \"R\"\n  }\n}\n"), false},
+	} {
+		if got := tc.model.vocabularyFree(); got != tc.free {
+			t.Errorf("%s: vocabularyFree = %v", name, got)
+		}
+	}
+	m := mustHCL(t, src)
+	plain, err := m.JSON(testID)
+	if err != nil || !strings.Contains(string(plain.Encode()), `"modelspec": "1.0-draft-2"`) {
+		t.Fatalf("a plain export is not 1.0-draft-2: %v\n%s", err, plain.Encode())
+	}
+	oldCopy := strings.Replace(string(plain.Encode()), "1.0-draft-2", "1.0-draft", 1)
+	if d := m.ExportDrift([]byte(oldCopy), ModuleIdentity{}); d != "" {
+		t.Errorf("a copy written as 1.0-draft is drift: %q", d)
+	}
+	if d := m.ExportDrift(plain.Encode(), ModuleIdentity{}); d != "" {
+		t.Errorf("a copy written as 1.0-draft-2 is drift: %q", d)
+	}
+	// A real difference in the old copy is still reported, with no word about vocabularies.
+	stale := strings.Replace(oldCopy, `"a"`, `"z"`, 1)
+	if d := m.ExportDrift([]byte(stale), ModuleIdentity{}); !strings.Contains(d, "values[0]") || strings.Contains(d, "vocabular") {
+		t.Errorf("drift = %q", d)
+	}
+	// The same through lint: the copy is a stale twin of nothing, and says only that it is old.
+	got := run(map[string]string{"core" + hclExt: src, "core.modelspec.json": strings.Replace(oldCopy, `"id": "x/y"`, `"id": "x/core"`, 1)})
+	for _, g := range got {
+		if strings.Contains(g, "stale") {
+			t.Errorf("a stale twin: %s", g)
+		}
+	}
+	expect(t, got, "core.modelspec.json:2: warning: is in format 1.0-draft and holds 1 old spelling")
 }

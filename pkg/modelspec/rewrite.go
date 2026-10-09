@@ -41,6 +41,9 @@ func rewriteWith(file string, src []byte, apply func([]byte, []OldSpelling) []by
 		return src, 0, nil
 	}
 	out := apply(src, m.Old)
+	if len(out) > MaxInputBytes {
+		return nil, 0, fmt.Errorf("the rewritten file would be %d bytes, over the limit of %d bytes that every file this tool reads has; nothing was changed", len(out), MaxInputBytes)
+	}
 	again, againFindings := Parse(file, out)
 	if again.Broken || len(again.Old) > 0 || sameModel(m, again) != "" || !sameFindings(findings, againFindings) {
 		return nil, 0, errors.New("the rewritten file does not read as the same model, so nothing was changed; this is a defect of modelspec rewrite, please report it with the file")

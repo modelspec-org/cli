@@ -128,6 +128,10 @@ func (p *hclReader) topBlock(blk *hclsyntax.Block) {
 		}
 		name, ok := p.label(blk, line)
 		if !ok {
+			// The block is not read, but a rewrite must not leave old spellings in it.
+			if blk.Type != "enum" {
+				p.oldInBody(blk.Body, blk.Type == "record" || blk.Type == "entity")
+			}
 			return
 		}
 		kind := Kind(blk.Type)
@@ -156,6 +160,7 @@ func (p *hclReader) concept(kind Kind, name string, line int, body *hclsyntax.Bo
 			}
 			mname, ok := p.label(blk, bline)
 			if !ok {
+				p.oldInMember(blk.Body)
 				continue
 			}
 			p.checkNoBlocks(blk)
@@ -175,6 +180,28 @@ func (p *hclReader) checkNoBlocks(blk *hclsyntax.Block) {
 	}
 }
 
+// oldInMember records the old spelling of the reference setting in a member whose
+// block is not read (its labels are wrong).
+func (p *hclReader) oldInMember(body *hclsyntax.Body) {
+	if a, ok := body.Attributes["entity"]; ok {
+		p.old(a.NameRange, "entity", "record")
+	}
+}
+
+// oldInBody records the old spellings in the body of a block that is not read: the
+// members of a record written property, and the references in its members.
+func (p *hclReader) oldInBody(body *hclsyntax.Body, isRecord bool) {
+	for _, blk := range body.Blocks {
+		switch {
+		case isRecord && blk.Type == "property":
+			p.old(blk.TypeRange, "property", "field")
+			p.oldInMember(blk.Body)
+		case blk.Type == "field":
+			p.oldInMember(blk.Body)
+		}
+	}
+}
+
 // attrs reads a body's attributes as literals, in source order. In a member the
 // reference to a record is written record, or entity in the old spelling; it is
 // the attribute record either way, and a member that has both is an error.
@@ -183,13 +210,15 @@ func (p *hclReader) attrs(body *hclsyntax.Body, member bool) []Attr {
 	for _, name := range sortedAttrNames(body) {
 		a := body.Attributes[name]
 		line := a.SrcRange.Start.Line
+		if member && name == "entity" {
+			p.old(a.NameRange, "entity", "record") // before the value is judged: a value that is refused is still spelled the old way
+		}
 		n, msg := p.literalNode(a.Expr, line)
 		if msg != "" {
 			p.add(line, RuleLiteral, fmt.Sprintf("attribute %q: %s", name, msg))
 			continue
 		}
 		if member && name == "entity" {
-			p.old(a.NameRange, "entity", "record")
 			if _, both := body.Attributes["record"]; both {
 				p.add(line, RuleAttribute, "has both record and entity; entity is the old spelling of record (decision 0018), and a member refers to one record")
 				p.refuse(fmt.Sprintf("a member has both record and entity (line %d)", line))

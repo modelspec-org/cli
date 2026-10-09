@@ -23,6 +23,31 @@ import (
 // refers to its own module by name). A model read from JSON already has its
 // identity, which id overrides when non-zero.
 func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
+	return m.json(id, m.OldVocabulary())
+}
+
+// vocabularyFree reports whether the model is written the same in both
+// vocabularies: no old spelling, no record, and no reference to one. An HCL file of
+// components and enums only is that, and so is an empty one.
+func (m *Model) vocabularyFree() bool {
+	if m.OldVocabulary() {
+		return false
+	}
+	for _, k := range m.Concepts {
+		if k.Kind == KindRecord {
+			return false
+		}
+		for _, mem := range k.Members {
+			if _, ok := mem.Attr("record"); ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// json is JSON with the vocabulary given: old is format 1.0-draft.
+func (m *Model) json(id ModuleIdentity, old bool) (*Node, error) {
 	if id == (ModuleIdentity{}) && m.Module != nil {
 		id = *m.Module
 	}
@@ -44,7 +69,7 @@ func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
 	}
 	module.Fields = append(module.Fields, field("version", str(id.Version)))
 	version, recordsKey, membersKey, refKey := SpecVersion, "records", "fields", "record"
-	if m.OldVocabulary() {
+	if old {
 		version, recordsKey, membersKey, refKey = OldSpecVersion, "entities", "properties", "entity"
 	}
 	root := obj(field("modelspec", str(version)), field("module", module))
@@ -128,21 +153,26 @@ func (m *Model) exportDrift(committed []byte, id ModuleIdentity) string {
 	return ""
 }
 
-// vocabularyNote is what to add to a difference between a model's export and a
-// JSON document when they are in different vocabularies: the fix is the rewrite.
+// vocabularyNote is what to say about a difference between a model's export and a
+// JSON document when they are in different vocabularies: the one instruction that
+// fixes it, which replaces any other.
 func vocabularyNote(m *Model, doc *Node) string {
 	v, ok := doc.Get("modelspec")
-	if !ok || v.Type != NodeString || (v.Str != SpecVersion && v.Str != OldSpecVersion) || (v.Str == OldSpecVersion) == m.OldVocabulary() {
+	if !ok || v.Type != NodeString || (v.Str != SpecVersion && v.Str != OldSpecVersion) || (v.Str == OldSpecVersion) == m.OldVocabulary() || m.vocabularyFree() {
 		return ""
 	}
-	return "; the two are in different vocabularies (the old entities, properties and entity, and the new records, fields and record), and modelspec rewrite on both files brings the pair in line"
+	return "; the two are in different vocabularies (the old entities, properties and entity, and the new records, fields and record); modelspec rewrite --write on both files brings the pair in line"
 }
 
 // exportDiff compares the export of the model, with the identity id, with a
 // parsed JSON document: "" when they are the same document with the same key and
 // array order. The error is the export's own refusal.
 func (m *Model) exportDiff(want *Node, id ModuleIdentity) (string, error) {
-	got, err := m.JSON(id)
+	// A model that is the same text in both vocabularies is compared in the one the
+	// document is in, so a copy written as 1.0-draft before the rename is not drift.
+	v, _ := want.Get("modelspec")
+	old := m.OldVocabulary() || (m.vocabularyFree() && v != nil && v.Type == NodeString && v.Str == OldSpecVersion)
+	got, err := m.json(id, old)
 	if err != nil {
 		return "", err
 	}

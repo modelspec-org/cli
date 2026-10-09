@@ -45,8 +45,17 @@ Only the old spellings are replaced, as byte ranges: every other byte of a file
 is as it was (comments, blank lines, alignment, key order, line endings, the final
 newline or its absence). A file already in the new spelling is left alone.
 Before a file is written, the rewritten text is read again and must be the same
-model; the write goes through a temporary file in the same directory and a rename,
-and the file keeps its permissions.
+model.
+
+How a file is written. The files are written one after another, each through a
+temporary file in its directory (synced, given the file's permission bits exactly,
+whatever the umask) and a rename, so a reader never sees half a file. If writing
+one fails the run stops there with exit 2 and no summary: the files already
+written stay written, and rewrite can be run again, since it changes nothing that
+is already rewritten. The rename replaces the file, so a read-only file in a
+directory you can write is replaced, and a hard link to a rewritten file keeps the
+old content (it is a different file now). A file that is a symbolic link, named on
+the command line, is followed, and its target is replaced.
 
 A file that rewrite cannot rewrite safely is named, with the reason, on standard
 error, and the exit code is 1; nothing is written for it. That is a file that
@@ -145,13 +154,24 @@ func runRewrite(env *Env, paths []string, assign []modelspec.Assignment, write, 
 	return nil
 }
 
+// linkResolver is what a file system can do beyond modelspec.FS that rewrite needs
+// to follow a link: modelspec.OSFS does it.
+type linkResolver interface {
+	EvalSymlinks(name string) (string, error)
+}
+
 // writeRewritten writes the rewritten file. A file named on the command line
 // that is a symbolic link is followed, and its target is the file written, so
-// the link stays a link.
+// the link stays a link. A file system that cannot follow a link is an error for
+// a link: writing it would replace the link.
 func writeRewritten(fsys modelspec.FS, name string, data []byte) error {
 	target := name
 	if info, err := fsys.Lstat(name); err == nil && info.Mode()&fs.ModeSymlink != 0 {
-		resolved, err := fsys.EvalSymlinks(name)
+		r, ok := fsys.(linkResolver)
+		if !ok {
+			return fmt.Errorf("%s is a symbolic link, and this file system cannot follow one, so it was not written", name)
+		}
+		resolved, err := r.EvalSymlinks(name)
 		if err != nil {
 			return err
 		}

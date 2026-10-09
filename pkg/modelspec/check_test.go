@@ -747,7 +747,7 @@ entity "Old" {
   }
 }
 `
-	const warning = `: warning: holds 3 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); modelspec rewrite "a.modelspec.hcl" rewrites the file [deprecated-spelling]`
+	const warning = `: warning: holds 3 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); modelspec rewrite --write "a.modelspec.hcl" rewrites the file [deprecated-spelling]`
 	// Under both profiles.
 	expect(t, run(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9"+warning)
 	expect(t, runPublish(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9"+warning)
@@ -756,7 +756,7 @@ entity "Old" {
 	const key = `"entities": {"A": {"key": [], "properties": {}}}`
 	src := "{\n\"module\": {\"id\": \"x\", \"version\": \"1\"},\n" + key + ",\n\"modelspec\": \"1.0-draft\"\n}"
 	jsonWarning := func(n string) string {
-		return `: warning: is in format 1.0-draft and holds ` + n + `: that identifier, and the keys entities, properties and entity, are the old spellings of 1.0-draft-2, records, fields and record (decision 0018, decision 0020); modelspec rewrite "a.modelspec.json" rewrites the file [deprecated-spelling]`
+		return `: warning: is in format 1.0-draft and holds ` + n + `: that identifier, and the keys entities, properties and entity, are the old spellings of 1.0-draft-2, records, fields and record (decision 0018, decision 0020); modelspec rewrite --write "a.modelspec.json" rewrites the file [deprecated-spelling]`
 	}
 	expect(t, run(map[string]string{"a" + jsonExt: src}), "a.modelspec.json:4"+jsonWarning("3 old spellings"), "has an empty key")
 	expect(t, run(map[string]string{"a" + jsonExt: oldDoc()}), "a.modelspec.json:2"+jsonWarning("1 old spelling"))
@@ -777,14 +777,14 @@ entity "Old" {
 // message says that modelspec rewrite brings them in line.
 func TestStaleTwinInAnotherVocabulary(t *testing.T) {
 	t.Parallel()
-	const note = "; the two are in different vocabularies (the old entities, properties and entity, and the new records, fields and record), and modelspec rewrite on both files brings the pair in line [stale-twin]"
+	const note = "; the two are in different vocabularies (the old entities, properties and entity, and the new records, fields and record); modelspec rewrite --write on both files brings the pair in line [stale-twin]"
 	oldHCL := strings.NewReplacer("record", "entity", "field", "property").Replace(recordWith("Space"))
 	newJSON := `{"modelspec": "1.0-draft-2", "module": {"id": "x/core", "name": "core", "version": "1"}, "records": {"Space": {"key": ["id"], "fields": {"id": {"type": "int"}}}}}`
 	oldJSON := `{"modelspec": "1.0-draft", "module": {"id": "x/core", "name": "core", "version": "1"}, "entities": {"Space": {"key": ["id"], "properties": {"id": {"type": "int"}}}}}`
 	expect(t, run(map[string]string{"core" + hclExt: recordWith("Space"), "core.modelspec.json": oldJSON}),
-		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft-2" in the first and "1.0-draft" in the second); run modelspec export`+note, "[deprecated-spelling]")
+		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft-2" in the first and "1.0-draft" in the second)`+note, "[deprecated-spelling]")
 	expect(t, run(map[string]string{"core" + hclExt: oldHCL, "core.modelspec.json": newJSON}),
-		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft" in the first and "1.0-draft-2" in the second); run modelspec export`+note, "core.modelspec.hcl:1: warning: holds 2 old spellings")
+		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft" in the first and "1.0-draft-2" in the second)`+note, "core.modelspec.hcl:1: warning: holds 2 old spellings")
 	// The same vocabulary, or an identifier it does not know: no note.
 	for name, files := range map[string]map[string]string{
 		"old":     {"core" + hclExt: oldHCL, "core.modelspec.json": strings.Replace(oldJSON, `"type": "int"`, `"type": "string"`, 1)},

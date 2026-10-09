@@ -42,19 +42,25 @@ const (
 	RuleRemoved      = "removed-construct"   // a collection or a recordset (decision 0019)
 	RuleReservedWord = "reserved-word"       // projection, index or migration: reserved, no content yet (decision 0019)
 
-	RulePublishModuleName = "publish-module-name"
-	RulePublishRecords    = "publish-records"
-	RulePublishFields     = "publish-fields"
-	RulePublishNameForm   = "publish-name-form"
-	RulePublishComponent  = "publish-component-field"
-	RulePublishQualified  = "publish-qualified-record"
+	RulePublishModuleName      = "publish-module-name"
+	RulePublishRecords         = "publish-records"
+	RulePublishFields          = "publish-fields"
+	RulePublishNameForm        = "publish-name-form"
+	RulePublishComponentField  = "publish-component-field"
+	RulePublishQualifiedRecord = "publish-qualified-record"
 )
 
 // OldSpellingSeverity is the severity of the deprecated-spelling finding, and the
-// one place that decides it. The staged rename (decision 0022) ends with the old
-// spelling an error, which the owner has approved and which is a later change:
-// then this is SeverityError and nothing else here moves. modelspec rewrite does
-// not look at it, because it must read old files to rewrite them.
+// one place in the code that decides it. The staged rename (decision 0022) ends
+// with the old spelling an error, which the owner approved in advance on
+// 2026-10-09. The step has a condition of its own, which this constant waits for:
+// the old spelling becomes an error only when no registered model is pinned in
+// it. Do not change it before that is true. Changing it touches the production
+// code here and nowhere else (modelspec rewrite does not look at it, because it
+// must read old files to rewrite them), and the tests that pin a warning: the lint
+// and export tests, the corpus test that pairs each old item with its copy in the
+// new spelling (oldSpellingVerdict), and the manifest's old items with the
+// differences from the recorded readers that follow.
 const OldSpellingSeverity = SeverityWarning
 
 // Finding is one located problem in one file.
