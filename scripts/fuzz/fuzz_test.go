@@ -10,7 +10,9 @@
 //  2. the publish profile refuses whatever the default profile refuses;
 //  3. a model that lints clean exports (HCL) to JSON that parses, round-trips
 //     and lints clean under the same name;
-//  4. one input costs a bounded amount of work: the bytes allocated reading and
+//  4. a model that lints clean is rewritten (modelspec rewrite) to the same model,
+//     which lints clean, and rewriting that again changes nothing;
+//  5. one input costs a bounded amount of work: the bytes allocated reading and
 //     checking it, exporting it and reading the export back (FuzzHCL does all of
 //     that inside within) stay within allocBase plus allocPerByte for each byte of
 //     the input (a count of the work done, which does not depend on the load of the
@@ -22,6 +24,7 @@
 package fuzz
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,15 +98,38 @@ func seeds(f *testing.F, dir, suffix string) {
 	f.Add([]byte("[[[[[[[[[[[[[[[["))
 	f.Add([]byte("x = <<EOT\n\"\nEOT\nkey = [[[[\n"))
 	f.Add([]byte("x = -------------1"))
-	f.Add([]byte("entity \"A\" {\n  key = a[*][*][*][*]\n}\n"))
+	f.Add([]byte("record \"A\" {\n  key = a[*][*][*][*]\n}\n"))
 	f.Add([]byte("x = <<EOT\n%{\nif x}%{/**/if y}\nEOT\n"))
 	f.Add([]byte("x = a::b() + c.d[0] ? (1) : [for a in b : a]\n"))
 	// Inputs that were once slow or large: numbers with a huge exponent or many
 	// digits, and long names.
 	f.Add([]byte("enum \"E\" {\n  values = [1e10000000]\n}\n"))
-	f.Add([]byte("entity \"A\" {\n  key = []\n  max_len = 1e4000000\n}\n"))
+	f.Add([]byte("record \"A\" {\n  key = []\n  max_len = 1e4000000\n}\n"))
 	f.Add([]byte("{\"modelspec\": \"1.0-draft\", \"enums\": {\"E\": {\"values\": [1e10000000, 1" + strings.Repeat("0", 400) + "]}}}"))
-	f.Add([]byte("entity \"" + strings.Repeat("A", 3000) + "\" {\n}\n"))
+	f.Add([]byte("record \"" + strings.Repeat("A", 3000) + "\" {\n}\n"))
+	// The old spelling, the removed constructs and the reserved words.
+	f.Add([]byte("entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"r\" {\n    entity = \"A\"\n  }\n}\n"))
+	f.Add([]byte("record \"A\" {\n  field \"r\" {\n    entity = \"A\"\n    record = \"A\"\n  }\n  index \"i\" {\n  }\n}\ncollection \"c\" {\n}\nprojection \"p\" {\n}\n"))
+	f.Add([]byte("{\"modelspec\": \"1.0-draft\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}, \"records\": {}, \"collections\": {}, \"projections\": {}}"))
+	f.Add([]byte("{\"modelspec\": \"1.0-draft-2\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}}"))
+}
+
+// rewritten checks the fourth oracle for a source that lints clean: it is rewritten
+// to a source that reads as clean, and rewriting that changes nothing.
+func rewritten(t *testing.T, file string, src []byte) {
+	t.Helper()
+	out, _, err := modelspec.Rewrite(file, src)
+	if err != nil {
+		t.Fatalf("a clean model is not rewritten: %v", err)
+	}
+	m, parse := modelspec.Parse(file, out)
+	if !refusal(t, m, parse) {
+		t.Fatalf("the rewrite of a clean model does not lint clean:\n%s", out)
+	}
+	again, n, err := modelspec.Rewrite(file, out)
+	if err != nil || n != 0 || !bytes.Equal(again, out) {
+		t.Fatalf("rewriting the rewrite changed it (%d replacements, %v):\n%s", n, err, out)
+	}
 }
 
 func lint(m *modelspec.Model, parse []modelspec.Finding, p modelspec.Profile) []modelspec.Finding {
@@ -123,15 +149,17 @@ func refusal(t *testing.T, m *modelspec.Model, parse []modelspec.Finding) (clean
 func FuzzHCL(f *testing.F) {
 	enabled(f)
 	seeds(f, "hcl", ".modelspec.hcl")
+	seeds(f, "new/hcl", ".modelspec.hcl")
 	f.Fuzz(func(t *testing.T, src []byte) {
 		// Everything one input costs runs inside within: the reading and the checks, the
 		// export, the read of the export and the comparison, so the watchdog and the
 		// allocation budget cover all of it.
 		within(t, src, func() {
 			m, parse := modelspec.ParseHCL("fuzz.modelspec.hcl", src)
-			if !refusal(t, m, parse) || len(m.Unmapped) > 0 {
+			if !refusal(t, m, parse) {
 				return
 			}
+			rewritten(t, "fuzz.modelspec.hcl", src)
 			node, err := m.JSON(modelspec.ModuleIdentity{ID: "x/fuzz", Name: "fuzz", Version: "1"})
 			if err != nil {
 				t.Fatalf("a clean model does not export: %v", err)
@@ -151,10 +179,13 @@ func FuzzHCL(f *testing.F) {
 func FuzzJSON(f *testing.F) {
 	enabled(f)
 	seeds(f, "json", ".modelspec.json")
+	seeds(f, "new/json", ".modelspec.json")
 	f.Fuzz(func(t *testing.T, src []byte) {
 		within(t, src, func() {
 			m, parse := modelspec.ParseJSON("fuzz.modelspec.json", src)
-			refusal(t, m, parse)
+			if refusal(t, m, parse) {
+				rewritten(t, "fuzz.modelspec.json", src)
+			}
 		})
 	})
 }

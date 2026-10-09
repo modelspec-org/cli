@@ -1,0 +1,20 @@
+{
+  "modelspec": "1.0-draft-2",
+  "module": {
+    "id": "github.com/acme/core",
+    "name": "core",
+    "version": "0.1.0"
+  },
+  "records": {
+    "Room": {
+      "key": [
+        "id"
+      ],
+      "fields": {
+        "id": {
+          "type": "uuid"
+        }
+      }
+    }
+  }
+}

@@ -74,6 +74,15 @@ func (m *memFS) resolve(name string) string {
 	return name
 }
 
+// EvalSymlinks follows a link the way resolve does; a dangling link is an error.
+func (m *memFS) EvalSymlinks(name string) (string, error) {
+	t := m.resolve(name)
+	if t == "" {
+		return "", &fs.PathError{Op: "lstat", Path: name, Err: fs.ErrNotExist}
+	}
+	return t, nil
+}
+
 func (m *memFS) Abs(name string) (string, error) {
 	if err, ok := m.absErr[m.path(name)]; ok {
 		return "", err
@@ -246,9 +255,9 @@ func expect(t *testing.T, got []string, want ...string) {
 	}
 }
 
-const okEntity = `entity "A" {
+const okRecord = `record "A" {
   key = ["id"]
-  property "id" {
+  field "id" {
     type = "int"
   }
 }

@@ -25,8 +25,8 @@ const (
 	// exactly and in constant time.
 	MaxNumberExponent = 100
 	// MaxNameLength is the most bytes, as written, a name may have: a block
-	// label, an identifier or attribute name, a type, entity, component, enum or
-	// kind reference, and an item of `key` or `use` (JSON: every object key and
+	// label, an identifier or attribute name, a type, record, component or enum
+	// reference, and an item of `key` or `use` (JSON: every object key and
 	// the same strings). The standard states no length. Real names are a few
 	// words, and where the databases a model describes limit an identifier it is
 	// between 63 and 128 bytes, so 255 leaves room.
@@ -45,7 +45,7 @@ const (
 // nameAttrs are the HCL attributes (and JSON keys) whose string value is a name.
 // listNameAttrs are the ones whose value is a list of names.
 var (
-	nameAttrs     = map[string]bool{"type": true, "entity": true, "component": true, "enum": true, "kind": true, "name": true}
+	nameAttrs     = map[string]bool{"type": true, "record": true, "entity": true, "component": true, "enum": true, "name": true}
 	listNameAttrs = map[string]bool{"key": true, "use": true}
 )
 

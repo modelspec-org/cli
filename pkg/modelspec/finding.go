@@ -32,20 +32,30 @@ const (
 	RuleMemberKind = "member-kind"
 	RuleVersion    = "modelspec-version"
 	RuleModule     = "module"
-	RuleCollection = "collection"
 	RuleUnknown    = "unknown-field" // a top-level JSON field the format does not define
 	RuleIO         = "unreadable"    // a file found by a directory search that cannot be read
 	RuleSkipped    = "skipped-file"  // a model-named link, pipe or device a search does not read: an error, and its module is not checked
 	RuleStaleTwin  = "stale-twin"    // a JSON twin that is not what its HCL exports to
 	RuleNameCase   = "name-case"     // names in one scope that differ only by case
 
+	RuleDeprecated   = "deprecated-spelling" // the old spelling of record, field and record = (decisions 0018, 0020, 0022)
+	RuleRemoved      = "removed-construct"   // a collection or a recordset (decision 0019)
+	RuleReservedWord = "reserved-word"       // projection, index or migration: reserved, no content yet (decision 0019)
+
 	RulePublishModuleName = "publish-module-name"
-	RulePublishEntities   = "publish-entities"
-	RulePublishProperties = "publish-properties"
+	RulePublishRecords    = "publish-records"
+	RulePublishFields     = "publish-fields"
 	RulePublishNameForm   = "publish-name-form"
-	RulePublishComponent  = "publish-component-property"
-	RulePublishQualified  = "publish-qualified-entity"
+	RulePublishComponent  = "publish-component-field"
+	RulePublishQualified  = "publish-qualified-record"
 )
+
+// OldSpellingSeverity is the severity of the deprecated-spelling finding, and the
+// one place that decides it. The staged rename (decision 0022) ends with the old
+// spelling an error, which the owner has approved and which is a later change:
+// then this is SeverityError and nothing else here moves. modelspec rewrite does
+// not look at it, because it must read old files to rewrite them.
+const OldSpellingSeverity = SeverityWarning
 
 // Finding is one located problem in one file.
 type Finding struct {

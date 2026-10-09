@@ -1,6 +1,7 @@
 package modelspec
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,10 +14,11 @@ import (
 )
 
 // The corpus under testdata/corpus holds accepting and refusing models in both
-// forms, multi-file modules in the SpecScore layout, and standalone module sets.
-// testdata/golden holds what `specscore graph lint` and the Directory's JSON
-// reader said about them (scripts/regen-golden.mjs wrote those files; this test
-// only reads them). Nothing here starts a process.
+// forms, multi-file modules in the SpecScore layout, and standalone module sets,
+// in the old spelling (entity, property) and, under new/, the same items in the
+// new one (record, field). testdata/golden holds what `specscore graph lint` and
+// the Directory's JSON reader said about the old ones (scripts/regen-golden.mjs
+// wrote those files; this test only reads them). Nothing here starts a process.
 
 type verdict struct {
 	Verdict  string   `json:"verdict"`
@@ -61,12 +63,12 @@ func readJSON(t *testing.T, path string, v any) {
 }
 
 // corpusItems lists the corpus: every file under hcl/ and json/, every directory
-// under modules/ and standalone/. Items that are parts of others (they have a
-// path in the manifest) are not in the directories.
+// under modules/ and standalone/, and the same under new/. Items that are parts
+// of others (they have a path in the manifest) are not in the directories.
 func corpusItems(t *testing.T) []string {
 	t.Helper()
 	var items []string
-	for _, kind := range []string{"hcl", "json", "modules", "standalone"} {
+	for _, kind := range []string{"hcl", "json", "modules", "standalone", "new/hcl", "new/json", "new/modules", "new/standalone"} {
 		entries, err := os.ReadDir(filepath.Join(corpusDir, kind))
 		if err != nil {
 			t.Fatal(err)
@@ -143,7 +145,7 @@ func TestCorpusMatchesManifest(t *testing.T) {
 		if entry.Path != "" {
 			parts++
 			items = append(items, item)
-			if !strings.HasPrefix(item, "parts/") {
+			if !strings.HasPrefix(item, "parts/") && !strings.HasPrefix(item, "new/parts/") {
 				t.Errorf("%s has a path but is not under parts/", item)
 			}
 			if _, err := os.Stat(filepath.Join(corpusDir, filepath.FromSlash(entry.Path))); err != nil {
@@ -273,19 +275,23 @@ func TestPublishRefusesWhateverTheDefaultRefuses(t *testing.T) {
 	}
 }
 
-// JSON that `export` writes from HCL that lints clean must itself lint clean. The
-// exception is HCL with constructs the standard gives no JSON form (index,
-// projection and migration blocks), which export refuses.
+// JSON that `export` writes from HCL that lints clean must itself lint clean, and is
+// in the vocabulary of the HCL: format 1.0-draft-2 for a file with no old spelling,
+// 1.0-draft for one with any.
 func TestExportOfCleanHCLLintsClean(t *testing.T) {
 	t.Parallel()
 	var m manifest
 	readJSON(t, filepath.Join(corpusDir, "manifest.json"), &m)
-	var refused, exported []string
+	var exported []string
 	for item, entry := range m.Items {
-		if !strings.HasPrefix(item, "hcl/") || entry.Default.Verdict != "accept" {
+		dir := "hcl/"
+		if strings.HasPrefix(item, "new/") {
+			dir = "new/hcl/"
+		}
+		if !strings.HasPrefix(item, dir) || entry.Default.Verdict != "accept" {
 			continue
 		}
-		stem := strings.TrimSuffix(strings.TrimPrefix(item, "hcl/"), HCLSuffix)
+		stem := strings.TrimSuffix(strings.TrimPrefix(item, dir), HCLSuffix)
 		path := filepath.Join(corpusDir, filepath.FromSlash(item))
 		src, err := os.ReadFile(path)
 		if err != nil {
@@ -297,18 +303,18 @@ func TestExportOfCleanHCLLintsClean(t *testing.T) {
 		}
 		id := ModuleIdentity{ID: "github.com/acme/" + stem, Name: stem, Version: "0.1.0"}
 		node, err := model.JSON(id)
-		if len(model.Unmapped) > 0 {
-			if err == nil {
-				t.Errorf("%s: export of a file with unmapped constructs succeeded", item)
-			}
-			refused = append(refused, stem)
-			continue
-		}
 		if err != nil {
 			t.Errorf("%s: %v", item, err)
 			continue
 		}
-		exported = append(exported, stem)
+		exported = append(exported, item)
+		wantVersion := SpecVersion
+		if model.OldVocabulary() {
+			wantVersion = OldSpecVersion
+		}
+		if v, _ := node.Get("modelspec"); v.Str != wantVersion {
+			t.Errorf("%s: exported as %q, want %q", item, v.Str, wantVersion)
+		}
 		back, parse := ParseJSON(stem+JSONSuffix, node.Encode())
 		if len(parse) != 0 {
 			t.Errorf("%s: the export does not parse clean:\n%s", item, joinFindings(parse))
@@ -341,54 +347,233 @@ func TestExportOfCleanHCLLintsClean(t *testing.T) {
 			}
 		}
 	}
-	sort.Strings(refused)
-	if got := strings.Join(refused, " "); got != "unmapped-index unmapped-migration unmapped-projection" {
-		t.Errorf("exports refused for: %s", got)
-	}
-	if len(exported) < 12 {
+	// Nothing that lints clean lacks a JSON form: every accepting HCL item is exported.
+	if len(exported) < 25 {
 		t.Errorf("only %d accepting HCL items were exported: %v", len(exported), exported)
 	}
 }
 
+// pairs are the HCL files and their committed JSON copies that must lint clean
+// together and export to each other, byte for byte where the JSON was written by a
+// JavaScript converter.
 func TestChinookAndTodoLintCleanAndExportCheck(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct{ hcl, json string }{{"chinook", "chinook"}, {"todo-aligned", "todo"}} {
-		hclPath := filepath.Join(corpusDir, "hcl", c.hcl+HCLSuffix)
-		jsonPath := filepath.Join(corpusDir, "json", c.json+JSONSuffix)
+	for _, c := range []struct {
+		dir, hcl, json string
+		warnings       []string // the findings of the pair, which are all deprecated-spelling
+	}{
+		{"", "chinook", "chinook", []string{RuleDeprecated, RuleDeprecated}},
+		{"new/", "chinook", "chinook", nil},
+		{"new/", "todo-aligned", "todo", nil},
+	} {
+		hclPath := filepath.Join(corpusDir, filepath.FromSlash(c.dir), "hcl", c.hcl+HCLSuffix)
+		jsonPath := filepath.Join(corpusDir, filepath.FromSlash(c.dir), "json", c.json+JSONSuffix)
 		for _, profile := range Profiles {
 			res, err := Lint(OSFS{}, []string{hclPath, jsonPath}, LintOptions{Profile: profile})
-			if err != nil || res.Files != 2 || len(res.Findings) != 0 {
-				t.Errorf("%s (%s profile): lint = %v, %d files, %v", c.hcl, profile, res.Findings, res.Files, err)
+			var rules []string
+			for _, f := range res.Findings {
+				rules = append(rules, f.Rule)
+				if f.Severity != SeverityWarning {
+					t.Errorf("%s%s (%s profile): %s", c.dir, c.hcl, profile, f)
+				}
+			}
+			if err != nil || res.Files != 2 || !same(rules, c.warnings) {
+				t.Errorf("%s%s (%s profile): lint = %v, %d files, %v", c.dir, c.hcl, profile, res.Findings, res.Files, err)
 			}
 		}
 		src, _ := os.ReadFile(hclPath)
 		committed, _ := os.ReadFile(jsonPath)
 		m, _ := ParseHCL(hclPath, src)
 		if d := m.ExportDrift(committed, ModuleIdentity{}); d != "" {
-			t.Errorf("%s: export --check: %s", c.hcl, d)
+			t.Errorf("%s%s: export --check: %s", c.dir, c.hcl, d)
 		}
 		if c.hcl == "chinook" {
 			// Chinook's committed JSON was written by a JavaScript converter with
 			// JSON.stringify(x, null, 2); the export is byte-identical to it.
 			node, err := m.JSON(ModuleIdentity{ID: "github.com/datatug/chinookdb/model/chinook", Name: "chinook", Version: "0.1.0"})
 			if err != nil || string(node.Encode()) != string(committed) {
-				t.Errorf("chinook export is not byte-identical to the committed JSON (%v)", err)
+				t.Errorf("%schinook export is not byte-identical to the committed JSON (%v)", c.dir, err)
 			}
 		}
 	}
 }
 
-// The todo example in the ModelSpec repository declares its recordset
-// task_summary in HCL and taskSummary in JSON, and no document defines a
-// renaming. The export does not invent one, so the check reports exactly that.
-func TestTodoExampleDriftIsTheRecordsetName(t *testing.T) {
+// oldSpellingVerdict is what the old spelling does to the verdict of an item: the
+// one place a test knows that it is a warning. The old item's expected verdict is
+// this applied to the verdict of its copy in the new spelling, and the day the old
+// spelling becomes an error (decision 0022, step 4, OldSpellingSeverity) this is the
+// function to change, with the manifest's old items.
+func oldSpellingVerdict(newSpelling verdict) verdict {
+	v := verdict{Verdict: newSpelling.Verdict, Rules: newSpelling.Rules}
+	v.Warnings = append(append([]string(nil), newSpelling.Warnings...), RuleDeprecated)
+	sort.Strings(v.Warnings)
+	return v
+}
+
+// The items whose copy in new/ was not made by `modelspec rewrite`, because rewrite
+// refuses a file of the item: it does not parse, or holds a construct that no
+// rewriting fixes (decision 0019). Their copies were written by hand: the same text
+// with the old words replaced, and where the removed or reserved construct was only
+// a part of the item's purpose (a collection beside records), without it.
+var handWrittenCopies = []string{
+	"hcl/collection-bind-unresolved.modelspec.hcl", "hcl/expression-value.modelspec.hcl", "hcl/names-not-identifiers.modelspec.hcl",
+	"hcl/reserved-recordset-name.modelspec.hcl", "hcl/shop.modelspec.hcl", "hcl/syntax-error.modelspec.hcl", "hcl/todo-aligned.modelspec.hcl",
+	"hcl/todo.modelspec.hcl", "hcl/unmapped-index.modelspec.hcl", "hcl/unmapped-migration.modelspec.hcl", "hcl/unmapped-projection.modelspec.hcl",
+	"json/full-shape.modelspec.json", "json/invalid-utf8.modelspec.json", "json/modelspec-not-string.modelspec.json", "json/no-modelspec.modelspec.json",
+	"json/not-an-object.modelspec.json", "json/not-json.modelspec.json", "json/shape-wrong-types.modelspec.json", "json/todo.modelspec.json",
+	"json/trailing-garbage.modelspec.json", "json/wrong-version.modelspec.json", "modules/layout-key-through-component",
+	"standalone/backslash-before-dollar-in-label", "standalone/backslash-before-dollar-in-pattern", "standalone/name-over-255-bytes",
+	"standalone/number-exponent-over-100", "standalone/number-over-40-characters", "standalone/query-201-wildcards",
+	"standalone/query-334-placeholders", "standalone/query-one-line-500-placeholders",
+}
+
+// The items under new/ that have no copy in the old spelling: they test the readers
+// with both spellings in one place.
+var newOnly = []string{
+	"new/hcl/mixed-spellings.modelspec.hcl", "new/hcl/record-and-entity-both.modelspec.hcl", "new/hcl/property-in-component.modelspec.hcl",
+	"new/hcl/reserved-kind-names.modelspec.hcl", "new/json/entities-in-new-format.modelspec.json", "new/json/records-in-old-format.modelspec.json",
+	"new/json/reserved-kind-names.modelspec.json", "new/standalone/twin-new-hcl-old-json", "new/standalone/twin-old-hcl-new-json",
+}
+
+// itemFiles lists the files of an item as paths relative to the item (a file item
+// is itself, ".").
+func itemFiles(t *testing.T, root string) []string {
+	t.Helper()
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		return []string{"."}
+	}
+	var out []string
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			rel, _ := filepath.Rel(root, path)
+			out = append(out, rel)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Every item in the old spelling has a copy under new/, and where `modelspec
+// rewrite` can rewrite every model file of the item, the copy is what it makes of
+// the item, byte for byte, and the item's verdict is the copy's with the old
+// spelling's effect. The model files are found the way rewrite finds them; the
+// other files (a README, specscore.yaml) are copied as they are.
+func TestEveryItemHasACopyInTheNewSpelling(t *testing.T) {
 	t.Parallel()
-	src, _ := os.ReadFile(filepath.Join(corpusDir, "hcl", "todo.modelspec.hcl"))
-	committed, _ := os.ReadFile(filepath.Join(corpusDir, "json", "todo.modelspec.json"))
-	m, _ := ParseHCL("todo.modelspec.hcl", src)
-	d := m.ExportDrift(committed, ModuleIdentity{})
-	if !strings.Contains(d, `recordsets has key "task_summary" in the first but not in the second`) {
-		t.Fatalf("drift = %q", d)
+	var m manifest
+	readJSON(t, filepath.Join(corpusDir, "manifest.json"), &m)
+	byHand := map[string]bool{}
+	for _, item := range handWrittenCopies {
+		byHand[item] = true
+	}
+	seenByHand, rewritten, old := 0, 0, 0
+	twins := map[string]bool{}
+	for _, extra := range newOnly {
+		twins[extra] = true
+	}
+	for item, entry := range m.Items {
+		if strings.HasPrefix(item, "new/") {
+			continue
+		}
+		old++
+		twin := "new/" + item
+		twins[twin] = true
+		twinEntry, ok := m.Items[twin]
+		if !ok {
+			t.Errorf("%s has no copy %s in the manifest", item, twin)
+			continue
+		}
+		if entry.Path != "" {
+			if twinEntry.Path != "new/"+entry.Path {
+				t.Errorf("%s: path %q, want new/%s", twin, twinEntry.Path, entry.Path)
+			}
+			continue // a part has the verdict of the whole, checked with the whole
+		}
+		src := filepath.Join(corpusDir, filepath.FromSlash(item))
+		dst := filepath.Join(corpusDir, filepath.FromSlash(twin))
+		var modules []Assignment
+		for _, a := range entry.Modules {
+			name, rel, _ := strings.Cut(a, "=")
+			modules = append(modules, Assignment{Module: name, Path: filepath.Join(src, rel)})
+		}
+		found, _, err := DiscoverModules(OSFS{}, []string{src}, modules)
+		if err != nil {
+			t.Fatalf("%s: %v", item, err)
+		}
+		files := map[string][]byte{} // the rewritten model files, by path relative to the item
+		count, refused := 0, ""
+		for _, f := range found {
+			data, err := os.ReadFile(f.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rel, _ := filepath.Rel(src, f.Path)
+			out, n, err := Rewrite(f.Path, data)
+			if err != nil {
+				refused = err.Error()
+				break
+			}
+			files[rel], count = out, count+n
+		}
+		if byHand[item] != (refused != "") {
+			t.Errorf("%s: rewrite refused = %q, but the list of hand-written copies says %v", item, refused, byHand[item])
+		}
+		if refused != "" {
+			seenByHand++
+			continue
+		}
+		rewritten++
+		for _, rel := range itemFiles(t, src) {
+			want, err := os.ReadFile(filepath.Join(src, rel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out, ok := files[rel]; ok {
+				want = out
+			}
+			got, err := os.ReadFile(filepath.Join(dst, rel))
+			if err != nil || !bytes.Equal(got, want) {
+				t.Errorf("%s: %s is not what rewrite makes of the old item (%v)", twin, rel, err)
+			}
+		}
+		if len(itemFiles(t, src)) != len(itemFiles(t, dst)) {
+			t.Errorf("%s has %d files, %s has %d", item, len(itemFiles(t, src)), twin, len(itemFiles(t, dst)))
+		}
+		// The verdict: the copy's, and the old spelling's effect where there was any.
+		for _, c := range []struct {
+			name      string
+			old, copy verdict
+		}{{"default", entry.Default, twinEntry.Default}, {"publish", entry.Publish, twinEntry.Publish}} {
+			want := c.copy
+			if count > 0 {
+				want = oldSpellingVerdict(c.copy)
+			}
+			if c.old.Verdict != want.Verdict || !same(c.old.Rules, want.Rules) || !same(c.old.Warnings, want.Warnings) {
+				t.Errorf("%s, %s profile: manifest says %+v, the copy %+v with %d old spellings gives %+v", item, c.name, c.old, c.copy, count, want)
+			}
+		}
+	}
+	if seenByHand != len(handWrittenCopies) {
+		t.Errorf("%d items were refused by rewrite, %d are listed", seenByHand, len(handWrittenCopies))
+	}
+	if rewritten < 80 {
+		t.Errorf("only %d items were rewritten", rewritten)
+	}
+	// Nothing under new/ is left without an old item or a place in newOnly.
+	for item := range m.Items {
+		if strings.HasPrefix(item, "new/") && !twins[item] {
+			t.Errorf("%s is a copy of no item, and is not in newOnly", item)
+		}
+	}
+	if got := len(m.Items); got != 2*old+len(newOnly) {
+		t.Errorf("%d items, want twice the %d old ones and the %d only in the new spelling", got, old, len(newOnly))
 	}
 }
 

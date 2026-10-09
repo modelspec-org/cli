@@ -1,6 +1,7 @@
 package modelspec
 
 import (
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -39,12 +40,32 @@ const (
 	heredocEscape  = '\ue002'
 )
 
+// shift records that the parser's input is delta bytes longer than the source
+// from the offset at (in the parser's input) on.
+type shift struct{ at, delta int }
+
+// offsetMap maps an offset in the parser's input back to the source. The rewrite
+// of parserInput changes the inside of literal text only, so an offset that is
+// not inside such text (the start of a name, of a block type) maps exactly.
+type offsetMap []shift
+
+// source returns the offset in the source of the offset off in the parser's input.
+func (m offsetMap) source(off int) int {
+	i := sort.Search(len(m), func(i int) bool { return m[i].at > off })
+	if i == 0 {
+		return off
+	}
+	return off - m[i-1].delta
+}
+
 // parserInput returns the source to give the HCL parser, the offsets (in that
-// source) at which a heredoc begins, whose values need unescapeHeredoc, and the
+// source) at which a heredoc begins, whose values need unescapeHeredoc, the
 // text of the number that begins at each offset (the reader writes a number from
-// its own text, see canonicalNumber).
-func parserInput(src []byte, tokens hclsyntax.Tokens) ([]byte, map[int]bool, map[int]string) {
+// its own text, see canonicalNumber), and the map from offsets in that source
+// back to the original.
+func parserInput(src []byte, tokens hclsyntax.Tokens) ([]byte, map[int]bool, map[int]string, offsetMap) {
 	var out []byte
+	var offsets offsetMap
 	heredocs := map[int]bool{}
 	numbers := map[int]string{}
 	last := 0
@@ -72,8 +93,13 @@ func parserInput(src []byte, tokens hclsyntax.Tokens) ([]byte, map[int]bool, map
 		out = append(out, src[last:t.Range.Start.Byte]...)
 		out = append(out, rewritten...)
 		last = t.Range.End.Byte
+		delta := len(rewritten) - len(t.Bytes)
+		if n := len(offsets); n > 0 {
+			delta += offsets[n-1].delta
+		}
+		offsets = append(offsets, shift{at: len(out), delta: delta})
 	}
-	return append(out, src[last:]...), heredocs, numbers
+	return append(out, src[last:]...), heredocs, numbers, offsets
 }
 
 // rewriteText replaces `$` and `%` in the text of a literal token by dollar and

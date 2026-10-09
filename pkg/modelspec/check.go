@@ -5,10 +5,11 @@ import (
 	"strings"
 )
 
-// ReservedNames are the five kind tokens that no concept may be named
-// (ModelSpec decision 0015).
+// ReservedNames are the kind tokens that no concept may be named (ModelSpec
+// decision 0015): the five it lists, and records, the word that replaces entities
+// (decision 0018 leaves that open; reserving it is the conservative answer).
 var ReservedNames = map[string]bool{
-	"entities": true, "components": true, "enums": true, "collections": true, "recordsets": true,
+	"entities": true, "components": true, "enums": true, "collections": true, "recordsets": true, "records": true,
 }
 
 // PrimitiveTypes is the type vocabulary of ModelSpec v0 (spec/core-model.md).
@@ -37,32 +38,20 @@ var constraintAttrs = map[string]valueKind{
 }
 
 var conceptAttrs = map[Kind]map[string]valueKind{
-	KindEntity:     {"key": vStringList, "use": vStringList},
-	KindComponent:  {},
-	KindEnum:       {"values": vEnumValues},
-	KindCollection: {"kind": vString, "source": vString, "query": vString},
-	KindRecordset:  {"key": vStringList, "query": vString},
+	KindRecord:    {"key": vStringList, "use": vStringList},
+	KindComponent: {},
+	KindEnum:      {"values": vEnumValues},
 }
 
-// memberAttrs lists the attributes a member of the kind may carry: a type or a
-// reference, the constraints, and for collection fields and recordset columns
-// the `bind` and `source` mappings.
-func memberAttrs(k Kind) map[string]valueKind {
-	attrs := map[string]valueKind{"type": vString, "enum": vEnum}
+// memberAttrs lists the attributes a member of a record or a component may
+// carry: a type or a reference to a record or a component, and the constraints.
+var memberAttrs = func() map[string]valueKind {
+	attrs := map[string]valueKind{"type": vString, "enum": vEnum, "record": vString, "component": vString}
 	for n, v := range constraintAttrs {
 		attrs[n] = v
 	}
-	switch k {
-	case KindRecordset:
-		attrs["bind"], attrs["source"] = vString, vString
-	case KindCollection:
-		attrs["bind"] = vString
-		attrs["entity"], attrs["component"] = vString, vString
-	default:
-		attrs["entity"], attrs["component"] = vString, vString
-	}
 	return attrs
-}
+}()
 
 // unit is one module as Check sees it: the models of one Group.
 type unit struct {
@@ -75,7 +64,7 @@ type unit struct {
 }
 
 // unitIndex finds the concepts of a unit by kind and name, and the kind of a
-// name in the entity/component/enum scope, in one pass over the unit. Looking a
+// name in the record/component/enum scope, in one pass over the unit. Looking a
 // concept up used to scan every concept of every file, once for each reference.
 type unitIndex struct {
 	byKind map[Kind]map[string]*Concept
@@ -98,10 +87,8 @@ func (u *unit) index() *unitIndex {
 			if _, seen := idx.byKind[c.Kind][c.Name]; !seen {
 				idx.byKind[c.Kind][c.Name] = c
 			}
-			if c.Kind == KindEntity || c.Kind == KindComponent || c.Kind == KindEnum {
-				if _, seen := idx.trio[c.Name]; !seen {
-					idx.trio[c.Name] = c.Kind
-				}
+			if _, seen := idx.trio[c.Name]; !seen {
+				idx.trio[c.Name] = c.Kind
 			}
 		}
 	}
@@ -113,7 +100,7 @@ func (u *unit) find(kind Kind, name string) *Concept {
 	return u.index().byKind[kind][name]
 }
 
-// trioKind returns the kind of the entity, component or enum with the name.
+// trioKind returns the kind of the record, component or enum with the name.
 func (u *unit) trioKind(name string) (Kind, bool) {
 	kind, ok := u.index().trio[name]
 	return kind, ok
@@ -182,7 +169,7 @@ type checker struct {
 // steps counts the work that lookups do, in units that do not depend on time: the
 // concepts visited to index the units, the members listed to build member sets,
 // and the sets and names consulted or copied to answer whether a name is a
-// property. Tests assert that it grows with the size of the model, and not with
+// field. Tests assert that it grows with the size of the model, and not with
 // the number of lookups.
 func (c *checker) steps() (concepts, members, probes int) {
 	for _, u := range c.units {
@@ -199,7 +186,7 @@ func (c *checker) steps() (concepts, members, probes int) {
 const heredocHint = " (the name ends with a line break; HCL keeps the final line break of a heredoc, so a heredoc is never a valid name: write it as a quoted string)"
 
 // nameRules are the rules whose findings echo a name: a type, a reference, a key, a kind.
-var nameRules = map[string]bool{RuleType: true, RuleReference: true, RuleKey: true, RuleCollection: true}
+var nameRules = map[string]bool{RuleType: true, RuleReference: true, RuleKey: true}
 
 func (c *checker) add(line int, rule string, sev Severity, format string, args ...any) {
 	lineBreak := false
@@ -220,14 +207,9 @@ func (c *checker) errorf(line int, rule, format string, args ...any) {
 	c.add(line, rule, SeverityError, format, args...)
 }
 
-func conceptScope(k Kind) string {
-	switch k {
-	case KindEntity, KindComponent, KindEnum:
-		return "entity/component/enum"
-	default:
-		return string(k)
-	}
-}
+// scope is the one name scope of records, components and enums (decisions 0015
+// and 0019).
+const scope = "record/component/enum"
 
 // quote1 quotes a piece of the user's text for a message, cut to MaxEchoBytes.
 func quote1(s string) string { return fmt.Sprintf("%q", clipText(s, MaxEchoBytes)) }
@@ -244,6 +226,7 @@ func (c *checker) unit(u *unit) {
 			continue
 		}
 		c.cur = m
+		c.deprecated(m)
 		if m.Twin {
 			c.staleTwin(m)
 		}
@@ -251,22 +234,41 @@ func (c *checker) unit(u *unit) {
 			c.names(k)
 			c.attrs(string(k.Kind)+" "+quote1(k.Name), k.Attrs, conceptAttrs[k.Kind])
 			switch k.Kind {
-			case KindEntity:
-				c.entity(u, k)
+			case KindRecord:
+				c.record(u, k)
 			case KindComponent:
 				c.members(u, k)
-			case KindEnum:
-				c.enum(k)
-			case KindCollection:
-				c.collection(u, k)
 			default:
-				c.recordset(u, k)
+				c.enum(k)
 			}
 		}
 	}
 	if c.opts.publish() {
 		c.publishUnit(u)
 	}
+}
+
+// deprecated gives the one finding about the old spelling a file uses (decisions
+// 0018, 0020 and 0022): at the line of the first one, or for JSON at the line of
+// the format identifier, with how many the file holds. Its severity is
+// OldSpellingSeverity.
+func (c *checker) deprecated(m *Model) {
+	if len(m.Old) == 0 {
+		return
+	}
+	line := m.Old[0].Line
+	var what string
+	if m.Form == FormJSON {
+		// The identifier is always the first thing the walk records, but not the first
+		// in the file when "modelspec" is not the first key.
+		if v, ok := m.Root.Get("modelspec"); ok {
+			line = v.Line
+		}
+		what = fmt.Sprintf("is in format %s and holds %s: that identifier, and the keys entities, properties and entity, are the old spellings of %s, records, fields and record", OldSpecVersion, plural(len(m.Old), "old spelling", "old spellings"), SpecVersion)
+	} else {
+		what = fmt.Sprintf("holds %s: entity, property and entity = are the old spellings of record, field and record =", plural(len(m.Old), "old spelling", "old spellings"))
+	}
+	c.add(line, RuleDeprecated, OldSpellingSeverity, "%s (decision 0018, decision 0020); modelspec rewrite %s rewrites the file", what, quote1(m.File))
 }
 
 // duplicates reports a concept name declared twice in one name scope of the
@@ -291,15 +293,14 @@ func (c *checker) duplicates(u *unit) {
 		}
 		c.cur = m
 		for _, k := range m.Concepts {
-			key := conceptScope(k.Kind) + "\x00" + k.Name
-			if prev, dup := seen[key]; dup {
-				c.errorf(k.Line, RuleDuplicate, "duplicate concept name %q in the %s scope (also declared at %s)", k.Name, conceptScope(k.Kind), where(prev, m))
+			if prev, dup := seen[k.Name]; dup {
+				c.errorf(k.Line, RuleDuplicate, "duplicate concept name %q in the %s scope (also declared at %s)", k.Name, scope, where(prev, m))
 				continue
 			}
-			seen[key] = decl{m, k.Line, k.Name}
-			fkey := conceptScope(k.Kind) + "\x00" + strings.ToLower(k.Name)
+			seen[k.Name] = decl{m, k.Line, k.Name}
+			fkey := strings.ToLower(k.Name)
 			if prev, dup := folded[fkey]; dup {
-				c.add(k.Line, RuleNameCase, SeverityWarning, "%s name %q differs only by case from %q (declared at %s) in the %s scope; on a case-insensitive store they collide", k.Kind, k.Name, prev.name, where(prev, m), conceptScope(k.Kind))
+				c.add(k.Line, RuleNameCase, SeverityWarning, "%s name %q differs only by case from %q (declared at %s) in the %s scope; on a case-insensitive store they collide", k.Kind, k.Name, prev.name, where(prev, m), scope)
 				continue
 			}
 			folded[fkey] = decl{m, k.Line, k.Name}
@@ -308,13 +309,13 @@ func (c *checker) duplicates(u *unit) {
 }
 
 // names checks a concept's name: the standard forbids a dot (decision 0014)
-// and the five reserved tokens (decision 0015), and nothing else.
+// and the reserved tokens (decision 0015), and nothing else.
 func (c *checker) names(k *Concept) {
 	switch {
 	case strings.TrimSpace(k.Name) == "":
 		c.errorf(k.Line, RuleNameForm, "%s name must not be empty or blank; it could never be referenced", k.Kind)
 	case ReservedNames[k.Name]:
-		c.errorf(k.Line, RuleReserved, "%s name %q is a reserved kind token (entities, components, enums, collections, recordsets) and cannot name a concept", k.Kind, k.Name)
+		c.errorf(k.Line, RuleReserved, "%s name %q is a reserved kind token (records, entities, components, enums, collections, recordsets) and cannot name a concept", k.Kind, k.Name)
 	case strings.Contains(k.Name, "."):
 		c.errorf(k.Line, RuleNameForm, "%s name %q must not contain a dot (decision 0014: a dot marks a module-qualified reference)", k.Kind, k.Name)
 	}
@@ -416,11 +417,11 @@ func (c *checker) valueList(line int, who string, vals []string) {
 	}
 }
 
-// ---- entities, components and their members
+// ---- records, components and their members
 
-func (c *checker) entity(u *unit, k *Concept) {
+func (c *checker) record(u *unit, k *Concept) {
 	c.members(u, k)
-	who := "entity " + quote1(k.Name)
+	who := "record " + quote1(k.Name)
 	if use, ok := k.Attr("use"); ok {
 		if names, ok := use.Value.stringList(); ok {
 			for _, n := range names {
@@ -430,7 +431,7 @@ func (c *checker) entity(u *unit, k *Concept) {
 	}
 	key, ok := k.Attr("key")
 	if !ok {
-		return // an entity may describe a concept whose records have no declared identity
+		return // a record may describe a concept whose rows have no declared identity
 	}
 	names, ok := key.Value.stringList()
 	if !ok {
@@ -439,7 +440,7 @@ func (c *checker) entity(u *unit, k *Concept) {
 	if len(names) == 0 {
 		c.errorf(key.Line, RuleKey, "%s has an empty key", who)
 	}
-	known := c.propertyNames(u, k)
+	known := c.fieldNames(u, k)
 	seen := make(map[string]bool, len(names))
 	for _, n := range names {
 		if seen[n] {
@@ -447,20 +448,20 @@ func (c *checker) entity(u *unit, k *Concept) {
 		}
 		seen[n] = true
 		if known.complete && !known.has(n) {
-			c.errorf(key.Line, RuleKey, "%s key %q is not a property of the entity (or of a component it uses)", who, n)
+			c.errorf(key.Line, RuleKey, "%s key %q is not a field of the record (or of a component it uses)", who, n)
 		}
 	}
 }
 
-// propSet answers whether a name is a property of an entity: one of its own, or
+// propSet answers whether a name is a field of a record: one of its own, or
 // a field of a component it uses (which may be in the module's other files or in
 // another module, decision 0014). complete is false when some used component
 // could not be read, so a name's absence proves nothing.
 //
 // The names of a component's fields are kept once for the component, and not
-// copied into every entity that uses it. Lookups go through the used components
+// copied into every record that uses it. Lookups go through the used components
 // one by one until that would cost more than copying their fields into one set,
-// which is then built once; so the work for an entity is at most about the lesser
+// which is then built once; so the work for a record is at most about the lesser
 // of (lookups x used components) and the fields of the components it uses.
 type propSet struct {
 	own      map[string]bool
@@ -511,9 +512,9 @@ func (c *checker) memberSet(k *Concept) map[string]bool {
 	return set
 }
 
-// propertyNames returns the properties of the entity k of unit u, built once for
-// each entity.
-func (c *checker) propertyNames(u *unit, k *Concept) *propSet {
+// fieldNames returns the fields of the record k of unit u, built once for each
+// record.
+func (c *checker) fieldNames(u *unit, k *Concept) *propSet {
 	if p, ok := c.props[k]; ok {
 		return p
 	}
@@ -546,48 +547,41 @@ func (c *checker) propertyNames(u *unit, k *Concept) *propSet {
 	return p
 }
 
-// members checks the properties of an entity or the fields of a component or
-// collection.
+// members checks the fields of a record or a component.
 func (c *checker) members(u *unit, k *Concept) {
-	allowed := memberAttrs(k.Kind)
 	seen := map[string]int{}
 	foldedMembers := map[string]string{}
 	for _, mem := range k.Members {
-		who := fmt.Sprintf("%s %s %s %s", k.Kind, quote1(k.Name), memberWord(k.Kind), quote1(mem.Name))
+		who := fmt.Sprintf("%s %s %s %s", k.Kind, quote1(k.Name), memberWord, quote1(mem.Name))
 		if strings.TrimSpace(mem.Name) == "" {
-			c.errorf(mem.Line, RuleNameForm, "%s name must not be empty or blank in %s %q; it could never be referenced", memberWord(k.Kind), k.Kind, k.Name)
+			c.errorf(mem.Line, RuleNameForm, "%s name must not be empty or blank in %s %q; it could never be referenced", memberWord, k.Kind, k.Name)
 		}
 		if prev, dup := seen[mem.Name]; dup {
-			c.errorf(mem.Line, RuleDuplicate, "duplicate %s %q in %s %q (also declared at line %d)", memberWord(k.Kind), mem.Name, k.Kind, k.Name, prev)
+			c.errorf(mem.Line, RuleDuplicate, "duplicate %s %q in %s %q (also declared at line %d)", memberWord, mem.Name, k.Kind, k.Name, prev)
 		} else if prevName, ok := foldedMembers[strings.ToLower(mem.Name)]; ok {
-			c.add(mem.Line, RuleNameCase, SeverityWarning, "%s name %q differs only by case from %q in %s %q; on a case-insensitive store they collide", memberWord(k.Kind), mem.Name, prevName, k.Kind, k.Name)
+			c.add(mem.Line, RuleNameCase, SeverityWarning, "%s name %q differs only by case from %q in %s %q; on a case-insensitive store they collide", memberWord, mem.Name, prevName, k.Kind, k.Name)
 			seen[mem.Name] = mem.Line
 		} else {
 			seen[mem.Name] = mem.Line
 			foldedMembers[strings.ToLower(mem.Name)] = mem.Name
 		}
-		c.attrs(who, mem.Attrs, allowed)
-		if k.Kind == KindEntity || k.Kind == KindComponent {
-			c.memberKind(who, mem)
-		}
+		c.attrs(who, mem.Attrs, memberAttrs)
+		c.memberKind(who, mem)
 		c.memberRefs(u, who, mem)
-		if a, ok := mem.Attr("bind"); ok && k.Kind == KindCollection && a.Value.Type == NodeString {
-			c.bind(u, a, who)
-		}
 	}
 }
 
-// memberKind requires exactly one of type, entity and component
+// memberKind requires exactly one of type, record and component
 // (spec/json-format.md: "Property objects MAY use one of").
 func (c *checker) memberKind(who string, mem Member) {
 	n := 0
-	for _, name := range []string{"type", "entity", "component"} {
+	for _, name := range []string{"type", "record", "component"} {
 		if _, ok := mem.Attr(name); ok {
 			n++
 		}
 	}
 	if n != 1 {
-		c.errorf(mem.Line, RuleMemberKind, "%s must have exactly one of type, entity or component", who)
+		c.errorf(mem.Line, RuleMemberKind, "%s must have exactly one of type, record or component", who)
 	}
 }
 
@@ -599,7 +593,7 @@ func (c *checker) memberRefs(u *unit, who string, mem Member) {
 	for _, r := range []struct {
 		attr string
 		kind Kind
-	}{{"entity", KindEntity}, {"component", KindComponent}} {
+	}{{"record", KindRecord}, {"component", KindComponent}} {
 		if a, ok := mem.Attr(r.attr); ok && a.Value.Type == NodeString {
 			c.ref(u, a.Line, who+" "+r.attr, a.Value.Str, r.kind)
 		}
@@ -685,81 +679,6 @@ func (c *checker) ref(u *unit, line int, what, ref string, kind Kind) {
 	c.errorf(line, RuleReference, "%s reference %q does not resolve to %s in module %q", what, ref, withArticle(kind), target.name)
 }
 
-// bind checks a bind value, <Entity>.<property> or <module>.<Entity>.<property>.
-func (c *checker) bind(u *unit, a *Attr, who string) {
-	parts := strings.Split(a.Value.Str, ".")
-	if len(parts) != 2 && len(parts) != 3 {
-		c.errorf(a.Line, RuleReference, "%s bind %q must be <Entity>.<property> or <module>.<Entity>.<property>", who, a.Value.Str)
-		return
-	}
-	prop := parts[len(parts)-1]
-	entityRef := strings.Join(parts[:len(parts)-1], ".")
-	target, name, problem := c.lookup(u, entityRef)
-	if problem != "" {
-		c.errorf(a.Line, RuleReference, "%s bind %q: %s", who, a.Value.Str, problem)
-		return
-	}
-	if target == nil || target.broken {
-		return
-	}
-	ent := target.find(KindEntity, name)
-	if ent == nil {
-		c.errorf(a.Line, RuleReference, "%s bind %q: no entity %q in module %q", who, a.Value.Str, name, target.name)
-		return
-	}
-	if known := c.propertyNames(target, ent); known.complete && !known.has(prop) {
-		c.errorf(a.Line, RuleReference, "%s bind %q: entity %q has no property %q (or component field of that name)", who, a.Value.Str, name, prop)
-	}
-}
-
-// ---- collections and recordsets
-
-func (c *checker) collection(u *unit, k *Concept) {
-	c.members(u, k)
-	who := "collection " + quote1(k.Name)
-	kind, hasKind := k.Attr("kind")
-	if hasKind && kind.Value.Type == NodeString {
-		switch kind.Value.Str {
-		case "editable":
-		case "computed":
-			if _, ok := k.Attr("query"); !ok {
-				c.add(kind.Line, RuleCollection, SeverityWarning, "%s is computed but carries no query (computed collections should)", who)
-			}
-		default:
-			c.errorf(kind.Line, RuleCollection, "%s kind is %q; it must be editable or computed", who, kind.Value.Str)
-		}
-	} else if !hasKind {
-		c.errorf(k.Line, RuleCollection, "%s has no kind; it must be editable or computed", who)
-	}
-	if src, ok := k.Attr("source"); ok && src.Value.Type == NodeString {
-		c.ref(u, src.Line, who+" source", src.Value.Str, KindEntity)
-	}
-}
-
-func (c *checker) recordset(u *unit, k *Concept) {
-	allowed := memberAttrs(KindRecordset)
-	for _, col := range k.Members {
-		who := fmt.Sprintf("recordset %s column %s", quote1(k.Name), quote1(col.Name))
-		c.attrs(who, col.Attrs, allowed)
-		if a, ok := col.Attr("type"); ok && a.Value.Type == NodeString {
-			c.typeName(a, who)
-		}
-		if a, ok := col.Attr("bind"); ok && a.Value.Type == NodeString {
-			c.bind(u, a, who)
-		}
-	}
-	if key, ok := k.Attr("key"); ok {
-		if names, ok := key.Value.stringList(); ok {
-			columns := c.memberSet(k)
-			for _, n := range names {
-				if !columns[n] {
-					c.errorf(key.Line, RuleKey, "recordset %q key %q is not one of its columns", k.Name, n)
-				}
-			}
-		}
-	}
-}
-
 // ---- the publish profile
 
 // publishUnit applies the rules of the publish profile that concern the module
@@ -767,25 +686,25 @@ func (c *checker) recordset(u *unit, k *Concept) {
 // (parseModelSpec in openvaultdb/directory) refuses a model without it; the
 // standard does not require it.
 func (c *checker) publishUnit(u *unit) {
-	entities := 0
+	records := 0
 	for _, m := range u.models {
 		if m.Broken {
 			continue
 		}
 		c.cur = m
 		for _, k := range m.Concepts {
-			if k.Kind == KindEntity {
-				entities++
-				c.publishEntity(u, k)
+			if k.Kind == KindRecord {
+				records++
+				c.publishRecord(u, k)
 			}
 		}
 		if m.Form == FormJSON && m.Module != nil {
 			c.publishModuleName(m)
 		}
 	}
-	if entities == 0 && !u.broken {
+	if records == 0 && !u.broken {
 		c.cur = u.models[0]
-		c.errorf(1, RulePublishEntities, "has no entities; a published model declares at least one entity (the catalogue lists a model by its entities)")
+		c.errorf(1, RulePublishRecords, "has no records; a published model declares at least one record (the catalogue lists a model by its records)")
 	}
 }
 
@@ -799,23 +718,23 @@ func (c *checker) publishModuleName(m *Model) {
 	}
 }
 
-func (c *checker) publishEntity(u *unit, k *Concept) {
+func (c *checker) publishRecord(u *unit, k *Concept) {
 	if !identifier.MatchString(k.Name) {
-		c.errorf(k.Line, RulePublishNameForm, "entity name %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue turns entity names into record-set names", k.Name)
+		c.errorf(k.Line, RulePublishNameForm, "record name %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue turns record names into record-set names", k.Name)
 	}
 	if len(k.Members) == 0 {
-		c.errorf(k.Line, RulePublishProperties, "entity %q has no properties of its own; the catalogue lists an entity by its properties", k.Name)
+		c.errorf(k.Line, RulePublishFields, "record %q has no fields of its own; the catalogue lists a record by its fields", k.Name)
 	}
 	for _, mem := range k.Members {
-		who := fmt.Sprintf("entity %s property %s", quote1(k.Name), quote1(mem.Name))
+		who := fmt.Sprintf("record %s field %s", quote1(k.Name), quote1(mem.Name))
 		if !identifier.MatchString(mem.Name) {
-			c.errorf(mem.Line, RulePublishNameForm, "property name %q of entity %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue turns property names into column names", mem.Name, k.Name)
+			c.errorf(mem.Line, RulePublishNameForm, "field name %q of record %q is not an identifier (letters, digits and _, not starting with a digit); the catalogue turns field names into column names", mem.Name, k.Name)
 		}
 		if a, ok := mem.Attr("component"); ok {
-			c.errorf(a.Line, RulePublishComponent, "%s has a component value; the catalogue lists only scalar and entity-reference properties", who)
+			c.errorf(a.Line, RulePublishComponent, "%s has a component value; the catalogue lists only scalar and record-reference fields", who)
 		}
-		if a, ok := mem.Attr("entity"); ok && a.Value.Type == NodeString && strings.Contains(a.Value.Str, ".") {
-			c.errorf(a.Line, RulePublishQualified, "%s refers to %q in another module; the catalogue resolves entity references inside the one model only", who, a.Value.Str)
+		if a, ok := mem.Attr("record"); ok && a.Value.Type == NodeString && strings.Contains(a.Value.Str, ".") {
+			c.errorf(a.Line, RulePublishQualified, "%s refers to %q in another module; the catalogue resolves record references inside the one model only", who, a.Value.Str)
 		}
 	}
 }
@@ -833,5 +752,5 @@ func (c *checker) staleTwin(m *Model) {
 	if err != nil || diff == "" {
 		return // an HCL file that cannot be exported cannot have a twin to compare with
 	}
-	c.add(1, RuleStaleTwin, SeverityWarning, "stale twin: %s is not what %s exports to (%s); run modelspec export", m.File, h.File, diff)
+	c.add(1, RuleStaleTwin, SeverityWarning, "stale twin: %s is not what %s exports to (%s); run modelspec export%s", m.File, h.File, diff, vocabularyNote(h, m.Root))
 }

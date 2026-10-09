@@ -1,0 +1,23 @@
+{
+  "modelspec": "1.0-draft",
+  "module": {
+    "id": "github.com/acme/mixed",
+    "name": "mixed",
+    "version": "0.1.0"
+  },
+  "records": {
+    "A": {
+      "key": [
+        "id"
+      ],
+      "fields": {
+        "id": {
+          "type": "int"
+        },
+        "self": {
+          "record": "A"
+        }
+      }
+    }
+  }
+}

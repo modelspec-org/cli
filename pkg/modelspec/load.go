@@ -27,6 +27,10 @@ type FS interface {
 	// directory (created exclusively, removed on failure) and a rename, so that what is
 	// at name is replaced and never followed, and a reader never sees half a file.
 	WriteFile(name string, data []byte, perm fs.FileMode) error
+	// EvalSymlinks returns the file that a symbolic link names, every link on the
+	// way followed. modelspec rewrite writes there, so that a link named on the
+	// command line stays a link and its target is rewritten.
+	EvalSymlinks(name string) (string, error)
 	// Abs returns the absolute form of a path, cleaned, with symbolic links left
 	// as they are: the path as the file was given or found. The SpecScore layout
 	// is read from it.
@@ -195,7 +199,8 @@ func writeAndClose(w io.WriteCloser, data []byte) error {
 	}
 	return err
 }
-func (OSFS) SameFile(a, b fs.FileInfo) bool { return os.SameFile(a, b) }
+func (OSFS) SameFile(a, b fs.FileInfo) bool           { return os.SameFile(a, b) }
+func (OSFS) EvalSymlinks(name string) (string, error) { return filepath.EvalSymlinks(name) }
 func (o OSFS) Abs(name string) (string, error) {
 	if !filepath.IsAbs(name) {
 		getwd := o.getwd
@@ -541,6 +546,36 @@ func (d *discovery) expand() ([]string, error) {
 	return notes, nil
 }
 
+// addAll adds the paths given on the command line, then the files assigned to
+// modules, which may be any .hcl file.
+func (d *discovery) addAll(paths []string, assign []Assignment) error {
+	for _, p := range paths {
+		if err := d.addPath(p, false); err != nil {
+			return err
+		}
+	}
+	for _, a := range assign {
+		d.module = a.Module
+		if err := d.addPath(a.Path, true); err != nil {
+			return err
+		}
+	}
+	d.module = ""
+	return nil
+}
+
+// DiscoverModules is Discover for the paths together with the files assigned to
+// modules (--module name=path), which may be any .hcl file, as Lint takes them.
+// The module names play no part: the result is the files.
+func DiscoverModules(fsys FS, paths []string, assign []Assignment) ([]Source, []Finding, error) {
+	d := newDiscovery(fsys)
+	if err := d.addAll(paths, assign); err != nil {
+		return nil, nil, err
+	}
+	SortFindings(d.findings)
+	return d.sorted(), d.findings, nil
+}
+
 // Assignment places the model files under Path (a file or a directory) in module
 // Module (--module Module=Path). It wins over every other module rule.
 type Assignment struct {
@@ -744,18 +779,9 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	var res Result
 	var err error
 	d := newDiscovery(fsys)
-	for _, p := range paths {
-		if err := d.addPath(p, false); err != nil {
-			return res, err
-		}
+	if err := d.addAll(paths, opts.Modules); err != nil {
+		return res, err
 	}
-	for _, a := range opts.Modules {
-		d.module = a.Module
-		if err := d.addPath(a.Path, true); err != nil {
-			return res, err
-		}
-	}
-	d.module = ""
 	if len(d.out) == 0 && len(d.skipped) == 0 {
 		return res, errors.New("no ModelSpec files (" + HCLSuffix + ", " + JSONSuffix + ") found in " + strings.Join(paths, ", "))
 	}

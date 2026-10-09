@@ -1,0 +1,50 @@
+{
+  "modelspec": "1.0-draft-2",
+  "module": {
+    "id": "github.com/acme/notes",
+    "name": "notes",
+    "version": "0.1.0"
+  },
+  "records": {
+    "Note": {
+      "key": [
+        "id"
+      ],
+      "fields": {
+        "id": {
+          "type": "uuid",
+          "required": true
+        },
+        "title": {
+          "type": "string",
+          "max_len": 120
+        },
+        "author": {
+          "record": "Author"
+        }
+      }
+    },
+    "Author": {
+      "key": [
+        "id"
+      ],
+      "fields": {
+        "id": {
+          "type": "uuid"
+        },
+        "wallet": {
+          "component": "Money"
+        }
+      }
+    }
+  },
+  "components": {
+    "Money": {
+      "fields": {
+        "amount": {
+          "type": "decimal"
+        }
+      }
+    }
+  }
+}

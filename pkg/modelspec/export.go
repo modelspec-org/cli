@@ -7,26 +7,22 @@ import (
 )
 
 // JSON builds the JSON interchange form of the model: the "modelspec" field,
-// "module", then the groups components, enums, entities, collections,
-// recordsets, projections and migrations, in that order. Concepts keep source
-// order. An entity's or collection's attributes come first, then its members;
-// recordset columns are an ordered array with "name" first (decision 0007).
+// "module", then the groups components, enums and records, in that order.
+// Concepts keep source order. A record's attributes come first, then its members.
 //
-// The mapping is exactly the one spec/json-format.md defines. Two things it
-// leaves open are refused rather than invented: HCL `index`, `projection` and
-// `migration` blocks (no document says how they map to JSON), and module
-// identity for HCL, which the grammar has no place for, so the caller must
-// supply id and version (the format requires those two; name is written only
-// when given, or when the model refers to its own module by name). A model read from JSON already has its identity, which id
-// overrides when non-zero.
+// The form is written in the vocabulary of the model's source (decision 0022,
+// step 1): a model with no old spelling is "1.0-draft-2", with records, fields
+// and record, and a model with any old spelling is "1.0-draft", with entities,
+// properties and entity, so that a committed copy stays what its source exports
+// to until modelspec rewrite brings both up to date.
+//
+// The mapping is exactly the one spec/json-format.md defines. What it leaves
+// open is refused rather than invented: module identity for HCL, which the
+// grammar has no place for, so the caller must supply id and version (the
+// format requires those two; name is written only when given, or when the model
+// refers to its own module by name). A model read from JSON already has its
+// identity, which id overrides when non-zero.
 func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
-	if len(m.Unmapped) > 0 {
-		parts := make([]string, len(m.Unmapped))
-		for i, u := range m.Unmapped {
-			parts[i] = fmt.Sprintf("line %d: %s", u.Line, u.What)
-		}
-		return nil, fmt.Errorf("cannot export: no JSON form is defined for %s (%s)", plural(len(m.Unmapped), "construct", "constructs"), strings.Join(parts, "; "))
-	}
 	if id == (ModuleIdentity{}) && m.Module != nil {
 		id = *m.Module
 	}
@@ -47,23 +43,25 @@ func (m *Model) JSON(id ModuleIdentity) (*Node, error) {
 		module.Fields = append(module.Fields, field("name", str(id.Name)))
 	}
 	module.Fields = append(module.Fields, field("version", str(id.Version)))
-	root := obj(field("modelspec", str(SpecVersion)), field("module", module))
-	for _, g := range jsonGroups {
+	version, recordsKey, membersKey, refKey := SpecVersion, "records", "fields", "record"
+	if m.OldVocabulary() {
+		version, recordsKey, membersKey, refKey = OldSpecVersion, "entities", "properties", "entity"
+	}
+	root := obj(field("modelspec", str(version)), field("module", module))
+	for _, g := range []struct {
+		key     string
+		kind    Kind
+		members string
+	}{{"components", KindComponent, "fields"}, {"enums", KindEnum, ""}, {recordsKey, KindRecord, membersKey}} {
 		var fields []Field
 		for _, k := range m.Concepts {
 			if k.Kind == g.kind {
-				fields = append(fields, field(k.Name, conceptNode(k, g.members)))
+				fields = append(fields, field(k.Name, conceptNode(k, g.members, refKey)))
 			}
 		}
 		if len(fields) > 0 {
 			root.Fields = append(root.Fields, field(g.key, &Node{Type: NodeObject, Fields: fields}))
 		}
-	}
-	if m.Projections != nil {
-		root.Fields = append(root.Fields, field("projections", m.Projections))
-	}
-	if m.Migrations != nil {
-		root.Fields = append(root.Fields, field("migrations", m.Migrations))
 	}
 	return root, nil
 }
@@ -75,29 +73,23 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
-func conceptNode(k *Concept, membersKey string) *Node {
+// conceptNode builds a concept's object: its attributes, then its members under
+// membersKey, in which a reference to a record is written under refKey.
+func conceptNode(k *Concept, membersKey, refKey string) *Node {
 	n := obj()
 	for _, a := range k.Attrs {
 		n.Fields = append(n.Fields, field(a.Name, a.Value))
 	}
-	switch {
-	case membersKey == "":
-	case k.Kind == KindRecordset:
-		cols := &Node{Type: NodeArray}
-		for _, col := range k.Members {
-			cn := obj(field("name", str(col.Name)))
-			for _, a := range col.Attrs {
-				cn.Fields = append(cn.Fields, field(a.Name, a.Value))
-			}
-			cols.Items = append(cols.Items, cn)
-		}
-		n.Fields = append(n.Fields, field(membersKey, cols))
-	default:
+	if membersKey != "" {
 		members := obj()
 		for _, mem := range k.Members {
 			mn := obj()
 			for _, a := range mem.Attrs {
-				mn.Fields = append(mn.Fields, field(a.Name, a.Value))
+				name := a.Name
+				if name == "record" {
+					name = refKey
+				}
+				mn.Fields = append(mn.Fields, field(name, a.Value))
 			}
 			members.Fields = append(members.Fields, field(mem.Name, mn))
 		}
@@ -131,9 +123,19 @@ func (m *Model) exportDrift(committed []byte, id ModuleIdentity) string {
 		return err.Error()
 	}
 	if diff != "" {
-		return fmt.Sprintf("the committed JSON is not what %s exports to: %s", m.File, diff)
+		return fmt.Sprintf("the committed JSON is not what %s exports to: %s%s", m.File, diff, vocabularyNote(m, want))
 	}
 	return ""
+}
+
+// vocabularyNote is what to add to a difference between a model's export and a
+// JSON document when they are in different vocabularies: the fix is the rewrite.
+func vocabularyNote(m *Model, doc *Node) string {
+	v, ok := doc.Get("modelspec")
+	if !ok || v.Type != NodeString || (v.Str != SpecVersion && v.Str != OldSpecVersion) || (v.Str == OldSpecVersion) == m.OldVocabulary() {
+		return ""
+	}
+	return "; the two are in different vocabularies (the old entities, properties and entity, and the new records, fields and record), and modelspec rewrite on both files brings the pair in line"
 }
 
 // exportDiff compares the export of the model, with the identity id, with a
@@ -167,8 +169,8 @@ func identityOf(root *Node) ModuleIdentity {
 }
 
 // refersTo reports whether the model has a module-qualified reference into the
-// module of that name: <name>.<Concept> in an entity, component, enum or use
-// reference or a collection source, or <name>.<Entity>.<property> in a bind.
+// module of that name: <name>.<Concept> in a record, component, enum or use
+// reference.
 func (m *Model) refersTo(name string) bool {
 	qualified := func(s string) bool { return strings.HasPrefix(s, name+".") }
 	check := func(a Attr) bool {
@@ -180,11 +182,8 @@ func (m *Model) refersTo(name string) bool {
 					return true
 				}
 			}
-		case "source", "entity", "component", "enum":
+		case "record", "component", "enum":
 			return a.Value.Type == NodeString && qualified(a.Value.Str)
-		case "bind":
-			parts := strings.Split(a.Value.Str, ".")
-			return a.Value.Type == NodeString && len(parts) == 3 && parts[0] == name
 		}
 		return false
 	}

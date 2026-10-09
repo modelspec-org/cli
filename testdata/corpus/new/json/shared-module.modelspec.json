@@ -1,0 +1,24 @@
+{
+  "modelspec": "1.0-draft-2",
+  "module": {
+    "id": "github.com/acme/shared",
+    "version": "0.1.0"
+  },
+  "components": {
+    "TimeWindow": {
+      "fields": {
+        "start": {
+          "type": "datetime"
+        }
+      }
+    }
+  },
+  "enums": {
+    "SpaceRole": {
+      "values": [
+        "owner",
+        "member"
+      ]
+    }
+  }
+}

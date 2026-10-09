@@ -28,6 +28,9 @@ type memFS struct {
 	reads    []string
 	special  map[string]fs.FileMode // files that are not regular: a device, a pipe
 	lstatErr map[string]error       // paths that cannot be asked about
+	links    map[string]string      // symbolic links (they are also in special) and the files they name
+	linkErr  map[string]error       // links that cannot be followed
+	openErr  map[string]error       // files that cannot be opened
 }
 
 // endless is a file that never ends: what a device is.
@@ -39,6 +42,9 @@ func (e endless) Stat() (fs.FileInfo, error) { return e.info, nil }
 
 func (m *memFS) Open(name string) (fs.File, error) {
 	m.reads = append(m.reads, name)
+	if err, ok := m.openErr[filepath.Clean(name)]; ok {
+		return nil, err
+	}
 	if _, ok := m.special[filepath.Clean(name)]; ok {
 		info, err := m.Stat(name)
 		return endless{info}, err
@@ -49,6 +55,13 @@ func (m *memFS) Open(name string) (fs.File, error) {
 func (m *memFS) Lstat(name string) (fs.FileInfo, error) {
 	if err, ok := m.lstatErr[filepath.Clean(name)]; ok {
 		return nil, err
+	}
+	if _, ok := m.links[filepath.Clean(name)]; ok {
+		info, err := fs.Lstat(m.MapFS, strings.TrimPrefix(filepath.Clean(name), "/"))
+		if err != nil {
+			return nil, err
+		}
+		return pathInfo{info, filepath.Clean(name), fs.ModeSymlink}, nil
 	}
 	info, err := fs.Lstat(m.MapFS, strings.TrimPrefix(filepath.Clean(name), "/"))
 	if err != nil {
@@ -74,6 +87,17 @@ func (m *memFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	m.written[name] = data
 	m.perms[name] = perm
 	return nil
+}
+
+// EvalSymlinks is the target of a link in links, and the name of anything else.
+func (m *memFS) EvalSymlinks(name string) (string, error) {
+	if err, ok := m.linkErr[filepath.Clean(name)]; ok {
+		return "", err
+	}
+	if target, ok := m.links[filepath.Clean(name)]; ok {
+		return target, nil
+	}
+	return name, nil
 }
 
 func (m *memFS) Abs(name string) (string, error) {
@@ -148,17 +172,17 @@ func newHarness(files map[string]string) *harness {
 
 func (h *harness) run(args ...string) int { return Run(args, h.env) }
 
-const goodHCL = `entity "A" {
+const goodHCL = `record "A" {
   key = ["id"]
-  property "id" {
+  field "id" {
     type = "int"
   }
 }
 `
 
-const badHCL = `entity "A" {
+const badHCL = `record "A" {
   key = []
-  property "id" {
+  field "id" {
     type = "int"
   }
 }
@@ -169,23 +193,19 @@ const componentHCL = `component "C" {
     type = "int"
   }
 }
-entity "A" {
+record "A" {
   key = ["id"]
-  property "id" {
+  field "id" {
     type = "int"
   }
-  property "c" {
+  field "c" {
     component = "C"
   }
 }
 `
 
-const warnHCL = `collection "c" {
-  kind = "computed"
-}
-`
-
-const coreHCL = `entity "Space" {
+// warnHCL is in the old spelling, which is a warning.
+const warnHCL = `entity "A" {
   key = ["id"]
   property "id" {
     type = "int"
@@ -193,13 +213,21 @@ const coreHCL = `entity "Space" {
 }
 `
 
-const bookingHCL = `entity "Booking" {
+const coreHCL = `record "Space" {
   key = ["id"]
-  property "id" {
+  field "id" {
     type = "int"
   }
-  property "space" {
-    entity = "core.Space"
+}
+`
+
+const bookingHCL = `record "Booking" {
+  key = ["id"]
+  field "id" {
+    type = "int"
+  }
+  field "space" {
+    record = "core.Space"
   }
 }
 `
@@ -219,11 +247,11 @@ func TestLintText(t *testing.T) {
 		wantErr  string // a substring of standard error
 	}{
 		{"clean default path", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
-		{"findings", map[string]string{"a.modelspec.hcl": badHCL, "b.modelspec.hcl": goodHCL}, []string{"lint", "."}, 1, "a.modelspec.hcl:2: error: entity \"A\" has an empty key [key]\nfailed: 2 files checked, 1 error, 0 warnings\n", ""},
-		{"warnings only", map[string]string{"a.modelspec.hcl": warnHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "a.modelspec.hcl:2: warning: collection \"c\" is computed but carries no query (computed collections should) [collection]\nok: 1 file checked, 0 errors, 1 warning\n", ""},
+		{"findings", map[string]string{"a.modelspec.hcl": badHCL, "b.modelspec.hcl": goodHCL}, []string{"lint", "."}, 1, "a.modelspec.hcl:2: error: record \"A\" has an empty key [key]\nfailed: 2 files checked, 1 error, 0 warnings\n", ""},
+		{"warnings only", map[string]string{"a.modelspec.hcl": warnHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "a.modelspec.hcl:1: warning: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); modelspec rewrite \"a.modelspec.hcl\" rewrites the file [deprecated-spelling]\nok: 1 file checked, 0 errors, 1 warning\n", ""},
 		{"explicit files", map[string]string{"a.modelspec.hcl": goodHCL, "b.modelspec.hcl": badHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
-		{"a component property is fine by default", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
-		{"the publish profile refuses it", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint", "--profile", "publish"}, 1, "a.modelspec.hcl:12: error: entity \"A\" property \"c\" has a component value; the catalogue lists only scalar and entity-reference properties [publish-component-property]\nfailed: 1 file checked, 1 error, 0 warnings\n", ""},
+		{"a component field is fine by default", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
+		{"the publish profile refuses it", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint", "--profile", "publish"}, 1, "a.modelspec.hcl:12: error: record \"A\" field \"c\" has a component value; the catalogue lists only scalar and record-reference fields [publish-component-field]\nfailed: 1 file checked, 1 error, 0 warnings\n", ""},
 		{"the default profile can be named", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint", "--profile", "default"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
 		{"missing path", nil, []string{"lint", "nope"}, 2, "", "modelspec: "},
 		{"no model files", map[string]string{"x.txt": ""}, []string{"lint"}, 2, "", "no ModelSpec files"},
@@ -256,9 +284,9 @@ func TestLintText(t *testing.T) {
 func TestLintModules(t *testing.T) {
 	t.Parallel()
 	sales := map[string]string{
-		layoutPath("sales", "entities.modelspec.hcl"): "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    type = \"string\"\n    enum = \"Status\"\n  }\n  property \"c\" {\n    entity = \"core.Space\"\n  }\n}\n",
-		layoutPath("sales", "enums.modelspec.hcl"):    "enum \"Status\" {\n  values = [\"open\"]\n}\n",
-		layoutPath("core", "model.hcl"):               coreHCL,
+		layoutPath("sales", "records.modelspec.hcl"): "record \"Order\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"s\" {\n    type = \"string\"\n    enum = \"Status\"\n  }\n  field \"c\" {\n    record = \"core.Space\"\n  }\n}\n",
+		layoutPath("sales", "enums.modelspec.hcl"):   "enum \"Status\" {\n  values = [\"open\"]\n}\n",
+		layoutPath("core", "model.hcl"):              coreHCL,
 	}
 	h := newHarness(sales)
 	if code := h.run("lint", "spec"); code != 0 || h.out.String() != "ok: 3 files checked, 0 errors, 0 warnings\n" {
@@ -295,12 +323,12 @@ func TestLintChecksTheWholeModule(t *testing.T) {
 	t.Parallel()
 	enums := "enum \"Status\" {\n  values = [\"open\"]\n}\n"
 	tree := map[string]string{
-		layoutPath("sales", "entities.hcl"): goodHCL,
-		layoutPath("sales", "enums.hcl"):    enums,
-		layoutPath("sales", "extra.hcl"):    enums,
+		layoutPath("sales", "records.hcl"): goodHCL,
+		layoutPath("sales", "enums.hcl"):   enums,
+		layoutPath("sales", "extra.hcl"):   enums,
 	}
 	h := newHarness(tree)
-	code := h.run("lint", layoutPath("sales", "entities.hcl"))
+	code := h.run("lint", layoutPath("sales", "records.hcl"))
 	out := h.out.String()
 	if code != 1 || !strings.Contains(out, "extra.hcl:1: error: duplicate concept name \"Status\"") || !strings.Contains(out, "failed: 3 files checked, 1 error") ||
 		!strings.HasPrefix(out, "note: a module is the unit of checking: module \"sales\" has more files in spec/graph/modules/sales/models than were given") || strings.Count(out, "note:") != 1 {
@@ -308,14 +336,14 @@ func TestLintChecksTheWholeModule(t *testing.T) {
 	}
 	// Two files of the same module are one module, checked once.
 	h = newHarness(tree)
-	code = h.run("lint", layoutPath("sales", "entities.hcl"), layoutPath("sales", "extra.hcl"))
+	code = h.run("lint", layoutPath("sales", "records.hcl"), layoutPath("sales", "extra.hcl"))
 	out = h.out.String()
 	if code != 1 || strings.Count(out, "duplicate concept name") != 1 || !strings.Contains(out, "failed: 3 files checked, 1 error") {
 		t.Fatalf("two files of the module: exit %d, stdout %q", code, out)
 	}
 	// A module that is given whole needs no note, and the JSON report carries the notes.
 	h = newHarness(tree)
-	if code := h.run("lint", "--format", "json", layoutPath("sales", "entities.hcl")); code != 1 || !strings.Contains(h.out.String(), `"notes": [`) || !strings.Contains(h.out.String(), "a module is the unit of checking") {
+	if code := h.run("lint", "--format", "json", layoutPath("sales", "records.hcl")); code != 1 || !strings.Contains(h.out.String(), `"notes": [`) || !strings.Contains(h.out.String(), "a module is the unit of checking") {
 		t.Fatalf("json: exit %d, stdout %q", code, h.out)
 	}
 	h = newHarness(tree)
@@ -329,7 +357,7 @@ func TestLintChecksTheWholeModule(t *testing.T) {
 	// Failing to write the note is an I/O failure.
 	h = newHarness(tree)
 	h.env.Stdout = &failWriter{}
-	if code := h.run("lint", layoutPath("sales", "entities.hcl")); code != 2 || !strings.Contains(h.errb.String(), "write failed") {
+	if code := h.run("lint", layoutPath("sales", "records.hcl")); code != 2 || !strings.Contains(h.errb.String(), "write failed") {
 		t.Fatalf("note write: exit %d, stderr %q", code, h.errb)
 	}
 }
@@ -478,7 +506,7 @@ func TestExport(t *testing.T) {
 	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 {
 		t.Fatalf("exit %d: %s", code, h.errb)
 	}
-	if !strings.Contains(h.out.String(), "\"modelspec\": \"1.0-draft\"") || !strings.HasSuffix(h.out.String(), "}\n") {
+	if !strings.Contains(h.out.String(), "\"modelspec\": \"1.0-draft-2\"") || !strings.HasSuffix(h.out.String(), "}\n") {
 		t.Fatalf("stdout = %s", h.out)
 	}
 	stdoutJSON := h.out.String()
@@ -506,18 +534,18 @@ func TestExport(t *testing.T) {
 		t.Fatalf("check: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
 	}
 
-	keyless := "entity \"HeapRow\" {\n  property \"value\" {\n    type = \"string\"\n  }\n}\n"
+	keyless := "record \"HeapRow\" {\n  field \"value\" {\n    type = \"string\"\n  }\n}\n"
 	h = newHarness(map[string]string{"heap.modelspec.hcl": keyless})
 	if code := h.run(append([]string{"export", "heap.modelspec.hcl"}, exportID...)...); code != 0 {
-		t.Fatalf("export keyless entity: exit %d, stderr %s", code, h.errb)
+		t.Fatalf("export keyless record: exit %d, stderr %s", code, h.errb)
 	}
 	var exported map[string]any
 	if err := json.Unmarshal(h.out.Bytes(), &exported); err != nil {
 		t.Fatal(err)
 	}
-	entities := exported["entities"].(map[string]any)
-	if _, hasKey := entities["HeapRow"].(map[string]any)["key"]; hasKey {
-		t.Fatalf("keyless entity export invented a key: %s", h.out)
+	records := exported["records"].(map[string]any)
+	if _, hasKey := records["HeapRow"].(map[string]any)["key"]; hasKey {
+		t.Fatalf("keyless record export invented a key: %s", h.out)
 	}
 }
 
@@ -528,7 +556,7 @@ func TestExportLintsFirst(t *testing.T) {
 	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "o.json"}, exportID...)...); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
-	if !strings.Contains(h.errb.String(), `a.modelspec.hcl:2: error: entity "A" has an empty key`) || !strings.Contains(h.errb.String(), "has errors; fix them") || h.out.Len() != 0 || len(h.fsys.written) != 0 {
+	if !strings.Contains(h.errb.String(), `a.modelspec.hcl:2: error: record "A" has an empty key`) || !strings.Contains(h.errb.String(), "has errors; fix them") || h.out.Len() != 0 || len(h.fsys.written) != 0 {
 		t.Fatalf("stderr %q stdout %q written %v", h.errb, h.out, h.fsys.written)
 	}
 	// --check refuses an invalid model as well: a check must not pass on one.
@@ -538,17 +566,17 @@ func TestExportLintsFirst(t *testing.T) {
 		t.Fatalf("check of an invalid model: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
 	}
 	// A syntax error is a finding too.
-	h = newHarness(map[string]string{"a.modelspec.hcl": "entity {"})
+	h = newHarness(map[string]string{"a.modelspec.hcl": "record {"})
 	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 1 || !strings.Contains(h.errb.String(), "[syntax]") {
 		t.Fatalf("syntax error: exit %d, stderr %q", code, h.errb)
 	}
 	// Warnings are shown and do not stop the export.
 	h = newHarness(map[string]string{"a.modelspec.hcl": warnHCL})
-	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.errb.String(), "warning: collection") {
-		t.Fatalf("warning: exit %d, stderr %q", code, h.errb)
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.errb.String(), "[deprecated-spelling]") || !strings.Contains(h.out.String(), `"modelspec": "1.0-draft"`) || !strings.Contains(h.out.String(), `"entities"`) {
+		t.Fatalf("warning: exit %d, stderr %q, stdout %q", code, h.errb, h.out)
 	}
 	// Findings of other files do not stop it: the context module is broken here.
-	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "ctx/b.hcl": "entity {"})
+	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "ctx/b.hcl": "record {"})
 	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--module", "b=ctx/b.hcl"}, exportID...)...); code != 0 || strings.Contains(h.errb.String(), "ctx/b.hcl") {
 		t.Fatalf("context findings: exit %d, stderr %q", code, h.errb)
 	}
@@ -570,7 +598,7 @@ func TestExportModules(t *testing.T) {
 		t.Fatalf("unsupplied: exit %d, stderr %q", code, h.errb)
 	}
 	h = newHarness(files)
-	if code := h.run(append([]string{"export", "booking.modelspec.hcl", "--module", "core=shared/core.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"entity": "core.Space"`) || strings.Contains(h.out.String(), `"Space": {`) {
+	if code := h.run(append([]string{"export", "booking.modelspec.hcl", "--module", "core=shared/core.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"record": "core.Space"`) || strings.Contains(h.out.String(), `"Space": {`) {
 		t.Fatalf("supplied: exit %d, stdout %s, stderr %s", code, h.out, h.errb)
 	}
 	// One file of several in a SpecScore layout module is not exported.
@@ -599,11 +627,11 @@ func TestExportModules(t *testing.T) {
 	// JSON copy beside it is not another file of the module.
 	copyOfA, _ := exportString(t, goodHCL)
 	one := map[string]string{
-		layoutPath("solo", "entities.hcl"):            goodHCL,
-		layoutPath("solo", "entities.modelspec.json"): copyOfA,
+		layoutPath("solo", "records.hcl"):            goodHCL,
+		layoutPath("solo", "records.modelspec.json"): copyOfA,
 	}
 	h = newHarness(one)
-	if code := h.run(append([]string{"export", layoutPath("solo", "entities.hcl")}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"entities"`) {
+	if code := h.run(append([]string{"export", layoutPath("solo", "records.hcl")}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"records"`) {
 		t.Fatalf("a layout .hcl file: exit %d, stdout %s, stderr %q", code, h.out, h.errb)
 	}
 	// A JSON file is not exported.
@@ -617,7 +645,7 @@ func TestExportModules(t *testing.T) {
 // even when none is given, so the JSON lints clean saved under any file name.
 func TestExportOfAModelThatRefersToItself(t *testing.T) {
 	t.Parallel()
-	self := "entity \"Node\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"parent\" {\n    entity = \"tree.Node\"\n  }\n}\n"
+	self := "record \"Node\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"parent\" {\n    record = \"tree.Node\"\n  }\n}\n"
 	h := newHarness(map[string]string{"tree.modelspec.hcl": self})
 	if code := h.run("export", "tree.modelspec.hcl", "--module-id", "x/tree", "--module-version", "1", "--out", "other.modelspec.json"); code != 0 {
 		t.Fatalf("export: exit %d, stderr %q", code, h.errb)
@@ -656,9 +684,9 @@ func TestExportFailures(t *testing.T) {
 		{"bad module flag", map[string]string{"a.modelspec.hcl": goodHCL}, append([]string{"export", "a.modelspec.hcl", "--module", "x"}, exportID...), 2, `invalid --module "x"`},
 		{"module flag for a missing path", map[string]string{"a.modelspec.hcl": goodHCL}, append([]string{"export", "a.modelspec.hcl", "--module", "x=nope"}, exportID...), 2, "modelspec: "},
 		{"no identity", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"export", "a.modelspec.hcl"}, 1, "supply both"},
-		{"unmapped construct", map[string]string{"a.modelspec.hcl": "projection \"p\" {\n}\n"}, append([]string{"export", "a.modelspec.hcl"}, exportID...), 1, "no JSON form is defined"},
+		{"a reserved word", map[string]string{"a.modelspec.hcl": "projection \"p\" {\n}\n"}, append([]string{"export", "a.modelspec.hcl"}, exportID...), 1, "[reserved-word]"},
 		{"check: missing json", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"export", "--check", "a.modelspec.hcl", "a.modelspec.json"}, 2, "modelspec: "},
-		{"check: drift", map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": `{"modelspec":"1.0-draft","module":{"id":"x","name":"y","version":"1"},"entities":{}}`}, []string{"export", "--check", "a.modelspec.hcl", "a.modelspec.json"}, 1, "not what a.modelspec.hcl exports to"},
+		{"check: drift", map[string]string{"a.modelspec.hcl": goodHCL, "a.modelspec.json": `{"modelspec":"1.0-draft-2","module":{"id":"x","name":"y","version":"1"},"records":{}}`}, []string{"export", "--check", "a.modelspec.hcl", "a.modelspec.json"}, 1, "not what a.modelspec.hcl exports to"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -870,9 +898,9 @@ func TestOSEnv(t *testing.T) {
 func TestExportRefusesATwinOverTheLimit(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
-	b.WriteString("entity \"E\" {\n  key = [\"p0\"]\n")
+	b.WriteString("record \"E\" {\n  key = [\"p0\"]\n")
 	for i := 0; i < 200; i++ {
-		fmt.Fprintf(&b, "  property \"p%d\" { type = \"int\" }\n", i)
+		fmt.Fprintf(&b, "  field \"p%d\" { type = \"int\" }\n", i)
 	}
 	b.WriteString("}\n")
 	for _, args := range [][]string{{"export", "a.modelspec.hcl"}, {"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}} {
@@ -961,9 +989,9 @@ func exportIDIfExport(args []string) []string {
 // 1e100 are not written as integers of 42 to 101 digits, which lint refuses.
 func TestExportWritesNumbersLintReadsBack(t *testing.T) {
 	t.Parallel()
-	hcl := `entity "E" {
+	hcl := `record "E" {
   key = ["id"]
-  property "id" {
+  field "id" {
     type    = "string"
     max_len = 1e41
     min_len = 10e-1
@@ -1002,7 +1030,7 @@ enum "N" {
 func TestExportCheckCutsItsMessage(t *testing.T) {
 	t.Parallel()
 	model := func(pattern string) string {
-		return "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"string\"\n    pattern = \"" + pattern + "\"\n  }\n}\n"
+		return "record \"E\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"string\"\n    pattern = \"" + pattern + "\"\n  }\n}\n"
 	}
 	h := newHarness(map[string]string{"a.modelspec.hcl": model(strings.Repeat("a", 200000) + "x")})
 	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--out", "a.modelspec.json"}, exportID...)...); code != 0 {
@@ -1022,9 +1050,9 @@ func TestExportCheckCutsItsMessage(t *testing.T) {
 // the part of its module that was read. Three sequences of a review, for each kind.
 func TestSkippedModelFileAtTheCLI(t *testing.T) {
 	t.Parallel()
-	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
-	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
-	invalid := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	order := "record \"Order\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"c\" {\n    record = \"Customer\"\n  }\n}\n"
+	customer := "record \"Customer\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
+	invalid := "record \"Bad\" {\n  key = [\"nope\"]\n}\n"
 	const dir = "spec/modules/shop/models/"
 	kinds := map[string]func(h *harness, p, content string){
 		"a link to a regular file": func(h *harness, p, content string) {
@@ -1121,8 +1149,8 @@ func TestExportOutRefusesWhatIsNotARegularFile(t *testing.T) {
 func TestExportRefusesAPartialModuleWhateverTheFindingsListHolds(t *testing.T) {
 	t.Parallel()
 	const dir = "spec/modules/shop/models/"
-	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
-	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	order := "record \"Order\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
+	customer := "record \"Customer\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
 	for _, noisyPath := range []string{"aaa.modelspec.hcl", "zzz.modelspec.hcl"} {
 		for _, repeats := range []int{999, 1000, 1201} {
 			noisy := "enum \"E\" {\n  values = [" + strings.Repeat("1, ", repeats-1) + "1]\n}\n"
@@ -1186,11 +1214,11 @@ func TestExportRefusalListsOnlyTheExportedModulesSkippedFiles(t *testing.T) {
 // module that references into it were not checked.
 func TestExportSaysWhenReferencesIntoAnIncompleteModuleWereNotChecked(t *testing.T) {
 	t.Parallel()
-	app := "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    entity = \"core.Nothing\"\n  }\n}\n"
+	app := "record \"A\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"s\" {\n    record = \"core.Nothing\"\n  }\n}\n"
 	files := map[string]string{"app/app.modelspec.hcl": app, "core/space.hcl": coreHCL, "real/y.hcl": coreHCL, "real/z.hcl": coreHCL}
 	args := append([]string{"export", "app/app.modelspec.hcl", "--module", "core=core"}, exportID...)
 	whole := newHarness(files)
-	if code := whole.run(args...); code != 1 || !strings.Contains(whole.errb.String(), `unknown entity "Nothing" in module "core"`) {
+	if code := whole.run(args...); code != 1 || !strings.Contains(whole.errb.String(), `unknown record "Nothing" in module "core"`) {
 		t.Fatalf("core whole: exit %d, stderr %q", code, whole.errb)
 	}
 	h := newHarness(files)
@@ -1198,7 +1226,7 @@ func TestExportSaysWhenReferencesIntoAnIncompleteModuleWereNotChecked(t *testing
 	h.fsys.MapFS["core/z.hcl"] = &fstest.MapFile{Data: []byte("../real/z.hcl"), Mode: fs.ModeSymlink}
 	code := h.run(args...)
 	stderr := h.errb.String()
-	if code != 0 || !strings.Contains(h.out.String(), `"entity": "core.Nothing"`) ||
+	if code != 0 || !strings.Contains(h.out.String(), `"record": "core.Nothing"`) ||
 		!strings.Contains(stderr, "core/y.hcl: error: is a symbolic link") || !strings.Contains(stderr, "core/z.hcl: error: is a symbolic link") ||
 		strings.Count(stderr, "references into it were not checked") != 1 || !strings.Contains(stderr, "note: module core was not read whole") {
 		t.Fatalf("core incomplete: exit %d, stdout %q, stderr %q", code, h.out, h.errb)

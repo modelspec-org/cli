@@ -8,16 +8,16 @@ import (
 	"testing"
 )
 
-// hclWith is a model whose entity has one property carrying the given attribute
+// hclWith is a model whose record has one field carrying the given attribute
 // line.
 func hclWith(line string) string {
-	return "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"string\"\n    " + line + "\n  }\n}\n"
+	return "record \"E\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"string\"\n    " + line + "\n  }\n}\n"
 }
 
-// jsonWith is the JSON form of a model whose entity has one property whose
+// jsonWith is the JSON form of a model whose record has one field whose
 // attributes are the given JSON object members.
 func jsonWith(members string) string {
-	return `{"modelspec": "1.0-draft", "module": {"id": "x", "name": "x", "version": "1"}, "entities": {"E": {"key": ["id"], "properties": {"id": {"type": "string"` + members + `}}}}}`
+	return `{"modelspec": "1.0-draft-2", "module": {"id": "x", "name": "x", "version": "1"}, "records": {"E": {"key": ["id"], "fields": {"id": {"type": "string"` + members + `}}}}}`
 }
 
 func limitFinding(t *testing.T, fs []Finding, want string) {
@@ -199,16 +199,16 @@ func TestNameLimitBoundary(t *testing.T) {
 	t.Parallel()
 	ok, long := rep("a", MaxNameLength), rep("a", MaxNameLength+1)
 	hclCases := map[string]string{
-		"entity label":     "entity \"%s\" {\n}\n",
-		"second label":     "entity \"x\" \"%s\" {\n}\n",
+		"record label":     "record \"%s\" {\n}\n",
+		"second label":     "record \"x\" \"%s\" {\n}\n",
 		"block type":       "%s \"x\" {\n}\n",
-		"attribute name":   "entity \"x\" {\n  %s = 1\n}\n",
-		"type":             "entity \"x\" {\n  property \"p\" {\n    type = \"%s\"\n  }\n}\n",
-		"entity reference": "entity \"x\" {\n  property \"p\" {\n    entity = \"%s\"\n  }\n}\n",
-		"enum reference":   "entity \"x\" {\n  property \"p\" {\n    enum = \"%s\"\n  }\n}\n",
-		"key item":         "entity \"x\" {\n  key = [\"a\", \"%s\"]\n}\n",
-		"first key item":   "entity \"x\" {\n  key = [\"%s\"]\n}\n",
-		"use item":         "entity \"x\" {\n  use = [\n    \"%s\",\n  ]\n}\n",
+		"attribute name":   "record \"x\" {\n  %s = 1\n}\n",
+		"type":             "record \"x\" {\n  field \"p\" {\n    type = \"%s\"\n  }\n}\n",
+		"record reference": "record \"x\" {\n  field \"p\" {\n    record = \"%s\"\n  }\n}\n",
+		"enum reference":   "record \"x\" {\n  field \"p\" {\n    enum = \"%s\"\n  }\n}\n",
+		"key item":         "record \"x\" {\n  key = [\"a\", \"%s\"]\n}\n",
+		"first key item":   "record \"x\" {\n  key = [\"%s\"]\n}\n",
+		"use item":         "record \"x\" {\n  use = [\n    \"%s\",\n  ]\n}\n",
 	}
 	for name, tmpl := range hclCases {
 		if fs := hclFindings(fmt.Sprintf(tmpl, ok)); len(fs) != 0 {
@@ -247,7 +247,7 @@ func TestNameLimitBoundary(t *testing.T) {
 	_, fs := ParseJSON("a"+jsonExt, []byte(jsonWith(`, "`+long+`": 1`)))
 	limitFinding(t, fs, "a key is 256 bytes long")
 	// Through the whole pipeline, with the name where the review put it.
-	_, fs = ParseHCL("a"+hclExt, []byte("entity \""+rep("A", 100_000)+"\" {\n}\n"))
+	_, fs = ParseHCL("a"+hclExt, []byte("record \""+rep("A", 100_000)+"\" {\n}\n"))
 	limitFinding(t, fs, "a name is 100000 bytes long")
 }
 
@@ -257,10 +257,10 @@ func TestNameLengthCountsEveryPieceOfAString(t *testing.T) {
 	t.Parallel()
 	piece := "a$$"
 	name := rep(piece, MaxNameLength/len(piece)) // 255 bytes
-	if fs := hclFindings("entity \"" + name + "\" {\n}\n"); len(fs) != 0 {
+	if fs := hclFindings("record \"" + name + "\" {\n}\n"); len(fs) != 0 {
 		t.Errorf("at the limit: %v", fs)
 	}
-	limitFinding(t, hclFindings("entity \""+name+"b\" {\n}\n"), "256 bytes")
+	limitFinding(t, hclFindings("record \""+name+"b\" {\n}\n"), "256 bytes")
 }
 
 // Findings about limits are capped like the other refusals of the lexer's tokens.
@@ -292,15 +292,15 @@ func TestClipText(t *testing.T) {
 
 // One run's output is bounded whatever the input: at most MaxFindings+1 findings
 // of at most MaxMessageBytes each. The input here makes a finding for every one
-// of 520 properties, each echoing text of the longest length a name may have,
+// of 520 fields, each echoing text of the longest length a name may have,
 // a repeated 4,000-byte value that is not a name, and 520 repeats of a short one.
 func TestOutputIsBounded(t *testing.T) {
 	t.Parallel()
 	name := rep("n", MaxNameLength)
 	var b strings.Builder
-	b.WriteString("entity \"" + name + "\" {\n  key = [\"" + name + "\"]\n")
+	b.WriteString("record \"" + name + "\" {\n  key = [\"" + name + "\"]\n")
 	for i := 0; i < 520; i++ {
-		fmt.Fprintf(&b, "  property \"%s%d\" {\n    type = \"%s\"\n  }\n", name[:200], i, name)
+		fmt.Fprintf(&b, "  field \"%s%d\" {\n    type = \"%s\"\n  }\n", name[:200], i, name)
 	}
 	b.WriteString("}\nenum \"E\" {\n  values = [" + "\"" + rep("v", 4000) + "\", \"" + rep("v", 4000) + "\", " + rep("\"s\", ", 520) + "\"x\"]\n}\n")
 	const path = "long.modelspec.hcl"
@@ -337,28 +337,28 @@ func TestMessagesAreCutWhereTheyAreMade(t *testing.T) {
 	// words after it stay.
 	v := rep("v", 5000)
 	got := run(map[string]string{"a" + jsonExt: `{"modelspec": "` + v + `", "module": {"id": "x", "version": "1"}}`})
-	if len(got) == 0 || !strings.Contains(got[0], `"modelspec" is "vvvv`) || !strings.Contains(got[0], "bytes in all]\"; the only defined value is") {
+	if len(got) == 0 || !strings.Contains(got[0], `"modelspec" is "vvvv`) || !strings.Contains(got[0], "bytes in all]\"; the defined values are") {
 		t.Errorf("findings %v", got)
 	}
-	got = run(map[string]string{"a" + hclExt: "entity \"E\" {\n  key = [\"" + rep("k", MaxNameLength) + "\"]\n}\n"})
-	if len(got) != 1 || !strings.Contains(got[0], rep("k", MaxNameLength)+`" is not a property`) {
+	got = run(map[string]string{"a" + hclExt: "record \"E\" {\n  key = [\"" + rep("k", MaxNameLength) + "\"]\n}\n"})
+	if len(got) != 1 || !strings.Contains(got[0], rep("k", MaxNameLength)+`" is not a field`) {
 		t.Errorf("findings %v", got)
 	}
 }
 
 // A name is limited by its text, whatever its spelling: a heredoc in the place of a
-// name (the value of type, kind, entity, component or enum, or an item of key or
+// name (the value of type, record, entity, component or enum, or an item of key or
 // use) is refused past 255 bytes, counting the line break the heredoc ends with, as
 // a quoted string is. A heredoc elsewhere (a pattern, a query) is not a name.
 func TestNameLimitAppliesToHeredocs(t *testing.T) {
 	t.Parallel()
 	templates := map[string]string{
-		"type":      "entity \"x\" {\n  property \"p\" {\n    type = <<EOT\n%s\nEOT\n  }\n}\n",
-		"kind":      "collection \"x\" {\n  kind = <<EOT\n%s\nEOT\n}\n",
-		"entity":    "entity \"x\" {\n  property \"p\" {\n    entity = <<EOT\n%s\nEOT\n  }\n}\n",
-		"key item":  "entity \"x\" {\n  key = [<<EOT\n%s\nEOT\n  ]\n}\n",
-		"key later": "entity \"x\" {\n  key = [\"a\", <<EOT\n%s\nEOT\n  ]\n}\n",
-		"use item":  "entity \"x\" {\n  use = [<<EOT\n%s\nEOT\n  ]\n}\n",
+		"type":       "record \"x\" {\n  field \"p\" {\n    type = <<EOT\n%s\nEOT\n  }\n}\n",
+		"old record": "record \"x\" {\n  property \"p\" {\n    entity = <<EOT\n%s\nEOT\n  }\n}\n",
+		"record":     "record \"x\" {\n  field \"p\" {\n    record = <<EOT\n%s\nEOT\n  }\n}\n",
+		"key item":   "record \"x\" {\n  key = [<<EOT\n%s\nEOT\n  ]\n}\n",
+		"key later":  "record \"x\" {\n  key = [\"a\", <<EOT\n%s\nEOT\n  ]\n}\n",
+		"use item":   "record \"x\" {\n  use = [<<EOT\n%s\nEOT\n  ]\n}\n",
 	}
 	for name, tmpl := range templates {
 		// 254 characters and the line break are 255 bytes: at the limit.

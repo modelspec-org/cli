@@ -1,0 +1,16 @@
+{
+  "modelspec": "1.0-draft-2",
+  "module": {
+    "id": "github.com/acme/reserved",
+    "name": "reserved",
+    "version": "0.1.0"
+  },
+  "records": {
+    "records": {
+      "key": []
+    },
+    "entities": {
+      "key": []
+    }
+  }
+}

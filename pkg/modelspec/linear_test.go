@@ -10,38 +10,16 @@ import (
 // grow linearly with: the function builds a model's source and says how to read it.
 func linearShapes() map[string]func(n int) (string, func(src string) (*Model, []Finding)) {
 	return map[string]func(n int) (string, func(src string) (*Model, []Finding)){
-		"binds to one entity's properties": func(n int) (string, func(string) (*Model, []Finding)) {
-			var b strings.Builder
-			b.WriteString("entity \"E\" {\n  key = [\"p0\"]\n")
-			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "  property \"p%d\" {\n    type = \"int\"\n  }\n", i)
-			}
-			b.WriteString("}\ncollection \"c\" {\n  kind = \"editable\"\n")
-			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "  field \"f%d\" {\n    bind = \"E.p%d\"\n  }\n", i, i)
-			}
-			b.WriteString("}\n")
-			return b.String(), parseHCLString
-		},
-		"binds to one entity's properties, in JSON": func(n int) (string, func(string) (*Model, []Finding)) {
-			var props, fields []string
-			for i := 0; i < n; i++ {
-				props = append(props, fmt.Sprintf(`"p%d": {"type": "int"}`, i))
-				fields = append(fields, fmt.Sprintf(`"f%d": {"bind": "E.p%d"}`, i, i))
-			}
-			return `{"modelspec": "1.0-draft", "module": {"id": "x", "version": "1"}, "entities": {"E": {"key": ["p0"], "properties": {` +
-				strings.Join(props, ", ") + `}}}, "collections": {"c": {"kind": "editable", "fields": {` + strings.Join(fields, ", ") + `}}}}`, parseJSONString
-		},
 		"one use list of many components": func(n int) (string, func(string) (*Model, []Finding)) {
 			var b, use strings.Builder
 			for i := 0; i < n; i++ {
 				fmt.Fprintf(&b, "component \"C%d\" {\n}\n", i)
 				fmt.Fprintf(&use, "\"C%d\", ", i)
 			}
-			fmt.Fprintf(&b, "entity \"E\" {\n  key = []\n  use = [%s\"C0\"]\n}\n", use.String())
+			fmt.Fprintf(&b, "record \"E\" {\n  key = []\n  use = [%s\"C0\"]\n}\n", use.String())
 			return b.String(), parseHCLString
 		},
-		"many entities that use one big component": func(n int) (string, func(string) (*Model, []Finding)) {
+		"many records that use one big component": func(n int) (string, func(string) (*Model, []Finding)) {
 			var b strings.Builder
 			b.WriteString("component \"Big\" {\n")
 			for i := 0; i < n; i++ {
@@ -49,24 +27,24 @@ func linearShapes() map[string]func(n int) (string, func(src string) (*Model, []
 			}
 			b.WriteString("}\n")
 			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "entity \"E%d\" {\n  use = [\"Big\"]\n  key = [\"f1\"]\n}\n", i)
+				fmt.Fprintf(&b, "record \"E%d\" {\n  use = [\"Big\"]\n  key = [\"f1\"]\n}\n", i)
 			}
 			return b.String(), parseHCLString
 		},
-		"a long key and many references between entities": func(n int) (string, func(string) (*Model, []Finding)) {
+		"a long key and many references between records": func(n int) (string, func(string) (*Model, []Finding)) {
 			var b strings.Builder
 			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "entity \"E%d\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"r\" {\n    entity = \"E%d\"\n  }\n}\n", i, (i+1)%n)
+				fmt.Fprintf(&b, "record \"E%d\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"r\" {\n    record = \"E%d\"\n  }\n}\n", i, (i+1)%n)
 			}
 			return b.String(), parseHCLString
 		},
-		"a recordset key of many columns": func(n int) (string, func(string) (*Model, []Finding)) {
+		"a record key of many fields": func(n int) (string, func(string) (*Model, []Finding)) {
 			var b, key strings.Builder
 			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "  column \"c%d\" {\n    type = \"int\"\n  }\n", i)
+				fmt.Fprintf(&b, "  field \"c%d\" {\n    type = \"int\"\n  }\n", i)
 				fmt.Fprintf(&key, "\"c%d\", ", i)
 			}
-			return fmt.Sprintf("recordset \"r\" {\n  key = [%s\"c0\"]\n  query = \"q\"\n%s}\n", key.String(), b.String()), parseHCLString
+			return fmt.Sprintf("record \"r\" {\n  key = [%s\"c0\"]\n%s}\n", key.String(), b.String()), parseHCLString
 		},
 	}
 }
@@ -75,14 +53,14 @@ func parseHCLString(src string) (*Model, []Finding)  { return ParseHCL("a"+hclEx
 func parseJSONString(src string) (*Model, []Finding) { return ParseJSON("a"+jsonExt, []byte(src)) }
 
 // The index of a unit answers as the scan of every concept it replaced: the first
-// declaration of a name wins, for each kind and in the entity/component/enum scope.
+// declaration of a name wins, for each kind and in the record/component/enum scope.
 func TestUnitIndexAgreesWithAScan(t *testing.T) {
 	t.Parallel()
-	src := "entity \"A\" {\n  key = []\n}\nenum \"A\" {\n  values = [\"x\"]\n}\ncomponent \"B\" {\n}\ncomponent \"B\" {\n}\nentity \"C\" {\n  key = []\n}\ncollection \"A\" {\n  kind = \"editable\"\n}\nrecordset \"R\" {\n}\n"
+	src := "record \"A\" {\n  key = []\n}\nenum \"A\" {\n  values = [\"x\"]\n}\ncomponent \"B\" {\n}\ncomponent \"B\" {\n}\nrecord \"C\" {\n  key = []\n}\n"
 	m1, _ := ParseHCL("a"+hclExt, []byte(src))
 	m2, _ := ParseHCL("b"+hclExt, []byte("component \"B\" {\n}\nenum \"D\" {\n  values = [\"y\"]\n}\ncomponent \"A\" {\n}\n"))
 	u := &unit{models: []*Model{m1, m2}}
-	for _, kind := range []Kind{KindEntity, KindComponent, KindEnum, KindCollection, KindRecordset} {
+	for _, kind := range []Kind{KindRecord, KindComponent, KindEnum} {
 		for _, name := range []string{"A", "B", "C", "D", "R", "none"} {
 			var want *Concept
 			for _, m := range u.models {
@@ -101,7 +79,7 @@ func TestUnitIndexAgreesWithAScan(t *testing.T) {
 		var want Kind
 		for _, m := range u.models {
 			for _, c := range m.Concepts {
-				if want == "" && c.Name == name && (c.Kind == KindEntity || c.Kind == KindComponent || c.Kind == KindEnum) {
+				if want == "" && c.Name == name && (c.Kind == KindRecord || c.Kind == KindComponent || c.Kind == KindEnum) {
 					want = c.Kind
 				}
 			}
@@ -118,19 +96,19 @@ func TestUnitIndexAgreesWithAScan(t *testing.T) {
 // The allocation test above cannot see a scan, which allocates nothing. These
 // count the steps the lookups take (concepts visited, members listed, sets
 // probed): a unit's index visits each concept once however many lookups there
-// are, a member set is built once, and an entity's property lookups cost at most
+// are, a member set is built once, and a record's field lookups cost at most
 // twice the fields of the components it uses however many lookups there are.
 func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 	t.Parallel()
 	for _, n := range []int{100, 200} {
 		var b strings.Builder
 		for i := 0; i < n; i++ {
-			fmt.Fprintf(&b, "entity \"E%d\" {\n  key = []\n}\n", i)
+			fmt.Fprintf(&b, "record \"E%d\" {\n  key = []\n}\n", i)
 		}
 		m, _ := ParseHCL("a"+hclExt, []byte(b.String()))
 		u := &unit{models: []*Model{m}}
 		for i := 0; i < 5*n; i++ {
-			if u.find(KindEntity, fmt.Sprintf("E%d", i%n)) == nil {
+			if u.find(KindRecord, fmt.Sprintf("E%d", i%n)) == nil {
 				t.Fatal("not found")
 			}
 			if _, ok := u.trioKind("none"); ok {
@@ -155,7 +133,7 @@ func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 			t.Errorf("%d members: %d listed, want each once", n, members)
 		}
 	}
-	// Property lookups: the probes stop growing once the merged set is built.
+	// Field lookups: the probes stop growing once the merged set is built.
 	for _, n := range []int{30, 90} {
 		var b strings.Builder
 		fields := 0
@@ -167,11 +145,11 @@ func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 			}
 			b.WriteString("}\n")
 		}
-		b.WriteString("entity \"E\" {\n  use = [\"C0\", \"C1\", \"C2\", \"C3\", \"C4\"]\n  key = []\n}\n")
+		b.WriteString("record \"E\" {\n  use = [\"C0\", \"C1\", \"C2\", \"C3\", \"C4\"]\n  key = []\n}\n")
 		m, _ := ParseHCL("a"+hclExt, []byte(b.String()))
 		u := &unit{name: "a", models: []*Model{m}}
 		c := &checker{byName: map[string][]*unit{"a": {u}}, props: map[*Concept]*propSet{}, memberSets: map[*Concept]map[string]bool{}, units: []*unit{u}}
-		p := c.propertyNames(u, u.find(KindEntity, "E"))
+		p := c.fieldNames(u, u.find(KindRecord, "E"))
 		probes := func(lookups int) int {
 			for i := 0; i < lookups; i++ {
 				p.has("none")
@@ -197,7 +175,7 @@ func TestLookupsTakeStepsInProportionToTheModel(t *testing.T) {
 				total += len(k.Members)
 			}
 			wantConcepts := len(m.Concepts)
-			if name == "a recordset key of many columns" {
+			if name == "a record key of many fields" {
 				wantConcepts = 0 // it refers to no concept, so no index is built
 			}
 			if concepts != wantConcepts || members > total || probes > 2*(total+n) {

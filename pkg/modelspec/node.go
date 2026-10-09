@@ -34,6 +34,9 @@ type Node struct {
 	Fields []Field // NodeObject, in order
 	Items  []*Node // NodeArray
 	Line   int     // 1-based source line; 0 when built in memory
+	// Start and End, for a string read from a source, are the bytes [Start, End)
+	// of the string as written, quotes included.
+	Start, End int
 	// Dups, set on the root returned by ParseNode only, lists every object key
 	// that appears twice in the same object, anywhere in the document, at the
 	// line of the repeat. Most JSON readers keep the last of the two, a few the
@@ -46,6 +49,9 @@ type Field struct {
 	Key   string
 	Value *Node
 	Line  int
+	// Start and End are the bytes [Start, End) of the key as written, quotes
+	// included, when the object was read from a source.
+	Start, End int
 }
 
 // Get returns the first field with the given key.
@@ -123,7 +129,7 @@ func ParseNode(src []byte) (*Node, error) {
 	dec.UseNumber()
 	lines := newLineIndex(src)
 	var dups []Field
-	n, err := readNode(dec, lines, &dups, 0, "")
+	n, err := readNode(dec, src, lines, &dups, 0, "")
 	if err != nil {
 		if le, ok := err.(*limitError); ok {
 			return nil, &syntaxError{line: le.line, limit: true, msg: le.msg}
@@ -165,10 +171,30 @@ type limitError struct {
 
 func (e *limitError) Error() string { return e.msg }
 
+// stringStart returns the offset of the opening quote of the string that ends at
+// end, just after its closing quote. The string is one the decoder has read, so
+// it has an opening quote, and a quote inside it is escaped by an odd number of
+// backslashes.
+func stringStart(src []byte, end int) int {
+	i := end - 2
+	for src[i] != '"' || backslashesBefore(src, i)%2 == 1 {
+		i--
+	}
+	return i
+}
+
+func backslashesBefore(src []byte, i int) int {
+	n := 0
+	for ; i > 0 && src[i-1] == '\\'; i-- {
+		n++
+	}
+	return n
+}
+
 // readNode reads one value. ctx is the key the value stands under, and the key
 // of its array behind a "[" when it is an item of one: it says whether a string is
 // a name.
-func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int, ctx string) (*Node, error) {
+func readNode(dec *json.Decoder, src []byte, lines lineIndex, dups *[]Field, depth int, ctx string) (*Node, error) {
 	tok, err := dec.Token()
 	if err != nil {
 		return nil, err
@@ -188,19 +214,21 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int, ctx 
 					return nil, err
 				}
 				kline := lines.at(dec.InputOffset())
+				kend := int(dec.InputOffset())
+				kstart := stringStart(src, kend)
 				key := kt.(string)
 				if msg := nameProblem("a key", len(key)); msg != "" {
 					return nil, &limitError{kline, msg}
 				}
-				v, err := readNode(dec, lines, dups, depth, key)
+				v, err := readNode(dec, src, lines, dups, depth, key)
 				if err != nil {
 					return nil, err
 				}
 				if seen[key] {
-					*dups = append(*dups, Field{Key: key, Value: v, Line: kline})
+					*dups = append(*dups, Field{Key: key, Value: v, Line: kline, Start: kstart, End: kend})
 				}
 				seen[key] = true
-				n.Fields = append(n.Fields, Field{Key: key, Value: v, Line: kline})
+				n.Fields = append(n.Fields, Field{Key: key, Value: v, Line: kline, Start: kstart, End: kend})
 			}
 			_, err := dec.Token() // the closing }
 			return n, err
@@ -208,7 +236,7 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int, ctx 
 		n := &Node{Type: NodeArray, Line: line}
 		itemCtx := "[" + ctx
 		for dec.More() {
-			v, err := readNode(dec, lines, dups, depth, itemCtx)
+			v, err := readNode(dec, src, lines, dups, depth, itemCtx)
 			if err != nil {
 				return nil, err
 			}
@@ -222,7 +250,8 @@ func readNode(dec *json.Decoder, lines lineIndex, dups *[]Field, depth int, ctx 
 				return nil, &limitError{line, msg}
 			}
 		}
-		return &Node{Type: NodeString, Str: t, Line: line}, nil
+		end := int(dec.InputOffset())
+		return &Node{Type: NodeString, Str: t, Line: line, Start: stringStart(src, end), End: end}, nil
 	case bool:
 		return &Node{Type: NodeBool, Bool: t, Line: line}, nil
 	case json.Number:
