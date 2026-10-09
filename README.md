@@ -9,7 +9,8 @@ project, no network and no other tool.
 - `modelspec export` writes the JSON form of an HCL model, and `export --check`
   fails when a committed JSON file is not what its HCL exports to.
 - `modelspec rewrite` brings models from the old spelling (`entity`, `property`) to the new
-  one (`record`, `field`), changing nothing else in the files.
+  one (`record`, `field`), changing nothing else in the files. `lint` and `export` refuse the old
+  spelling in a model they check, so `rewrite` is the way out.
 - `modelspec version` and `modelspec self-update`.
 
 The checks are also an importable Go library, `github.com/modelspec-org/cli/pkg/modelspec`.
@@ -23,7 +24,7 @@ your platform's archive from that file and keep it in your repository next to th
 version:
 
 ```sh
-VERSION=X.Y.Z    # the release you pin, for example 0.1.0
+VERSION=X.Y.Z    # the release you pin, for example 0.2.0
 SHA256=...       # that archive's line in modelspec_${VERSION}_checksums.txt
 ARCHIVE="modelspec_${VERSION}_linux_amd64.tar.gz"   # or darwin_arm64, darwin_amd64, linux_arm64
 curl -fsSL -o "$ARCHIVE" "https://github.com/modelspec-org/cli/releases/download/v${VERSION}/${ARCHIVE}"
@@ -113,17 +114,28 @@ words whichever spelling the source used, and the Go library holds one vocabular
 (`KindRecord`; there is no alias for the old `KindEntity`, so a program written against it fails
 to compile and is changed on purpose).
 
-**The old spelling is a warning** (rule `deprecated-spelling`, both profiles, never the exit code):
-one finding for each file, at the line of the first old spelling (for JSON, at the `modelspec`
-line), saying how many the file holds and that `modelspec rewrite --write <file>` rewrites it.
-Nothing registered changes meaning: a model in the old spelling lints as before. The severity is
-decided in one place in the code, `OldSpellingSeverity` in `pkg/modelspec/finding.go`. Making the old
-spelling an error is a later, separate step: the owner approved it in advance (2026-10-09), and
-decision 0022 gives it a condition, that no registered model is pinned in the old spelling. It changes
-that constant, which touches no other production code (`rewrite` does not look at it), and the tests that
-pin a warning: the lint and export tests, the corpus test that pairs each old item with its copy in the
-new spelling (`oldSpellingVerdict`), and the manifest's old items, with the `differs` entries that
-the parity test then needs for the items the recorded readers accept.
+**The old spelling is an error in a model that is being checked** (rule `deprecated-spelling`,
+both profiles, exit 1; decision 0022, step 4): one finding for each file, at the line of the first
+old spelling (for JSON, at the `modelspec` line), saying how many the file holds and that
+`modelspec rewrite --write <file>` rewrites it. Up to v0.2.0 it was a warning that never changed the
+exit code. A model that is being checked is every file a path names (and the rest of its module, see
+below), every file `lint` is given as `--module` assignments when it is given no path, and the file
+`export` and `export --check` are given.
+
+The one exception is a **file that only `--module` supplies while a path names another model**: it is
+read so that references into its module resolve, and it keeps the warning. A model may refer to
+another model pinned at a past commit, and a commit that is pinned keeps its old spelling and stays
+readable (ModelSpec decisions 0018 and 0021); whoever checks the model that refers to it is not failed
+by it. Name the file as a path too to have it checked. The rest of a module follows the file that
+brings it in: a file a path names pulls in the rest of its module (the other `.hcl` files of a
+SpecScore layout directory, the JSON copy beside an HCL file) as checked, and a file that is only
+referred to pulls in its rest as referred to.
+
+The severity is decided in one place in the code, `OldSpellingSeverity` in `pkg/modelspec/finding.go`,
+from `Model.ReferenceOnly`, which `Lint` sets on the files that are only referred to. A program that
+calls `Check` itself gets the error for a model it does not mark. `modelspec rewrite` does not look at
+the severity, because it must read old files to rewrite them, and the readers read both spellings
+everywhere.
 
 **The JSON identifier decides the vocabulary.** A `1.0-draft-2` document with `entities`,
 `properties` or a member key `entity`, and a `1.0-draft` document with `records`, a record's
@@ -185,7 +197,10 @@ files, and a reference resolves against the whole module.
 
 1. **`--module <name>=<path>`** (repeatable; a file or a directory, any `.hcl` name) assigns
    files to module `<name>` and wins over the other rules. Assigned files are linted too, so
-   `modelspec lint --module core=shared/` is a complete command.
+   `modelspec lint --module core=shared/` is a complete command: with no path named, what is
+   assigned is what is checked. When paths name other files, a file that only `--module`
+   supplies is read so that references into its module resolve, and keeps the old spelling as a
+   warning (see "The new and the old spelling"); name it as a path too to have it checked.
 2. **SpecScore layout.** Every `*.hcl` file directly inside `…/modules/<id>/models/` belongs to
    module `<id>`, whatever the files are called. The layout is detected from the path of each
    file as given or found (symbolic links are not resolved first), with no need for the
@@ -224,7 +239,7 @@ Both forms, on the same typed model:
 | `encoding` | the source is UTF-8 |
 | `limit` | the source is within the size, nesting and heredoc limits (below) |
 | `shape` | blocks, labels and JSON groups have the structure ModelSpec defines; no unknown block types |
-| `deprecated-spelling` | warning: a file uses the old spelling (`entity`, `property`, `entity =`; JSON format `1.0-draft`), once for each file (decisions 0018, 0020, 0022); never the exit code |
+| `deprecated-spelling` | error: a file that is being checked uses the old spelling (`entity`, `property`, `entity =`; JSON format `1.0-draft`), once for each file (decisions 0018, 0020, 0022); warning, not the exit code, in a file that only `--module` supplies while a path names another model (read for its references) |
 | `removed-construct` | error: a `collection` or `recordset` block, or the JSON key `collections` or `recordsets` (decision 0019) |
 | `reserved-word` | error: a `projection` or `migration` block, an `index` block inside a record, or the JSON key `projections` or `migrations`: reserved words with no content yet (decision 0019) |
 | `literal` | HCL attribute values are literals: no expressions, references, functions or map-style containers (decisions 0007, 0009). Syntax a literal cannot contain is refused from the tokens before the file is parsed (below) |
@@ -240,7 +255,7 @@ Both forms, on the same typed model:
 | `attribute` | only supported attributes, with values of the right type |
 | `member-kind` | a field of a record or of a component has exactly one of `type`, `record`, `component` |
 | `key` | a record may omit `key` when the model does not assert row identity; when present, its non-empty list names distinct fields (or fields of components it uses) |
-| `modelspec-version`, `module` | JSON: `"modelspec"` is `"1.0-draft-2"` or the old `"1.0-draft"`, and the keys are those of that format; `module.id` and `module.version` are present (`module.name` is optional) |
+| `modelspec-version`, `module` | JSON: `"modelspec"` is `"1.0-draft-2"` or the old `"1.0-draft"` (read; `deprecated-spelling` is the error for it), and the keys are those of that format; `module.id` and `module.version` are present (`module.name` is optional) |
 | `unknown-field` | JSON: a top-level field the format does not define is a warning (`$schema` is accepted; the format is silent on other fields) |
 
 A JSON document needs no records, and a record needs no fields: a module of components and
@@ -461,7 +476,8 @@ modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.jso
 ```
 
 `export` lints the file first, as `lint` does under the default profile (so its module is checked
-whole), and refuses a file with errors (exit 1, the findings for that file on standard error);
+whole), and refuses a file with errors (exit 1, the findings for that file on standard error), the
+old spelling among them (see below);
 `--check` refuses an invalid model too, so a check cannot pass on one. It exports any `.hcl` file of a
 layout module, whatever it is called, and refuses a JSON file given as the source. A file that refers to other modules needs them supplied with
 `--module <name>=<path>` (they are used to resolve references and are not exported). When such a module has a file that was
@@ -469,22 +485,32 @@ found and not read (`skipped-file`), references into it were not checked: the ex
 before (exit 0), and standard error has that module's `skipped-file` finding and a note that says so.
 
 The JSON follows `spec/json-format.md`: `modelspec`, `module`, then components, enums and
-records (concepts in source order, attributes in source order). **It is written in the vocabulary
-of its source**: an HCL file with no old spelling exports as `"modelspec": "1.0-draft-2"` with
-`records`, `fields` and `record`, and an HCL file with any old spelling (`entity`, `property`,
-`entity =`) as `"1.0-draft"` with `entities`, `properties` and `entity`. So a repository whose
-`export --check` passes keeps passing, and passes again after `modelspec rewrite` has been run on
-both its files; the order of the two rewrites does not matter, but between them the pair is in two
-vocabularies, and the `stale-twin` warning and the `--check` message give one instruction,
-`modelspec rewrite --write` on both files. This holds without exception: an HCL file with no record, no
-reference to one and no old spelling (only components and enums, or nothing) is the same text in both
-vocabularies, so a plain `export` writes it as `1.0-draft-2`, and `--check` and `stale-twin` compare it with a
-copy written as `1.0-draft` in that vocabulary; the copy keeps its own `deprecated-spelling` warning until
-it is rewritten. Nothing that lints clean lacks a JSON form: every construct the reader still accepts has one,
-and the words with none (`index`, `projection`, `migration`) are errors. The output of `export` for
-datatug/chinookdb's `model/chinook.modelspec.hcl`, in the old spelling, is byte-identical to its committed
-`model/chinook.modelspec.json`, and the export of the same file after `modelspec rewrite` is byte-identical
-to the rewritten JSON.
+records (concepts in source order, attributes in source order). **It is written in the current
+vocabulary**: `"modelspec": "1.0-draft-2"` with `records`, `fields` and `record`.
+
+**An HCL file with any old spelling (`entity`, `property`, `entity =`) is refused**, by `export` and
+by `export --check` alike (exit 1, nothing written): the old spelling is an error in a model that is
+being checked (rule `deprecated-spelling`), and the refusal says so and that
+`modelspec rewrite --write <file>` brings the file up to date. Rewrite first, then export: run
+`rewrite --write` on the HCL file and on its committed JSON copy, then `export` and `export --check`
+work on the pair as they do on any file in the new spelling. Up to v0.2.0 such a file was exported in the vocabulary of
+its source, as `"modelspec": "1.0-draft"` with `entities`, `properties` and `entity`. A file supplied
+with `--module` is not exported, and keeps the old spelling as a warning, as for `lint`.
+
+An HCL file with no record, no reference to one and no old spelling (only components and enums, or
+nothing) is the same text in both vocabularies, so a plain `export` writes it as `1.0-draft-2`, and
+`--check` and `stale-twin` compare it with a copy written as `1.0-draft` in that vocabulary:
+`export --check` accepts that copy, which compares documents and does not lint the copy, and `lint`
+refuses it (its own `deprecated-spelling` error) until `modelspec rewrite` has brought it up to date.
+Nothing that lints clean lacks a JSON form: every construct the reader still accepts has one, and the
+words with none (`index`, `projection`, `migration`) are errors. The export of datatug/chinookdb's
+`model/chinook.modelspec.hcl` after `modelspec rewrite` is byte-identical to its committed
+`model/chinook.modelspec.json` after `modelspec rewrite` (a test checks the pair in the new spelling).
+
+The Go library keeps the writer of the old vocabulary: `Model.JSON` of a model read from an old-spelling
+source still writes `1.0-draft`, byte for byte what the file exported to before (a test checks it for
+Chinook), and the `stale-twin` comparison of a pair in the old spelling uses it. The command no
+longer reaches it for a source in the old spelling.
 
 Numbers are written in their canonical form (see "One form for a number"): `1.0` and `1e0` are `1`, `-0` is `0`, and
 a number that would need more than 40 characters as a plain decimal is written as digits and an exponent (`1e41`),
@@ -524,7 +550,8 @@ modelspec rewrite --check .          # in CI: exit 1 while any file is in the ol
 ```
 
 `rewrite` takes files and directories the way `lint` does (the same search, the same refusal to follow a
-link found in a search, `--module <name>=<path>` for files that are not called `*.modelspec.hcl`). It replaces
+link found in a search, `--module <name>=<path>` for files that are not called `*.modelspec.hcl`). It reads the
+old spelling that `lint` and `export` refuse, whatever the severity of the finding: it is the way out. It replaces
 the old spellings of the table under "The new and the old spelling", and nothing else:
 
 - HCL: the block type `entity`, the block type `property` directly inside a record, and the attribute name
@@ -590,11 +617,15 @@ entry under `parts/` that is one file of another item given alone and must give 
 `testdata/corpus/manifest.json` is the expected verdict of each, under both profiles; a test fails when this
 number is not the manifest's). 121 items are in the old spelling; under `new/` are their 121 copies in the new
 one and 9 items that have no old twin: where `modelspec rewrite` can rewrite every model file of an item, the copy is what it
-makes of the item, byte for byte (a test checks it), and the item's verdict is the copy's with the warning
-`deprecated-spelling` added; where it cannot (a file that does not parse, a JSON file that repeats a key, or one that holds a collection, a
+makes of the item, byte for byte (a test checks it), and the item's verdict is the copy's, refused, with the error
+`deprecated-spelling` added (with the warning added instead for the files that only the item's `modules` supply and the search of the
+item does not find: `parts/a.hcl` and `parts/b.hcl` of `standalone/explicit-module` and of
+`standalone/explicit-module-with-json-copy`); where it cannot (a file that does not parse, a JSON file that repeats a key, or one that holds a collection, a
 recordset or a reserved word), the copy was written by hand. The two readers below do not read the new
 spelling yet, so only the items in the old spelling are compared with them, and the items that now hold a
-removed or reserved construct are recorded as differences ("removed by decision 0019", "reserved by decision 0019"):
+removed or reserved construct are recorded as differences ("removed by decision 0019", "reserved by decision 0019").
+The readers still read the old spelling, which `modelspec lint` refuses, so an old item that is accepted by the
+reader and refused by `lint` for the spelling alone is recorded as a difference too ("lint refuses the old spelling"):
 
 - `testdata/golden/specscore.json`: `specscore graph lint`, compared with the **default**
   profile, through the throwaway-project wrapper that datatug/chinookdb's `scripts/lint-modelspec.sh`
