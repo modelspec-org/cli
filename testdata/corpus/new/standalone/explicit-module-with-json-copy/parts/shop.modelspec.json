@@ -1,0 +1,32 @@
+{
+  "modelspec": "1.0-draft-2",
+  "module": {
+    "id": "github.com/acme/shop",
+    "name": "shop",
+    "version": "0.1.0"
+  },
+  "records": {
+    "Product": {
+      "key": [
+        "id"
+      ],
+      "fields": {
+        "id": {
+          "type": "uuid"
+        },
+        "kind": {
+          "type": "string",
+          "enum": "Kind"
+        }
+      }
+    }
+  },
+  "enums": {
+    "Kind": {
+      "values": [
+        "physical",
+        "digital"
+      ]
+    }
+  }
+}

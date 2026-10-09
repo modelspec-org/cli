@@ -1,0 +1,3 @@
+# The corpus files are fixtures: their bytes are the test, trailing spaces and blank
+# lines at the end included (modelspec rewrite must keep them).
+testdata/corpus/** -whitespace

@@ -60,7 +60,7 @@ func TestNonLiteralSyntaxIsRefused(t *testing.T) {
 		{"a directive with a strip marker", "x = <<EOT\n%{~ if a ~}\nEOT\n", "a template directive", 2},
 		// The two inputs under the size limit that overflowed the parser's stack in
 		// the third review, small: the first token of the construct is the finding.
-		{"a full splat repeated", "entity \"A\" {\n  key = a" + rep("[*]", 1000) + "\n}\n", "an index or a splat", 2},
+		{"a full splat repeated", "record \"A\" {\n  key = a" + rep("[*]", 1000) + "\n}\n", "an index or a splat", 2},
 		{"directives split by newlines in a heredoc", "x = <<EOT\n" + rep("%{\nif x}", 1000) + "EOT\n", "a template directive", 2},
 		{"directives hidden by comments", "x = <<EOT\n" + rep("%{/**/if true}", 1000) + "EOT\n", "a template directive", 2},
 		{"a chain of namespaces", "x = " + rep("a::", 1000) + "b()", "`::`", 1},
@@ -84,7 +84,7 @@ func TestNonLiteralSyntaxIsRefused(t *testing.T) {
 func TestLiteralSyntaxIsAccepted(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ name, src string }{
-		{"a model", "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n    min_len = -1\n  }\n}\n"},
+		{"a model", "record \"A\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n    min_len = -1\n  }\n}\n"},
 		{"negative numbers", "x = -1\ny = [1, -2.5, - 3, -1e-3]\n"},
 		{"booleans, null and words", "x = true\ny = false\nz = null\nw = abc\n"},
 		{"a list of lists", "x = [[1], [2, 3]]\n"},
@@ -100,10 +100,10 @@ func TestLiteralSyntaxIsAccepted(t *testing.T) {
 		{"nesting at the limit after balanced pairs", "x = []\ny = [[]]\nz = " + rep("[", MaxDepth) + rep("]", MaxDepth)},
 		{"nesting at the limit after blocks", "a {\n}\nb {\n  c {\n  }\n}\nz = " + rep("[", MaxDepth) + rep("]", MaxDepth)},
 		{"a word for in a list", "x = [for]\ny = [for, a]\nz = {for = 1}\n"},
-		{"a block named for, with a label", "entity \"A\" {\n  for \"x\" {\n  }\n}\n"},
+		{"a block named for, with a label", "record \"A\" {\n  for \"x\" {\n  }\n}\n"},
 		{"closers alone", rep("]", 1000)},
 		{"empty lists in a row", rep("x = []\n", 1000)},
-		{"many labels", "entity " + rep("\"a\" ", 1000) + "{}"},
+		{"many labels", "record " + rep("\"a\" ", 1000) + "{}"},
 		{"many attributes", rep("a = 1\n", 1000)},
 		{"many blocks side by side", rep("a {}\n", 1000)},
 	}
@@ -207,9 +207,9 @@ func TestNonLiteralFindingsAreCappedAndDeduplicated(t *testing.T) {
 func TestReadersRefuseHostileInput(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, src, rule string }{
-		{"a full splat", "entity \"A\" {\n  key = a" + rep("[*]", 1000) + "\n}\n", RuleLiteral},
+		{"a full splat", "record \"A\" {\n  key = a" + rep("[*]", 1000) + "\n}\n", RuleLiteral},
 		{"directives", "x = <<EOT\n" + rep("%{\nif x}", 1000) + "EOT\n", RuleLiteral},
-		{"unary operators", "entity \"A\" {\n  key = " + rep("-", 1000) + "1\n}\n", RuleLiteral},
+		{"unary operators", "record \"A\" {\n  key = " + rep("-", 1000) + "1\n}\n", RuleLiteral},
 		{"conditionals", "x = " + rep("a ? b : ", 1000) + "c", RuleLiteral},
 		{"nested templates", "x = " + rep("\"${", 1000) + "1" + rep("}\"", 1000), RuleLiteral},
 		{"a heredoc with one quote, then nested brackets", "x = <<EOT\n\"\nEOT\nkey = " + rep("[", 1000) + "\n", RuleLimit},
@@ -230,13 +230,13 @@ func TestReadersRefuseHostileInput(t *testing.T) {
 // a heredoc or a string is text.
 func TestValidFileWithBracketsInHeredocs(t *testing.T) {
 	t.Parallel()
-	src := "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type    = \"string\"\n    pattern = <<EOT\n" + rep("[(", 33) + "\nEOT\n  }\n}\n"
+	src := "record \"A\" {\n  key = [\"id\"]\n  field \"id\" {\n    type    = \"string\"\n    pattern = <<EOT\n" + rep("[(", 33) + "\nEOT\n  }\n}\n"
 	if len(src) > 400 {
 		t.Fatalf("the file has %d bytes", len(src))
 	}
 	expect(t, run(map[string]string{"a" + hclExt: src}))
-	// And a heredoc `query` holding a quote, followed by many entities with a pattern of unbalanced brackets.
-	many := "collection \"c\" {\n  kind  = \"computed\"\n  query = <<EOT\n\"\nEOT\n}\n" + rep("entity \"E\" {\n  property \"p\" {\n    pattern = \"^[a-z\"\n  }\n}\n", 70)
+	// And a heredoc `query` holding a quote, followed by many records with a pattern of unbalanced brackets.
+	many := "collection \"c\" {\n  kind  = \"computed\"\n  query = <<EOT\n\"\nEOT\n}\n" + rep("record \"E\" {\n  field \"p\" {\n    pattern = \"^[a-z\"\n  }\n}\n", 70)
 	if got := hclFindings(many); len(got) != 0 {
 		t.Fatalf("unexpected findings %v", got)
 	}
@@ -307,7 +307,7 @@ func TestPrecheck(t *testing.T) {
 			t.Errorf("%s: %+v (bad %v)", tc.name, f, bad)
 		}
 	}
-	if _, bad := precheck("f", []byte("entity \"é\" {}\n")); bad {
+	if _, bad := precheck("f", []byte("record \"é\" {}\n")); bad {
 		t.Error("valid UTF-8 refused")
 	}
 	f, bad := precheck("f", make([]byte, MaxInputBytes+1))

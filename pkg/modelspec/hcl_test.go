@@ -15,32 +15,35 @@ func TestParseHCLShapeAndLiterals(t *testing.T) {
 		src  string
 		want []string
 	}{
-		{"clean", okEntity, nil},
-		{"syntax error", "entity \"A\" {\n", []string{"a.modelspec.hcl:1: error: Unclosed configuration block [syntax]"}},
-		{"top-level attribute", "x = 1\ny = 2\n" + okEntity, []string{`:1: error: top-level attribute "x" is not allowed`, `:2: error: top-level attribute "y" is not allowed`}},
-		{"block without label", "entity {\n}\n", []string{":1: error: entity block needs exactly one name label"}},
+		{"clean", okRecord, nil},
+		{"syntax error", "record \"A\" {\n", []string{"a.modelspec.hcl:1: error: Unclosed configuration block [syntax]"}},
+		{"top-level attribute", "x = 1\ny = 2\n" + okRecord, []string{`:1: error: top-level attribute "x" is not allowed`, `:2: error: top-level attribute "y" is not allowed`}},
+		{"block without label", "record {\n}\n", []string{":1: error: record block needs exactly one name label"}},
 		{"block with two labels", "enum \"a\" \"b\" {\n}\n", []string{"found 2 labels"}},
-		{"projection without label", "projection {\n}\n", []string{"projection block needs exactly one"}},
-		{"migration without label", "migration {\n}\n", []string{"migration block needs exactly one"}},
+		{"projection is reserved, labelled or not", "projection {\n}\nprojection \"p\" {\n}\n", []string{":1: error: projection is a reserved word with no content yet (decision 0019)", ":3: error: projection is a reserved word"}},
+		{"migration is reserved", "migration \"m\" {\n  from = \"1\"\n}\n", []string{":1: error: migration is a reserved word with no content yet (decision 0019)"}},
+		{"collection and recordset were removed", "collection \"c\" {\n  kind = \"editable\"\n}\nrecordset {\n}\n", []string{":1: error: collection blocks were removed (decision 0019): a stored set of rows is described by the database's own description, and the shape of a result is a record with no key", ":4: error: recordset blocks were removed (decision 0019)"}},
 		{"unknown block", "table \"t\" {\n}\n", []string{`unknown block type "table"`}},
-		{"member with two labels", "entity \"A\" {\n  property \"a\" \"b\" {\n  }\n}\n", []string{"property block needs exactly one name label"}},
-		{"member containing a block", "entity \"A\" {\n  property \"a\" {\n    type = \"int\"\n    x \"y\" {\n    }\n  }\n}\n", []string{`property "a" cannot contain a "x" block`}},
-		{"concept with a foreign block", "enum \"E\" {\n  values = [\"a\"]\n  property \"p\" {\n  }\n}\n", []string{`enum "E" cannot contain a "property" block`}},
-		{"index without label", "entity \"A\" {\n  index {\n  }\n}\n", []string{"index block needs exactly one name label"}},
-		{"non-literal function", "entity \"A\" {\n  key = upper(\"a\")\n}\n", []string{":2: error: a parenthesis (grouping or a function call) is not literal syntax"}},
-		{"non-literal reference", "entity \"A\" {\n  key = foo\n}\n", []string{"must be a literal"}},
-		{"template with interpolation", "entity \"A\" {\n  key = \"a${x}\"\n}\n", []string{":2: error: a template interpolation (`${`) is not literal syntax"}},
-		{"interpolation", "entity \"A\" {\n  key = [\"${x}\"]\n}\n", []string{":2: error: a template interpolation (`${`) is not literal syntax"}},
-		{"arithmetic", "entity \"A\" {\n  key = 1 + 1\n}\n", []string{":2: error: an arithmetic operator is not literal syntax"}},
-		{"logical not", "entity \"A\" {\n  key = !true\n}\n", []string{":2: error: a logical operator (`!`) is not literal syntax"}},
-		{"negated reference", "entity \"A\" {\n  key = -foo\n}\n", []string{":2: error: an operator (`-` is allowed only as the sign of a number) is not literal syntax"}},
-		{"list with expression", "entity \"A\" {\n  key = [1 + 1]\n}\n", []string{":2: error: an arithmetic operator is not literal syntax"}},
-		{"list with a reference", "entity \"A\" {\n  key = [foo]\n}\n", []string{`attribute "key": must be a literal`}},
-		{"a block with a bare label", "entity A {\n}\n", nil},
-		{"object value", "entity \"A\" {\n  key = { a = 1 }\n}\n", []string{"map-style values are not ModelSpec v0"}},
-		{"null", "entity \"A\" {\n  key = null\n}\n", []string{"null is not a ModelSpec value"}},
-		{"null in list", "entity \"A\" {\n  key = [null]\n}\n", []string{"null is not a ModelSpec value"}},
-		{"nested list", "entity \"A\" {\n  key = [[\"a\"]]\n}\n", []string{"nested lists are not ModelSpec v0"}},
+		{"member with two labels", "record \"A\" {\n  field \"a\" \"b\" {\n  }\n}\n", []string{"field block needs exactly one name label"}},
+		{"member containing a block", "record \"A\" {\n  field \"a\" {\n    type = \"int\"\n    x \"y\" {\n    }\n  }\n}\n", []string{`field "a" cannot contain a "x" block`}},
+		{"concept with a foreign block", "enum \"E\" {\n  values = [\"a\"]\n  field \"p\" {\n  }\n}\n", []string{`enum "E" cannot contain a "field" block`}},
+		{"index is reserved in a record, labelled or not", "record \"A\" {\n  index {\n  }\n  index \"i\" {\n    fields = [\"id\"]\n  }\n}\n", []string{":2: error: index is a reserved word with no content yet (decision 0019)", ":4: error: index is a reserved word"}},
+		{"index elsewhere is just an unknown block", "component \"C\" {\n  index \"i\" {\n  }\n}\n", []string{`component "C" cannot contain a "index" block`}},
+		{"property in a component is not a member", "component \"C\" {\n  property \"p\" {\n  }\n}\n", []string{`component "C" cannot contain a "property" block`}},
+		{"non-literal function", "record \"A\" {\n  key = upper(\"a\")\n}\n", []string{":2: error: a parenthesis (grouping or a function call) is not literal syntax"}},
+		{"non-literal reference", "record \"A\" {\n  key = foo\n}\n", []string{"must be a literal"}},
+		{"template with interpolation", "record \"A\" {\n  key = \"a${x}\"\n}\n", []string{":2: error: a template interpolation (`${`) is not literal syntax"}},
+		{"interpolation", "record \"A\" {\n  key = [\"${x}\"]\n}\n", []string{":2: error: a template interpolation (`${`) is not literal syntax"}},
+		{"arithmetic", "record \"A\" {\n  key = 1 + 1\n}\n", []string{":2: error: an arithmetic operator is not literal syntax"}},
+		{"logical not", "record \"A\" {\n  key = !true\n}\n", []string{":2: error: a logical operator (`!`) is not literal syntax"}},
+		{"negated reference", "record \"A\" {\n  key = -foo\n}\n", []string{":2: error: an operator (`-` is allowed only as the sign of a number) is not literal syntax"}},
+		{"list with expression", "record \"A\" {\n  key = [1 + 1]\n}\n", []string{":2: error: an arithmetic operator is not literal syntax"}},
+		{"list with a reference", "record \"A\" {\n  key = [foo]\n}\n", []string{`attribute "key": must be a literal`}},
+		{"a block with a bare label", "record A {\n}\n", nil},
+		{"object value", "record \"A\" {\n  key = { a = 1 }\n}\n", []string{"map-style values are not ModelSpec v0"}},
+		{"null", "record \"A\" {\n  key = null\n}\n", []string{"null is not a ModelSpec value"}},
+		{"null in list", "record \"A\" {\n  key = [null]\n}\n", []string{"null is not a ModelSpec value"}},
+		{"nested list", "record \"A\" {\n  key = [[\"a\"]]\n}\n", []string{"nested lists are not ModelSpec v0"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,9 +60,9 @@ func TestParseHCLShapeAndLiterals(t *testing.T) {
 
 func TestParseHCLValues(t *testing.T) {
 	t.Parallel()
-	src := `entity "A" {
+	src := `record "A" {
   key = ["id", "b"]
-  property "id" {
+  field "id" {
     type    = "int"
     max_len = 200
     min_len = -1
@@ -70,23 +73,8 @@ func TestParseHCLValues(t *testing.T) {
 line
 EOT
   }
-  property "p" {
+  field "p" {
     type = "string"
-  }
-  index "i" {
-    properties = ["id"]
-  }
-}
-
-projection "sqlite" {
-}
-
-migration "2026-07-08-user-display-name" {
-  from = "1.2.0"
-  to   = "1.3.0"
-
-  rename "User.fullName" {
-    to = "User.displayName"
   }
 }
 `
@@ -97,8 +85,8 @@ migration "2026-07-08-user-display-name" {
 	if m.Name != "shop" || m.Form != FormHCL || m.Module != nil {
 		t.Fatalf("model = %+v", m)
 	}
-	if len(m.Unmapped) != 3 || m.Unmapped[0].What != `entity "A" index "i"` || m.Unmapped[0].Line != 17 || m.Unmapped[1].What != `projection "sqlite"` || m.Unmapped[2].What != `migration "2026-07-08-user-display-name"` {
-		t.Fatalf("unmapped = %+v", m.Unmapped)
+	if len(m.Old) != 0 || m.OldVocabulary() {
+		t.Fatalf("a file in the new spelling holds old spellings: %+v", m.Old)
 	}
 	a := m.Concepts[0]
 	key, _ := a.Attr("key")
@@ -127,7 +115,7 @@ migration "2026-07-08-user-display-name" {
 	if _, ok := a.Attr("nope"); ok {
 		t.Error("Attr found a missing attribute")
 	}
-	if !m.HasConcept(KindEntity, "A") || m.HasConcept(KindEnum, "A") || m.HasConcept(KindEntity, "B") {
+	if !m.HasConcept(KindRecord, "A") || m.HasConcept(KindEnum, "A") || m.HasConcept(KindRecord, "B") {
 		t.Error("HasConcept wrong")
 	}
 }
@@ -206,9 +194,9 @@ func TestCanonicalNumber(t *testing.T) {
 func TestReadersAgreeOnNumbers(t *testing.T) {
 	t.Parallel()
 	for _, tc := range canonicalTable {
-		src := "entity \"A\" {\n  key = []\n  x = " + tc.in + "\n}\n"
+		src := "record \"A\" {\n  key = []\n  x = " + tc.in + "\n}\n"
 		if !strings.HasPrefix(tc.in, "-") { // a sign before a sign is not a number
-			src = "entity \"A\" {\n  key = []\n  x = " + tc.in + "\n  y = -" + tc.in + "\n}\n"
+			src = "record \"A\" {\n  key = []\n  x = " + tc.in + "\n  y = -" + tc.in + "\n}\n"
 		}
 		m, fs := ParseHCL("a"+hclExt, []byte(src))
 		if len(fs) != 0 || len(m.Concepts) != 1 {
@@ -243,7 +231,7 @@ func TestReadersAgreeOnNumbers(t *testing.T) {
 	// Equal values are duplicates in the checker whatever they are spelled, in both readers.
 	for _, group := range [][]string{{"1", "1.0", "1e0", "10e-1"}, {"0", "-0", "0.0"}, {"100", "1e2", "1E+2", "0.1e3"}} {
 		hcl := "enum \"E\" {\n  values = [" + strings.Join(group, ", ") + "]\n}\n"
-		json := `{"modelspec": "1.0-draft", "module": {"id": "x", "name": "x", "version": "1"}, "enums": {"E": {"values": [` + strings.Join(group, ", ") + `]}}}`
+		json := `{"modelspec": "1.0-draft-2", "module": {"id": "x", "name": "x", "version": "1"}, "enums": {"E": {"values": [` + strings.Join(group, ", ") + `]}}}`
 		for name, files := range map[string]map[string]string{"HCL": {"a" + hclExt: hcl}, "JSON": {"a" + jsonExt: json}} {
 			got := run(files)
 			if len(got) != len(group)-1 {
@@ -252,8 +240,8 @@ func TestReadersAgreeOnNumbers(t *testing.T) {
 		}
 	}
 	// A negative zero is zero in a count too, and a fraction is not a count.
-	expect(t, run(map[string]string{"a" + jsonExt: `{"modelspec": "1.0-draft", "module": {"id": "x", "name": "x", "version": "1"}, "entities": {"E": {"key": ["id"], "properties": {"id": {"type": "string", "max_len": -0, "min_len": 1e1}}}}}`}))
-	expect(t, run(map[string]string{"a" + jsonExt: `{"modelspec": "1.0-draft", "module": {"id": "x", "name": "x", "version": "1"}, "entities": {"E": {"key": ["id"], "properties": {"id": {"type": "string", "max_len": 1.5}}}}}`}), `"max_len"`)
+	expect(t, run(map[string]string{"a" + jsonExt: `{"modelspec": "1.0-draft-2", "module": {"id": "x", "name": "x", "version": "1"}, "records": {"E": {"key": ["id"], "fields": {"id": {"type": "string", "max_len": -0, "min_len": 1e1}}}}}`}))
+	expect(t, run(map[string]string{"a" + jsonExt: `{"modelspec": "1.0-draft-2", "module": {"id": "x", "name": "x", "version": "1"}, "records": {"E": {"key": ["id"], "fields": {"id": {"type": "string", "max_len": 1.5}}}}}`}), `"max_len"`)
 }
 
 // Writing a number takes a few small allocations, whatever the spelling: no
@@ -274,7 +262,7 @@ func TestNumbersAfterRewrittenText(t *testing.T) {
 	t.Parallel()
 	texts := []string{`"^[a-z]+$"`, `"50%"`, `"$$"`, `"%%"`, `"$${"`, `"a$b%c"`, `"$A"`, "<<EOT\n^[a-z]+$\nEOT"}
 	for _, text := range texts {
-		earlier := "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type    = \"string\"\n    pattern = " + text + "\n    max_len = 17\n    min_len = 3\n  }\n}\n"
+		earlier := "record \"E\" {\n  key = [\"id\"]\n  field \"id\" {\n    type    = \"string\"\n    pattern = " + text + "\n    max_len = 17\n    min_len = 3\n  }\n}\n"
 		m, fs := ParseHCL("a"+hclExt, []byte(earlier))
 		if len(fs) != 0 {
 			t.Errorf("%s: %v", text, fs)
@@ -319,7 +307,7 @@ func TestNumbersAfterRewrittenText(t *testing.T) {
 func TestNegativeExponentIsNotAWholeNumber(t *testing.T) {
 	t.Parallel()
 	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [1e-50, 7]\n}\n"}), `"values" must be a list of strings or integers`)
-	expect(t, run(map[string]string{"a" + hclExt: "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"string\"\n    max_len = 1e-50\n  }\n}\n"}), `"max_len"`)
+	expect(t, run(map[string]string{"a" + hclExt: "record \"E\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"string\"\n    max_len = 1e-50\n  }\n}\n"}), `"max_len"`)
 	expect(t, run(map[string]string{"a" + hclExt: "enum \"E\" {\n  values = [10e-1, 7]\n}\n"})) // 10e-1 is 1
 	for in, want := range map[string]bool{"1": true, "-7": true, "1e41": true, "15e-50": false, "0.5": false, "1e-50": false} {
 		if got := isIntegerNumber(canonicalNumber(in)); got != want {

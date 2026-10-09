@@ -2,6 +2,7 @@ package modelspec
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -22,15 +23,15 @@ func paths(ss []Source) string {
 func TestDiscover(t *testing.T) {
 	t.Parallel()
 	fsys := newMemFS(map[string]string{
-		"a.modelspec.hcl":              okEntity,
+		"a.modelspec.hcl":              okRecord,
 		"sub/b.modelspec.json":         "{}",
-		"sub/deeper/c.modelspec.hcl":   okEntity,
+		"sub/deeper/c.modelspec.hcl":   okRecord,
 		"sub/readme.md":                "",
 		"sub/model.hcl":                "",
-		".hidden/d.modelspec.hcl":      okEntity,
-		"node_modules/e.modelspec.hcl": okEntity,
-		"other/f.modelspec.hcl":        okEntity,
-		layout("m", "plain.hcl"):       okEntity,
+		".hidden/d.modelspec.hcl":      okRecord,
+		"node_modules/e.modelspec.hcl": okRecord,
+		"other/f.modelspec.hcl":        okRecord,
+		layout("m", "plain.hcl"):       okRecord,
 		layout("m", "notes.txt"):       "",
 	})
 	got, warnings, err := Discover(fsys, []string{".", "other/f.modelspec.hcl", "a.modelspec.hcl"})
@@ -54,7 +55,7 @@ func TestDiscover(t *testing.T) {
 
 func TestDiscoverErrors(t *testing.T) {
 	t.Parallel()
-	fsys := newMemFS(map[string]string{"x.txt": "", "d/y.modelspec.hcl": okEntity, "z.hcl": ""})
+	fsys := newMemFS(map[string]string{"x.txt": "", "d/y.modelspec.hcl": okRecord, "z.hcl": ""})
 	if _, _, err := Discover(fsys, []string{"missing"}); err == nil {
 		t.Error("a missing path was accepted")
 	}
@@ -88,7 +89,7 @@ func TestDiscoverErrors(t *testing.T) {
 		{"stat", func(m *memFS, err error) { m.statErr["d/y.modelspec.hcl"] = err }},
 	} {
 		cause := errors.New(tc.name + "-failure")
-		each := newMemFS(map[string]string{"d/y.modelspec.hcl": okEntity})
+		each := newMemFS(map[string]string{"d/y.modelspec.hcl": okRecord})
 		tc.inject(each, cause)
 		got, warnings, err := Discover(each, []string{"d"})
 		if err != nil || len(got) != 0 || len(warnings) != 1 || warnings[0].Rule != RuleIO || warnings[0].Severity != SeverityWarning || !strings.Contains(warnings[0].Message, cause.Error()) {
@@ -119,7 +120,7 @@ func TestLintRefusesAModuleItCannotListWhole(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("cannot list")
 	dir := "spec/modules/sales/models"
-	fsys := &failingFS{memFS: newMemFS(map[string]string{dir + "/a.hcl": okEntity}), readDirErr: boom, failAt: dir}
+	fsys := &failingFS{memFS: newMemFS(map[string]string{dir + "/a.hcl": okRecord}), readDirErr: boom, failAt: dir}
 	if _, err := Lint(fsys, []string{dir + "/a.hcl"}, LintOptions{}); !errors.Is(err, boom) {
 		t.Errorf("Lint = %v, want the listing error", err)
 	}
@@ -129,7 +130,7 @@ func TestLintRefusesAModuleItCannotListWhole(t *testing.T) {
 // differs by case on a case-insensitive filesystem, is read once.
 func TestDiscoverDeduplicates(t *testing.T) {
 	t.Parallel()
-	fsys := newMemFS(map[string]string{"work/m/a.modelspec.hcl": okEntity, "work/m/b.modelspec.hcl": okEntity})
+	fsys := newMemFS(map[string]string{"work/m/a.modelspec.hcl": okRecord, "work/m/b.modelspec.hcl": okRecord})
 	fsys.cwd = "/work"
 	got, _, err := Discover(fsys, []string{"m/a.modelspec.hcl", "./m/a.modelspec.hcl", "/work/m/a.modelspec.hcl", "m", "m/b.modelspec.hcl"})
 	if err != nil || paths(got) != "m/a.modelspec.hcl m/b.modelspec.hcl" {
@@ -142,7 +143,7 @@ func TestDiscoverDeduplicates(t *testing.T) {
 
 	// Two spellings that differ by case: one file on a case-insensitive filesystem, two on another.
 	for _, fold := range []bool{true, false} {
-		ci := newMemFS(map[string]string{"a.modelspec.hcl": okEntity, "A.modelspec.hcl": okEntity})
+		ci := newMemFS(map[string]string{"a.modelspec.hcl": okRecord, "A.modelspec.hcl": okRecord})
 		ci.caseFold = fold
 		got, _, err := Discover(ci, []string{"a.modelspec.hcl", "A.modelspec.hcl"})
 		want := 2
@@ -154,7 +155,7 @@ func TestDiscoverDeduplicates(t *testing.T) {
 		}
 	}
 	// Different files of one size are two files.
-	same := newMemFS(map[string]string{"a.modelspec.hcl": okEntity, "b.modelspec.hcl": okEntity})
+	same := newMemFS(map[string]string{"a.modelspec.hcl": okRecord, "b.modelspec.hcl": okRecord})
 	if got, _, err := Discover(same, []string{"a.modelspec.hcl", "b.modelspec.hcl"}); err != nil || len(got) != 2 {
 		t.Errorf("two files of equal size: %v, %v", paths(got), err)
 	}
@@ -163,9 +164,9 @@ func TestDiscoverDeduplicates(t *testing.T) {
 func TestDiscoverSymlinks(t *testing.T) {
 	t.Parallel()
 	fsys := newMemFS(map[string]string{
-		"real/a.modelspec.hcl":   okEntity,
+		"real/a.modelspec.hcl":   okRecord,
 		"real/other.txt":         "",
-		"dir/keep.modelspec.hcl": okEntity,
+		"dir/keep.modelspec.hcl": okRecord,
 	})
 	fsys.links["link.modelspec.hcl"] = "real/a.modelspec.hcl" // valid link to a file
 	fsys.links["dirlink"] = "real"                            // link to a directory: not followed
@@ -212,10 +213,10 @@ func TestDiscoverSymlinks(t *testing.T) {
 func TestLayoutIsReadFromTheGivenPath(t *testing.T) {
 	t.Parallel()
 	enums := "enum \"Status\" {\n  values = [\"open\"]\n}\n"
-	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    type = \"string\"\n    enum = \"Status\"\n  }\n}\n"
+	order := "record \"Order\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"s\" {\n    type = \"string\"\n    enum = \"Status\"\n  }\n}\n"
 	fsys := newMemFS(map[string]string{
-		layout("sales", "entities.hcl"): order,
-		"shared/enums.hcl":              enums,
+		layout("sales", "records.hcl"): order,
+		"shared/enums.hcl":             enums,
 	})
 	// A part of the module that is a symbolic link to a file elsewhere is not followed: a
 	// warning names it, and the module is checked without it.
@@ -224,27 +225,27 @@ func TestLayoutIsReadFromTheGivenPath(t *testing.T) {
 	expect(t, lintTree(fsys, "spec"), "enums.hcl: error: is a symbolic link") // and no reference error from a module read in part
 	// Named, the link has a model name and the same module as its siblings.
 	linked := newMemFS(map[string]string{
-		layout("sales", "entities.hcl"): order,
-		"shared/enums.modelspec.hcl":    enums,
+		layout("sales", "records.hcl"): order,
+		"shared/enums.modelspec.hcl":   enums,
 	})
 	linked.links[layout("sales", "enums.modelspec.hcl")] = "shared/enums.modelspec.hcl"
 	linked.MapFS[layout("sales", "enums.modelspec.hcl")] = linked.MapFS["shared/enums.modelspec.hcl"]
 	expect(t, lintTree(linked, "spec"), "enums.modelspec.hcl: error: is a symbolic link")
 	// Given by name, a link is read through, and is part of its module.
-	res, err := Lint(linked, []string{layout("sales", "entities.hcl"), layout("sales", "enums.modelspec.hcl")}, LintOptions{})
+	res, err := Lint(linked, []string{layout("sales", "records.hcl"), layout("sales", "enums.modelspec.hcl")}, LintOptions{})
 	if err != nil || len(res.Findings) != 0 {
 		t.Errorf("links named explicitly: %v, %v", res.Findings, err)
 	}
 
 	// A tree reached through a symbolic link to its modules directory has the layout of the path used.
 	via := newMemFS(map[string]string{
-		"elsewhere/sales/models/entities.hcl": order,
-		"elsewhere/sales/models/enums.hcl":    enums,
+		"elsewhere/sales/models/records.hcl": order,
+		"elsewhere/sales/models/enums.hcl":   enums,
 	})
 	via.links["project/modules"] = "elsewhere"
 	via.MapFS["project/modules"] = via.MapFS["elsewhere"]
 	// project/modules/sales/models is the lexical path; it is reached through the link by name.
-	via.MapFS["project/modules/sales/models/entities.hcl"] = via.MapFS["elsewhere/sales/models/entities.hcl"]
+	via.MapFS["project/modules/sales/models/records.hcl"] = via.MapFS["elsewhere/sales/models/records.hcl"]
 	via.MapFS["project/modules/sales/models/enums.hcl"] = via.MapFS["elsewhere/sales/models/enums.hcl"]
 	expect(t, lintTree(via, "project/modules/sales/models"))
 }
@@ -289,7 +290,7 @@ func TestLayoutDir(t *testing.T) {
 		t.Error("layoutModule refused an .hcl file")
 	}
 	// A path given from inside the models directory is made absolute first.
-	fsys := newMemFS(map[string]string{layout("sales", "a.hcl"): okEntity})
+	fsys := newMemFS(map[string]string{layout("sales", "a.hcl"): okRecord})
 	fsys.cwd = "/" + layout("sales", "")
 	got, _, err := Discover(fsys, []string{"a.hcl"})
 	if err != nil || len(got) != 1 || got[0].Abs != layout("sales", "a.hcl") {
@@ -301,30 +302,30 @@ func TestLayoutDir(t *testing.T) {
 // loaded and checked.
 func TestLintLoadsTheWholeModule(t *testing.T) {
 	t.Parallel()
-	entities := layout("sales", "entities.modelspec.hcl")
+	records := layout("sales", "records.modelspec.hcl")
 	enums := layout("sales", "enums.modelspec.hcl")
 	extra := layout("sales", "extra.modelspec.hcl")
 	tree := func() *memFS {
 		return newMemFS(map[string]string{
-			entities:                    "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"s\" {\n    type = \"string\"\n    enum = \"OrderStatus\"\n  }\n}\n",
+			records:                     "record \"Order\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"s\" {\n    type = \"string\"\n    enum = \"OrderStatus\"\n  }\n}\n",
 			enums:                       "enum \"OrderStatus\" {\n  values = [\"open\"]\n}\n",
 			extra:                       "enum \"OrderStatus\" {\n  values = [\"x\"]\n}\n",
-			layout("core", "model.hcl"): okEntity,
+			layout("core", "model.hcl"): okRecord,
 		})
 	}
-	wantNote := `a module is the unit of checking: module "sales" has more files in ` + filepath.ToSlash(filepath.Dir(entities)) + ` than were given, so the whole module was checked`
+	wantNote := `a module is the unit of checking: module "sales" has more files in ` + filepath.ToSlash(filepath.Dir(records)) + ` than were given, so the whole module was checked`
 
 	// The reviewer's first case: an enum in a sibling file resolves.
-	res, err := Lint(tree(), []string{entities}, LintOptions{})
+	res, err := Lint(tree(), []string{records}, LintOptions{})
 	if err != nil || res.Files != 3 || len(res.Notes) != 1 || res.Notes[0] != wantNote {
-		t.Fatalf("entities alone: %d files, notes %q, %v", res.Files, res.Notes, err)
+		t.Fatalf("records alone: %d files, notes %q, %v", res.Files, res.Notes, err)
 	}
 	// ... and the module holds the enum twice, which is reported, with the sibling's path.
 	got := []string{}
 	for _, f := range res.Findings {
 		got = append(got, f.String())
 	}
-	expect(t, got, extra+":1: error: duplicate concept name \"OrderStatus\" in the entity/component/enum scope (also declared at "+enums+":1)")
+	expect(t, got, extra+":1: error: duplicate concept name \"OrderStatus\" in the record/component/enum scope (also declared at "+enums+":1)")
 
 	// The reviewer's second case: a file that repeats a sibling's concept is not clean.
 	res, err = Lint(tree(), []string{extra}, LintOptions{})
@@ -335,26 +336,26 @@ func TestLintLoadsTheWholeModule(t *testing.T) {
 	// Without the duplicate, one file is clean and the sibling is found.
 	clean := tree()
 	delete(clean.MapFS, extra)
-	res, err = Lint(clean, []string{entities}, LintOptions{})
+	res, err = Lint(clean, []string{records}, LintOptions{})
 	if err != nil || res.Files != 2 || len(res.Findings) != 0 || len(res.Notes) != 1 {
 		t.Fatalf("clean module, one file: %d files, %v, notes %q, %v", res.Files, res.Findings, res.Notes, err)
 	}
 
 	// The same module reached through two files of one invocation is checked once, and said once.
-	res, err = Lint(clean, []string{entities, enums}, LintOptions{})
+	res, err = Lint(clean, []string{records, enums}, LintOptions{})
 	if err != nil || res.Files != 2 || len(res.Notes) != 0 {
 		t.Fatalf("both files given: %d files, notes %q, %v", res.Files, res.Notes, err)
 	}
 	// Three files of a module, two of them given: the module is checked once and said once.
 	three := tree()
-	res, err = Lint(three, []string{entities, extra}, LintOptions{})
+	res, err = Lint(three, []string{records, extra}, LintOptions{})
 	if err != nil || res.Files != 3 || len(res.Notes) != 1 {
 		t.Fatalf("two of three given: %d files, notes %q, %v", res.Files, res.Notes, err)
 	}
 	// Two different modules, one file of each: one note each.
 	two := tree()
 	two.MapFS[layout("core", "second.hcl")] = &fstest.MapFile{Data: []byte("enum \"E\" {\n  values = [\"x\"]\n}\n")}
-	res, err = Lint(two, []string{entities, layout("core", "model.hcl")}, LintOptions{})
+	res, err = Lint(two, []string{records, layout("core", "model.hcl")}, LintOptions{})
 	if err != nil || len(res.Notes) != 2 {
 		t.Fatalf("two modules: notes %q, %v", res.Notes, err)
 	}
@@ -364,14 +365,14 @@ func TestLintLoadsTheWholeModule(t *testing.T) {
 		t.Fatalf("a directory: %d files, notes %q, %v", res.Files, res.Notes, err)
 	}
 	// A file outside the layout is a module of its own: nothing to add.
-	alone := newMemFS(map[string]string{"x.modelspec.hcl": okEntity, "y.modelspec.hcl": okEntity})
+	alone := newMemFS(map[string]string{"x.modelspec.hcl": okRecord, "y.modelspec.hcl": okRecord})
 	res, err = Lint(alone, []string{"x.modelspec.hcl"}, LintOptions{})
 	if err != nil || res.Files != 1 || len(res.Notes) != 0 {
 		t.Fatalf("a standalone file: %d files, notes %q, %v", res.Files, res.Notes, err)
 	}
 	// A models directory that cannot be listed is an error.
 	broken := tree()
-	if _, err = Lint(&failingFS{memFS: broken, readDirErr: errors.New("no listing"), failAt: filepath.Dir(entities)}, []string{entities}, LintOptions{}); err == nil {
+	if _, err = Lint(&failingFS{memFS: broken, readDirErr: errors.New("no listing"), failAt: filepath.Dir(records)}, []string{records}, LintOptions{}); err == nil {
 		t.Fatal("an unlistable directory was linted")
 	}
 }
@@ -379,8 +380,8 @@ func TestLintLoadsTheWholeModule(t *testing.T) {
 // X.modelspec.hcl and X.modelspec.json are one module: given one, both are checked.
 func TestLintLoadsTheTwin(t *testing.T) {
 	t.Parallel()
-	hclSrc := entityWith("Space")
-	jsonSrc := `{"modelspec": "1.0-draft", "module": {"id": "x/core", "name": "core", "version": "1"}, "entities": {"Space": {"key": ["id"], "properties": {"id": {"type": "int"}}}}}`
+	hclSrc := recordWith("Space")
+	jsonSrc := `{"modelspec": "1.0-draft-2", "module": {"id": "x/core", "name": "core", "version": "1"}, "records": {"Space": {"key": ["id"], "fields": {"id": {"type": "int"}}}}}`
 	for _, given := range []string{"d/core.modelspec.hcl", "d/core.modelspec.json"} {
 		fsys := newMemFS(map[string]string{"d/core.modelspec.hcl": hclSrc, "d/core.modelspec.json": jsonSrc})
 		res, err := Lint(fsys, []string{given}, LintOptions{})
@@ -409,15 +410,15 @@ func TestLintLoadsTheTwin(t *testing.T) {
 func TestLoadModuleRules(t *testing.T) {
 	t.Parallel()
 	fsys := newMemFS(map[string]string{
-		layout("sales", "a.hcl"):                okEntity,
+		layout("sales", "a.hcl"):                okRecord,
 		layout("sales", "b.hcl"):                "enum \"E\" {\n  values = [\"x\"]\n}\n",
-		layout("sales", "sales.modelspec.json"): strings.Replace(doc(jEntities), `"name": "y"`, `"name": "sales"`, 1),
-		"std/core" + hclExt:                     okEntity,
-		"std/core.modelspec.json":               doc(jEntities),
-		"std/other.modelspec.json":              strings.Replace(doc(jEntities), `"name": "y"`, `"name": "named"`, 1),
-		"std/odd.hcl":                           okEntity,
+		layout("sales", "sales.modelspec.json"): strings.Replace(doc(jRecords), `"name": "y"`, `"name": "sales"`, 1),
+		"std/core" + hclExt:                     okRecord,
+		"std/core.modelspec.json":               doc(jRecords),
+		"std/other.modelspec.json":              strings.Replace(doc(jRecords), `"name": "y"`, `"name": "named"`, 1),
+		"std/odd.hcl":                           okRecord,
 		"std/odd2.hcl":                          "enum \"F\" {\n  values = [\"x\"]\n}\n",
-		"std/shop.modelspec.json":               strings.Replace(doc(jEntities), `"name": "y"`, `"name": "shop"`, 1),
+		"std/shop.modelspec.json":               strings.Replace(doc(jRecords), `"name": "y"`, `"name": "shop"`, 1),
 	})
 	sources, _, err := Discover(fsys, []string{layout("sales", ""), "std/core" + hclExt, "std/core.modelspec.json", "std/other.modelspec.json"})
 	if err != nil {
@@ -447,7 +448,7 @@ func TestLoadModuleRules(t *testing.T) {
 	}
 
 	// A single-file layout module's JSON also has the HCL of the same stem as its source.
-	solo := newMemFS(map[string]string{layout("solo", "solo.modelspec.hcl"): okEntity, layout("solo", "solo.modelspec.json"): doc(jEntities)})
+	solo := newMemFS(map[string]string{layout("solo", "solo.modelspec.hcl"): okRecord, layout("solo", "solo.modelspec.json"): doc(jRecords)})
 	sources, _, _ = Discover(solo, []string{layout("solo", "")})
 	models, _, _ = Load(solo, sources, nil)
 	if j := models[1]; !j.Twin || j.TwinOf != models[0] || j.Name != "solo" {
@@ -495,7 +496,7 @@ func TestLoadModuleRules(t *testing.T) {
 
 func TestLoadErrors(t *testing.T) {
 	t.Parallel()
-	fsys := newMemFS(map[string]string{"a.modelspec.hcl": okEntity, "d/b.hcl": okEntity, layout("sales", "p.hcl"): okEntity, layout("sales", "q.hcl"): okEntity})
+	fsys := newMemFS(map[string]string{"a.modelspec.hcl": okRecord, "d/b.hcl": okRecord, layout("sales", "p.hcl"): okRecord, layout("sales", "q.hcl"): okRecord})
 	sources, _, _ := Discover(fsys, []string{"a.modelspec.hcl"})
 	if _, _, err := Load(&unreadableFS{fsys}, sources, nil); err == nil {
 		t.Error("Load of an unreadable file succeeded")
@@ -537,7 +538,7 @@ func TestLoadErrors(t *testing.T) {
 // A file larger than the limit is refused from its size, before it is read.
 func TestOversizeFileIsNotRead(t *testing.T) {
 	t.Parallel()
-	fsys := newMemFS(map[string]string{"big.modelspec.hcl": okEntity, "bigj.modelspec.json": "{}", "ok.modelspec.hcl": okEntity})
+	fsys := newMemFS(map[string]string{"big.modelspec.hcl": okRecord, "bigj.modelspec.json": "{}", "ok.modelspec.hcl": okRecord})
 	fsys.sizes["big.modelspec.hcl"] = MaxInputBytes + 1
 	fsys.sizes["bigj.modelspec.json"] = MaxInputBytes + 1
 	read := map[string]bool{}
@@ -572,9 +573,9 @@ func (r *readSpy) Open(name string) (fs.File, error) {
 func TestLint(t *testing.T) {
 	t.Parallel()
 	fsys := newMemFS(map[string]string{
-		"ok.modelspec.hcl":    okEntity,
-		"bad.modelspec.hcl":   "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"nope\"\n  }\n}\n",
-		"data.modelspec.json": doc(jEntities),
+		"ok.modelspec.hcl":    okRecord,
+		"bad.modelspec.hcl":   "record \"A\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"nope\"\n  }\n}\n",
+		"data.modelspec.json": doc(jRecords),
 	})
 	res, err := Lint(fsys, []string{"."}, LintOptions{})
 	if err != nil || res.Files != 3 || len(res.Models) != 3 {
@@ -625,10 +626,10 @@ func TestOSFS(t *testing.T) {
 	dir := t.TempDir()
 	var fsys FS = OSFS{}
 	file := filepath.Join(dir, "m.modelspec.hcl")
-	if err := fsys.WriteFile(file, []byte(okEntity), 0o644); err != nil {
+	if err := fsys.WriteFile(file, []byte(okRecord), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := ReadSource(fsys, file); err != nil || string(b) != okEntity {
+	if b, err := ReadSource(fsys, file); err != nil || string(b) != okRecord {
 		t.Fatalf("ReadSource = %q, %v", b, err)
 	}
 	if info, err := fsys.Stat(dir); err != nil || !info.IsDir() {
@@ -656,10 +657,18 @@ func TestOSFS(t *testing.T) {
 	if err != nil || res.Files != 1 {
 		t.Fatalf("Lint of three names read %d files, %v", res.Files, err)
 	}
+	// A symbolic link is followed to the file, every link on the way resolved.
+	wantTarget, _ := filepath.EvalSymlinks(file)
+	if got, err := (OSFS{}).EvalSymlinks(link); err != nil || got != wantTarget {
+		t.Fatalf("EvalSymlinks = %q, %v; want %q", got, err, wantTarget)
+	}
+	if _, err := (OSFS{}).EvalSymlinks(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("EvalSymlinks of a missing file succeeded")
+	}
 	a, _ := fsys.Stat(link)
 	b, _ := fsys.Stat(file)
 	other := filepath.Join(dir, "other.modelspec.hcl")
-	if err := os.WriteFile(other, []byte(okEntity), 0o644); err != nil {
+	if err := os.WriteFile(other, []byte(okRecord), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	c, _ := fsys.Stat(other)
@@ -682,7 +691,7 @@ func TestOSFS(t *testing.T) {
 		t.Fatal(err)
 	}
 	elsewhere := t.TempDir()
-	if err := os.WriteFile(filepath.Join(elsewhere, "x.modelspec.hcl"), []byte(okEntity), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(elsewhere, "x.modelspec.hcl"), []byte(okRecord), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(elsewhere, filepath.Join(dir, "dirlink")); err != nil {
@@ -835,7 +844,7 @@ func TestSearchDoesNotReadLinksPipesOrDevices(t *testing.T) {
 	t.Parallel()
 	var given int64
 	zeros := func() io.Reader { return countingZeros{&given} }
-	fsys := newMemFS(map[string]string{"repo/ok.modelspec.hcl": okEntity, "repo/pipe.modelspec.hcl": "", "repo/dev.modelspec.json": "", "repo/real.modelspec.hcl": okEntity, "dir/models.txt": ""})
+	fsys := newMemFS(map[string]string{"repo/ok.modelspec.hcl": okRecord, "repo/pipe.modelspec.hcl": "", "repo/dev.modelspec.json": "", "repo/real.modelspec.hcl": okRecord, "dir/models.txt": ""})
 	fsys.modes["repo/pipe.modelspec.hcl"] = fs.ModeNamedPipe
 	fsys.modes["repo/dev.modelspec.json"] = fs.ModeDevice | fs.ModeCharDevice
 	fsys.streams["repo/pipe.modelspec.hcl"], fsys.streams["repo/dev.modelspec.json"] = zeros, zeros
@@ -948,9 +957,9 @@ var skippedKinds = map[string]func(fsys *memFS, p, content string){
 // through one is not green; a JSON twin that is one is not passed over.
 func TestSkippedModelFileIsAnErrorAndItsModuleIsNotCheckedInPart(t *testing.T) {
 	t.Parallel()
-	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
-	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
-	invalid := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	order := "record \"Order\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"c\" {\n    record = \"Customer\"\n  }\n}\n"
+	customer := "record \"Customer\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
+	invalid := "record \"Bad\" {\n  key = [\"nope\"]\n}\n"
 	for kind, make := range skippedKinds {
 		for _, profile := range []Profile{ProfileDefault, ProfilePublish} {
 			lint := func(fsys *memFS, paths ...string) []string {
@@ -967,7 +976,7 @@ func TestSkippedModelFileIsAnErrorAndItsModuleIsNotCheckedInPart(t *testing.T) {
 			want := func(path string) string { return path + ": error: is " }
 			// 1 and 3: the sibling of a layout module's file.
 			shop := func() *memFS {
-				fsys := newMemFS(map[string]string{layout("shop", "order.hcl"): order, "other.modelspec.hcl": "entity \"Other\" {\n  key = [\"nope\"]\n}\n"})
+				fsys := newMemFS(map[string]string{layout("shop", "order.hcl"): order, "other.modelspec.hcl": "record \"Other\" {\n  key = [\"nope\"]\n}\n"})
 				make(fsys, layout("shop", "customer.hcl"), customer)
 				return fsys
 			}
@@ -989,7 +998,7 @@ func TestSkippedModelFileIsAnErrorAndItsModuleIsNotCheckedInPart(t *testing.T) {
 				if !found {
 					t.Errorf("%s, %v, %s: no skipped-file error: %v", kind, paths, profile, got)
 				}
-				if paths[0] == "." && !strings.Contains(strings.Join(got, "\n"), "other.modelspec.hcl:2: error: entity \"Other\" key") {
+				if paths[0] == "." && !strings.Contains(strings.Join(got, "\n"), "other.modelspec.hcl:2: error: record \"Other\" key") {
 					t.Errorf("%s, %s: the other module of the run was not checked: %v", kind, profile, got)
 				}
 			}
@@ -1019,10 +1028,10 @@ func TestSkippedModelFileIsAnErrorAndItsModuleIsNotCheckedInPart(t *testing.T) {
 func TestSkippedFileOfAnAssignedModule(t *testing.T) {
 	t.Parallel()
 	fsys := newMemFS(map[string]string{
-		"a.modelspec.hcl": "entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"core.X\"\n  }\n}\n",
-		"ctx/x.hcl":       "entity \"X\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n",
+		"a.modelspec.hcl": "record \"A\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"c\" {\n    record = \"core.X\"\n  }\n}\n",
+		"ctx/x.hcl":       "record \"X\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n",
 	})
-	skippedKinds["a named pipe"](fsys, "ctx/y.hcl", "entity \"Y\" {}\n")
+	skippedKinds["a named pipe"](fsys, "ctx/y.hcl", "record \"Y\" {}\n")
 	res, err := Lint(fsys, []string{"a.modelspec.hcl"}, LintOptions{Modules: []Assignment{{Module: "core", Path: "ctx"}}})
 	if err != nil || len(res.Findings) != 1 || res.Findings[0].Rule != RuleSkipped || res.Findings[0].File != "ctx/y.hcl" {
 		t.Fatalf("findings %v, %v", res.Findings, err)
@@ -1043,8 +1052,8 @@ func TestSkippedLinkOnTheRealFileSystem(t *testing.T) {
 	if err := os.MkdirAll(models, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
-	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
+	order := "record \"Order\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"c\" {\n    record = \"Customer\"\n  }\n}\n"
+	customer := "record \"Customer\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
 	real := filepath.Join(dir, "customer-real.hcl")
 	for path, content := range map[string]string{filepath.Join(models, "order.hcl"): order, real: customer} {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -1074,9 +1083,9 @@ func TestSkippedLinkOnTheRealFileSystem(t *testing.T) {
 // name, in either direction.
 func TestOnlyTheAffectedModuleIsNotChecked(t *testing.T) {
 	t.Parallel()
-	keyError := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
-	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
-	refersToCore := "entity \"App\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"core.Customer\"\n  }\n}\n"
+	keyError := "record \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	customer := "record \"Customer\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
+	refersToCore := "record \"App\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"c\" {\n    record = \"core.Customer\"\n  }\n}\n"
 	for kind, make := range skippedKinds {
 		lint := func(fsys *memFS, paths ...string) []string {
 			res, err := Lint(fsys, paths, LintOptions{})
@@ -1097,19 +1106,19 @@ func TestOnlyTheAffectedModuleIsNotChecked(t *testing.T) {
 		// the skipped file and an error of its own, is not checked and so reports only the file.
 		fsys := newMemFS(map[string]string{layout("billing", "a.hcl"): keyError, layout("core", "bad.hcl"): keyError})
 		make(fsys, layout("core", "customer.hcl"), customer)
-		only(lint(fsys, "."), layout("billing", "a.hcl")+":2: error: entity \"Bad\" key", layout("core", "customer.hcl")+": error: is ")
+		only(lint(fsys, "."), layout("billing", "a.hcl")+":2: error: record \"Bad\" key", layout("core", "customer.hcl")+": error: is ")
 		// A module that refers into the incomplete one: its reference is not reported.
-		fsys = newMemFS(map[string]string{layout("core", "other.hcl"): "entity \"Other\" {\n  key = []\n}\n", "app.modelspec.hcl": refersToCore}) // Customer is in the file not read
+		fsys = newMemFS(map[string]string{layout("core", "other.hcl"): "record \"Other\" {\n  key = []\n}\n", "app.modelspec.hcl": refersToCore}) // Customer is in the file not read
 		make(fsys, layout("core", "customer2.hcl"), customer)
 		only(lint(fsys, "."), layout("core", "customer2.hcl")+": error: is ")
 		// The twin of the same name: the HCL a link and the JSON real, and the other way round.
-		fsys = newMemFS(map[string]string{"models/a.modelspec.json": doc(jEntities)})
+		fsys = newMemFS(map[string]string{"models/a.modelspec.json": doc(jRecords)})
 		make(fsys, "models/a.modelspec.hcl", keyError)
 		only(lint(fsys, "models"), "models/a.modelspec.hcl: error: is ")
 		fsys = newMemFS(map[string]string{"models/a.modelspec.hcl": keyError})
 		make(fsys, "models/a.modelspec.json", "{}")
 		only(lint(fsys, "models"), "models/a.modelspec.json: error: is ")
-		fsys = newMemFS(map[string]string{"models/a.modelspec.json": `{"modelspec": "1.0-draft", "module": {"id": "x", "version": "1"}, "entities": {"Bad": {"key": ["nope"], "properties": {}}}}`})
+		fsys = newMemFS(map[string]string{"models/a.modelspec.json": `{"modelspec": "1.0-draft-2", "module": {"id": "x", "version": "1"}, "records": {"Bad": {"key": ["nope"], "fields": {}}}}`})
 		make(fsys, "models/a.modelspec.hcl", customer)
 		only(lint(fsys, "models"), "models/a.modelspec.hcl: error: is ")
 	}
@@ -1120,8 +1129,8 @@ func TestOnlyTheAffectedModuleIsNotChecked(t *testing.T) {
 // assignments, and what cannot be read at all is an error in either order.
 func TestANamedLinkIsReadInEitherOrder(t *testing.T) {
 	t.Parallel()
-	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
-	order := "entity \"Order\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"Customer\"\n  }\n}\n"
+	customer := "record \"Customer\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
+	order := "record \"Order\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"c\" {\n    record = \"Customer\"\n  }\n}\n"
 	link := layout("shop", "customer.hcl")
 	tree := func(kind string) *memFS {
 		fsys := newMemFS(map[string]string{layout("shop", "order.hcl"): order})
@@ -1172,9 +1181,9 @@ func TestANamedLinkIsReadInEitherOrder(t *testing.T) {
 // that is itself the file that was not read, whatever its form.
 func TestPartlyLoadedModulesReportOnlyTheSkippedFile(t *testing.T) {
 	t.Parallel()
-	space := "entity \"Space\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
-	customer := "entity \"Customer\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n}\n"
-	app := "entity \"App\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"core.Customer\"\n  }\n}\n"
+	space := "record \"Space\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
+	customer := "record \"Customer\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n}\n"
+	app := "record \"App\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"c\" {\n    record = \"core.Customer\"\n  }\n}\n"
 	for kind, make := range skippedKinds {
 		// A directory as a path and with --module: core.hcl is read only as part of the assignment.
 		fsys := newMemFS(map[string]string{"core/core.hcl": space, "app/app.modelspec.hcl": app})
@@ -1192,7 +1201,7 @@ func TestPartlyLoadedModulesReportOnlyTheSkippedFile(t *testing.T) {
 			t.Errorf("%s: skipped %+v, want one found under module core", kind, res.Skipped)
 		}
 		// A standalone module that is the file not read, as HCL or as JSON.
-		for suffix, content := range map[string]string{HCLSuffix: customer, JSONSuffix: doc(jEntities)} {
+		for suffix, content := range map[string]string{HCLSuffix: customer, JSONSuffix: doc(jRecords)} {
 			fsys = newMemFS(map[string]string{"app.modelspec.hcl": app})
 			make(fsys, "core"+suffix, content)
 			res, err = Lint(fsys, []string{"."}, LintOptions{})
@@ -1217,8 +1226,8 @@ func TestAModelsDirectoryThatIsALinkIsAnError(t *testing.T) {
 	t.Parallel()
 	shopModels := layout("shop", "")
 	shopModels = shopModels[:len(shopModels)-1] // spec/graph/modules/shop/models
-	invalid := "entity \"Bad\" {\n  key = [\"nope\"]\n}\n"
-	app := "entity \"App\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"c\" {\n    entity = \"shop.Bad\"\n  }\n}\n"
+	invalid := "record \"Bad\" {\n  key = [\"nope\"]\n}\n"
+	app := "record \"App\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"c\" {\n    record = \"shop.Bad\"\n  }\n}\n"
 	tree := func() *memFS {
 		fsys := newMemFS(map[string]string{"elsewhere/shop/bad.hcl": invalid, "app.modelspec.hcl": app, "other.modelspec.hcl": invalid})
 		fsys.MapFS[shopModels] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
@@ -1239,7 +1248,7 @@ func TestAModelsDirectoryThatIsALinkIsAnError(t *testing.T) {
 	// Searched: the directory is named by the error, its model is not read, the module is not
 	// reported as unknown to the model that refers into it, and the other model of the run is checked.
 	res, got := lint(ProfileDefault, ".")
-	expect(t, got, shopModels+": error: is a symbolic link to a directory, which a search does not follow", "other.modelspec.hcl:2: error: entity \"Bad\" key")
+	expect(t, got, shopModels+": error: is a symbolic link to a directory, which a search does not follow", "other.modelspec.hcl:2: error: record \"Bad\" key")
 	if len(res.Skipped) != 1 || res.Skipped[0].Finding.Rule != RuleSkipped || res.Skipped[0].Finding.File != shopModels {
 		t.Errorf("skipped %+v", res.Skipped)
 	}
@@ -1248,18 +1257,18 @@ func TestAModelsDirectoryThatIsALinkIsAnError(t *testing.T) {
 		t.Errorf("publish: skipped %d, findings %v", len(res.Skipped), res.Findings)
 	}
 	// Named, before or after the directory above it, the link is entered and its model is read.
-	keyOfBad := layout("shop", "bad.hcl") + ":2: error: entity \"Bad\" key"
+	keyOfBad := layout("shop", "bad.hcl") + ":2: error: record \"Bad\" key"
 	_, got = lint(ProfileDefault, shopModels)
 	expect(t, got, keyOfBad)
 	for _, paths := range [][]string{{shopModels, "."}, {".", shopModels}} {
 		res, got := lint(ProfileDefault, paths...)
-		expect(t, got, keyOfBad, "other.modelspec.hcl:2: error: entity \"Bad\" key")
+		expect(t, got, keyOfBad, "other.modelspec.hcl:2: error: record \"Bad\" key")
 		if len(res.Skipped) != 0 {
 			t.Errorf("%v: %d skipped", paths, len(res.Skipped))
 		}
 	}
 	// Not a models directory, or nothing to search: no finding.
-	quiet := newMemFS(map[string]string{"ok.modelspec.hcl": okEntity, "elsewhere/x.hcl": okEntity, "docs/real/models/ok.modelspec.hcl": okEntity})
+	quiet := newMemFS(map[string]string{"ok.modelspec.hcl": okRecord, "elsewhere/x.hcl": okRecord, "docs/real/models/ok.modelspec.hcl": okRecord})
 	quiet.MapFS["docs/models"] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
 	quiet.links["docs/models"] = "elsewhere" // named models, but not under modules/<id>
 	quiet.MapFS[layout("a", "")[:len(layout("a", ""))-1]] = &fstest.MapFile{Data: []byte("x")}
@@ -1282,7 +1291,7 @@ func TestAModelsDirectoryThatIsALinkOnTheRealFileSystem(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(real, "bad.hcl"), []byte("entity \"Bad\" {\n  key = [\"nope\"]\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(real, "bad.hcl"), []byte("record \"Bad\" {\n  key = [\"nope\"]\n}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(modules, "models")
@@ -1414,3 +1423,119 @@ type fakeWriter struct {
 
 func (f *fakeWriter) Write(p []byte) (int, error) { return len(p), f.writeErr }
 func (f *fakeWriter) Close() error                { f.closed = true; return f.closeErr }
+
+// DiscoverModules finds what Lint is given: the paths, and the files assigned to
+// modules, which may be called anything.
+func TestDiscoverModules(t *testing.T) {
+	t.Parallel()
+	fsys := newMemFS(map[string]string{"a.modelspec.hcl": okRecord, "parts/b.hcl": okRecord, "parts/readme.txt": ""})
+	files, found, err := DiscoverModules(fsys, []string{"a.modelspec.hcl"}, []Assignment{{Module: "shop", Path: "parts"}})
+	if err != nil || len(found) != 0 || len(files) != 2 || files[0].Path != "a.modelspec.hcl" || files[1].Path != "parts/b.hcl" {
+		t.Fatalf("files = %v, findings = %v, %v", files, found, err)
+	}
+	if _, _, err := DiscoverModules(fsys, []string{"a.modelspec.hcl"}, []Assignment{{Module: "shop", Path: "missing"}}); err == nil {
+		t.Error("an assignment of a missing path was accepted")
+	}
+	if _, _, err := DiscoverModules(fsys, []string{"missing"}, nil); err == nil {
+		t.Error("a missing path was accepted")
+	}
+}
+
+// A file that is replaced keeps its permission bits exactly, whatever the umask does
+// to the mode of a new file; the data is synced; a failure leaves nothing behind.
+func TestWriteFileKeepsTheModeWhateverTheUmask(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, mode := range []fs.FileMode{0o664, 0o666, 0o600, 0o640, 0o755, 0o444, 0o400} {
+		file := filepath.Join(dir, fmt.Sprintf("m%o.modelspec.hcl", mode))
+		if err := os.WriteFile(file, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(file, mode); err != nil { // a chmod is not narrowed by the umask
+			t.Fatal(err)
+		}
+		if err := (OSFS{}).WriteFile(file, []byte("new"), 0o644); err != nil {
+			t.Fatalf("%o: %v", mode, err)
+		}
+		info, err := os.Stat(file)
+		if got, _ := os.ReadFile(file); err != nil || info.Mode().Perm() != mode || string(got) != "new" {
+			t.Errorf("%o: mode %v, content %q, %v", mode, info.Mode().Perm(), got, err)
+		}
+	}
+	// A chmod that fails is an error, and the temporary file is removed.
+	boom := errors.New("chmod failed")
+	file := filepath.Join(dir, "m664.modelspec.hcl")
+	if err := (OSFS{chmod: func(*os.File, fs.FileMode) error { return boom }}).WriteFile(file, []byte("x"), 0o644); !errors.Is(err, boom) {
+		t.Errorf("a failing chmod: %v", err)
+	}
+	// A file system that refuses chmod is no failure when the temporary file has the mode
+	// already (here the mode of a new file under the umask equals the wanted one), and is
+	// one when it has not.
+	refuse := OSFS{chmod: func(*os.File, fs.FileMode) error { return boom }}
+	same := filepath.Join(dir, "same.modelspec.hcl")
+	if err := os.WriteFile(same, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(same, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuse.WriteFile(same, []byte("new"), 0o644); err != nil {
+		t.Errorf("a refused chmod of a file that has the mode: %v", err)
+	}
+	if got, _ := os.ReadFile(same); string(got) != "new" {
+		t.Errorf("content %q", got)
+	}
+	// A refused chmod after which the file has some other mode is a failure.
+	other := OSFS{chmod: func(f *os.File, _ fs.FileMode) error {
+		if err := f.Chmod(0o640); err != nil {
+			return err
+		}
+		return boom
+	}}
+	if err := other.WriteFile(same, []byte("newer"), 0o644); !errors.Is(err, boom) {
+		t.Errorf("a refused chmod of a file that has another mode: %v", err)
+	}
+	if got, _ := os.ReadFile(same); string(got) != "new" {
+		t.Errorf("the failed write changed the file: %q", got)
+	}
+	for _, e := range mustReadDir(t, dir) {
+		if strings.HasSuffix(e, ".tmp") {
+			t.Errorf("a temporary file is left: %s", e)
+		}
+	}
+}
+
+func mustReadDir(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// writeAndClose syncs what can be synced before it closes, and reports a failed sync.
+func TestWriteAndCloseSyncs(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("sync failed")
+	w := &syncWriter{fakeWriter: fakeWriter{}, syncErr: boom}
+	if err := writeAndClose(w, []byte("data")); !errors.Is(err, boom) || !w.closed || !w.synced {
+		t.Errorf("sync failure: %v, closed %v, synced %v", err, w.closed, w.synced)
+	}
+	w = &syncWriter{fakeWriter: fakeWriter{writeErr: boom}}
+	if err := writeAndClose(w, []byte("data")); !errors.Is(err, boom) || !w.closed || w.synced {
+		t.Errorf("write failure: %v, closed %v, synced %v", err, w.closed, w.synced)
+	}
+}
+
+type syncWriter struct {
+	fakeWriter
+	syncErr error
+	synced  bool
+}
+
+func (s *syncWriter) Sync() error { s.synced = true; return s.syncErr }

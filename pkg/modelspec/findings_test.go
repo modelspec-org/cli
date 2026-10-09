@@ -65,7 +65,7 @@ func TestFindingsAreCapped(t *testing.T) {
 	}
 	// Reader (JSON): 3,000 repeated keys.
 	var keys strings.Builder
-	keys.WriteString(`{"modelspec": "1.0-draft", "module": {"id": "x", "version": "1"}`)
+	keys.WriteString(`{"modelspec": "1.0-draft-2", "module": {"id": "x", "version": "1"}`)
 	for i := 0; i < 3000; i++ {
 		keys.WriteString(`, "components": {}`)
 	}
@@ -97,12 +97,12 @@ func TestFindingsAreCapped(t *testing.T) {
 // unlimited run has; warnings dropped are a warning.
 func TestFindingsLimitKeepsTheVerdict(t *testing.T) {
 	t.Parallel()
-	member := func(name string) string { return "  property \"" + name + "\" {\n    type = \"int\"\n  }\n" }
+	member := func(name string) string { return "  field \"" + name + "\" {\n    type = \"int\"\n  }\n" }
 	var warnings strings.Builder
 	for i := 0; i < 1100; i++ { // pairs of names that differ only by case: 1,100 warnings
 		fmt.Fprintf(&warnings, "%s%s", member(fmt.Sprintf("n%d", i)), member(fmt.Sprintf("N%d", i)))
 	}
-	head := "entity \"E\" {\n  key = [\"n0\"]\n" + warnings.String()
+	head := "record \"E\" {\n  key = [\"n0\"]\n" + warnings.String()
 	onlyWarnings := head + "}\n"
 	res, _ := Lint(newMemFS(map[string]string{"e" + hclExt: onlyWarnings}), []string{"."}, LintOptions{})
 	if got := summaryOf(t, findingStrings(res.Findings)); len(res.Findings) != MaxFindings+1 || !strings.Contains(got, "warning: 100 more findings (0 errors, 100 warnings)") {
@@ -260,7 +260,7 @@ func TestFindingsComeSorted(t *testing.T) {
 		return true
 	}
 	// The checker reports repeated names first, then the rest, which is earlier in the file.
-	m, _ := ParseHCL("a"+hclExt, []byte("entity \"A\" {\n}\nentity \"A\" {\n  key = []\n}\n"))
+	m, _ := ParseHCL("a"+hclExt, []byte("record \"A\" {\n}\nrecord \"A\" {\n  key = []\n}\n"))
 	if got := Check([]*Model{m}, Options{}); len(got) < 2 || !sorted(got) {
 		t.Errorf("Check: %v", got)
 	}
@@ -366,7 +366,7 @@ func TestSkippedFileFindingsAreKeptAheadOfOthers(t *testing.T) {
 func TestADisplacedCountingLineIsStillCounted(t *testing.T) {
 	t.Parallel()
 	fsys := newMemFS(map[string]string{
-		layout("shop", "order.hcl"): okEntity,
+		layout("shop", "order.hcl"): okRecord,
 		"aaa.modelspec.hcl":         "enum \"E\" {\n  values = [" + strings.Repeat("1, ", 1201) + "1]\n}\n",
 	})
 	skippedKinds["a dangling link"](fsys, layout("shop", "customer.hcl"), "")

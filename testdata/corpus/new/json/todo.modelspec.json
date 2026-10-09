@@ -1,0 +1,69 @@
+{
+  "modelspec": "1.0-draft-2",
+  "module": {
+    "id": "github.com/specscore/modelspec/examples/todo",
+    "name": "Todo",
+    "version": "0.1.0"
+  },
+  "components": {
+    "Auditable": {
+      "fields": {
+        "createdAt": {
+          "type": "datetime",
+          "required": true
+        },
+        "updatedAt": {
+          "type": "datetime",
+          "required": true
+        }
+      }
+    }
+  },
+  "records": {
+    "User": {
+      "key": [
+        "id"
+      ],
+      "use": [
+        "Auditable"
+      ],
+      "fields": {
+        "id": {
+          "type": "uuid"
+        },
+        "email": {
+          "type": "string",
+          "required": true,
+          "unique": true,
+          "format": "email"
+        }
+      }
+    },
+    "Task": {
+      "key": [
+        "id"
+      ],
+      "use": [
+        "Auditable"
+      ],
+      "fields": {
+        "id": {
+          "type": "uuid"
+        },
+        "title": {
+          "type": "string",
+          "required": true,
+          "max_len": 200
+        },
+        "completed": {
+          "type": "bool",
+          "required": true
+        },
+        "owner": {
+          "record": "User",
+          "required": true
+        }
+      }
+    }
+  }
+}

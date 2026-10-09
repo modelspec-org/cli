@@ -60,9 +60,13 @@ The JSON form is one document per module, and the standard does not say how the
 files of a module are merged, so a file that is one of several .hcl files of a
 module (the SpecScore layout, or --module) is refused, with the other files named.
 A model that refers to its own module by name cannot be exported under another
-module.name (the JSON would not lint clean on its own) and is refused. A file with an
-index, projection or migration block is refused too: the standard does not define
-their JSON form.`,
+module.name (the JSON would not lint clean on its own) and is refused.
+
+The JSON is written in the vocabulary of the HCL: a file with no old spelling
+exports as format 1.0-draft-2 (records, fields, record), and a file with any old
+spelling (entity, property, entity =) as 1.0-draft (entities, properties, entity),
+so a committed copy stays what its source exports to until modelspec rewrite brings
+both files up to date.`,
 		Example: `  modelspec export model/chinook.modelspec.hcl --out model/chinook.modelspec.json \
     --module-id github.com/acme/chinook/model/chinook --module-name chinook --module-version 0.1.0
   modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json`,

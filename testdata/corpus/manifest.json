@@ -1,11 +1,14 @@
 {
- "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why: specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item under parts/ is one file of another item, given alone (as an editor or a hook would): `path` is where it is under this directory, and a module is the unit, so its verdict is that of the whole module it belongs to. Parts are not compared with the other readers, which lint a whole project. An item without `differs` must have the same verdict as the reader recorded for it.",
+ "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). Every item in the old spelling (entity, property, entity =; format 1.0-draft) has the warning deprecated-spelling; that is the only difference between its verdict and the verdict of its copy in the new spelling, where there is a copy. `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why: specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item under parts/ is one file of another item, given alone (as an editor or a hook would): `path` is where it is under this directory, and a module is the unit, so its verdict is that of the whole module it belongs to. Parts are not compared with the other readers, which lint a whole project. An item without `differs` must have the same verdict as the reader recorded for it. An item under new/ is the item of the same path in the new spelling (record, field, record =; format 1.0-draft-2). Where `modelspec rewrite` can rewrite every model file of the old item, the copy is what rewrite makes of it, byte for byte (a test checks it). Where it cannot, because a file does not parse, repeats a key in a JSON object, or holds a removed construct or a reserved word (decision 0019), the copy was written by hand: the old words replaced, and for an item whose removed construct was only a part of its purpose (a collection beside records) without it; the old item keeps the construct and so refuses. The items listed in the test as new only have no old twin: they hold both spellings together. Items under new/ are not compared with the other readers, which do not read the new spelling yet; the same goes for new/parts/.",
  "items": {
   "hcl/blank-property-name.modelspec.hcl": {
    "default": {
     "verdict": "refuse",
     "rules": [
      "name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
@@ -13,6 +16,9 @@
     "rules": [
      "name-form",
      "publish-name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -23,39 +29,53 @@
    "default": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "name-case"
     ]
    },
    "publish": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "name-case"
     ]
    }
   },
   "hcl/chinook.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "hcl/collection-bind-unresolved.modelspec.hcl": {
    "default": {
     "verdict": "refuse",
     "rules": [
-     "reference"
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "reference"
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
-    "specscore": "specscore does not resolve collection bind values; spec/json-format.md requires references, including bind, to resolve"
+    "specscore": "removed by decision 0019: collection blocks no longer exist (specscore reads them and does not resolve their bind values)"
    }
   },
   "hcl/duplicate-entity.modelspec.hcl": {
@@ -63,12 +83,18 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -78,6 +104,9 @@
     "rules": [
      "key",
      "name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
@@ -85,8 +114,11 @@
     "rules": [
      "key",
      "name-form",
-     "publish-name-form",
-     "publish-properties"
+     "publish-fields",
+     "publish-name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -100,18 +132,24 @@
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-entities"
+     "publish-records"
     ]
    }
   },
   "hcl/entity-no-own-properties.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-properties"
+     "publish-fields"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -120,12 +158,18 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -137,12 +181,18 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -160,16 +210,22 @@
     "verdict": "refuse",
     "rules": [
      "enum-values",
-     "publish-entities"
+     "publish-records"
     ]
    }
   },
   "hcl/enum-integer-values.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "differs": {
     "specscore": "lint accepts integer enum values and specscore refuses them; decision 0013 says an enum constrains a string or an int property, so the standard allows them"
@@ -186,7 +242,7 @@
     "verdict": "refuse",
     "rules": [
      "enum-values",
-     "publish-entities"
+     "publish-records"
     ]
    }
   },
@@ -209,10 +265,16 @@
   },
   "hcl/heredoc-pattern-brackets.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "hcl/map-style-properties.modelspec.hcl": {
@@ -221,6 +283,9 @@
     "rules": [
      "key",
      "literal"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
@@ -228,7 +293,10 @@
     "rules": [
      "key",
      "literal",
-     "publish-properties"
+     "publish-fields"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -237,42 +305,73 @@
   },
   "hcl/missing-key.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "hcl/names-not-identifiers.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-name-form"
+     "publish-name-form",
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "removed by decision 0019"
    }
   },
   "hcl/non-identifier-name.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "publish-name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "hcl/qualified-entity-self.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -281,12 +380,18 @@
     "verdict": "refuse",
     "rules": [
      "reserved-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "reserved-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -294,13 +399,19 @@
    "default": {
     "verdict": "refuse",
     "rules": [
-     "reserved-name"
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "reserved-name"
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -311,30 +422,49 @@
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-entities"
+     "publish-records"
     ]
    }
   },
   "hcl/shop.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-component-property",
-     "publish-qualified-entity"
+     "publish-component-field",
+     "publish-qualified-record",
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "removed by decision 0019"
    }
   },
   "hcl/standard-invoice.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-component-property"
+     "publish-component-field"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -354,18 +484,48 @@
   },
   "hcl/todo-aligned.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "specscore": "removed by decision 0019"
    }
   },
   "hcl/todo.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "specscore": "removed by decision 0019"
    }
   },
   "hcl/trio-name-clash.modelspec.hcl": {
@@ -373,12 +533,18 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -387,12 +553,18 @@
     "verdict": "refuse",
     "rules": [
      "attribute"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "attribute"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -404,13 +576,19 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity",
+     "publish-qualified-record",
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -419,12 +597,18 @@
     "verdict": "refuse",
     "rules": [
      "unknown-type"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "unknown-type"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -433,26 +617,71 @@
   },
   "hcl/unmapped-index.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "specscore": "reserved by decision 0019"
    }
   },
   "hcl/unmapped-migration.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "specscore": "reserved by decision 0019"
    }
   },
   "hcl/unmapped-projection.modelspec.hcl": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "specscore": "reserved by decision 0019"
    }
   },
   "hcl/unresolved-entity.modelspec.hcl": {
@@ -460,12 +689,18 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -474,12 +709,18 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -488,12 +729,18 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -501,32 +748,46 @@
    "default": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "name-case"
     ]
    },
    "publish": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "name-case"
     ]
    }
   },
   "json/chinook.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "json/component-property.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-component-property"
+     "publish-component-field"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -535,12 +796,18 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -552,12 +819,18 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -570,6 +843,9 @@
     "rules": [
      "key",
      "name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
@@ -577,8 +853,11 @@
     "rules": [
      "key",
      "name-form",
-     "publish-name-form",
-     "publish-properties"
+     "publish-fields",
+     "publish-name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -587,24 +866,36 @@
     "verdict": "refuse",
     "rules": [
      "shape"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-entities",
+     "publish-records",
      "shape"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "json/entities-empty.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-entities"
+     "publish-records"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -613,13 +904,19 @@
     "verdict": "refuse",
     "rules": [
      "key"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "key",
-     "publish-properties"
+     "publish-fields"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -628,6 +925,9 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
@@ -635,15 +935,24 @@
     "rules": [
      "publish-name-form",
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "json/entity-no-key.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "json/entity-no-properties.modelspec.json": {
@@ -651,13 +960,19 @@
     "verdict": "refuse",
     "rules": [
      "key"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "key",
-     "publish-properties"
+     "publish-fields"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -666,12 +981,18 @@
     "verdict": "refuse",
     "rules": [
      "enum-values"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "enum-values"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -680,18 +1001,41 @@
   },
   "json/full-shape.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct",
+     "reserved-word"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct",
+     "reserved-word"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "directory": "removed by decision 0019"
    }
   },
   "json/integer-enum-values.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "json/invalid-utf8.modelspec.json": {
@@ -713,12 +1057,18 @@
     "verdict": "refuse",
     "rules": [
      "key"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "key"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -744,12 +1094,18 @@
     "verdict": "refuse",
     "rules": [
      "module"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "module"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -758,23 +1114,35 @@
   },
   "json/module-name-missing.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "publish-module-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "json/module-name-not-identifier.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "publish-module-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -783,12 +1151,18 @@
     "verdict": "refuse",
     "rules": [
      "module"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "module"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -797,32 +1171,50 @@
   },
   "json/named-enum.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "json/names-not-identifiers.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "publish-module-name",
      "publish-name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "json/no-entities.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-entities"
+     "publish-records"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -845,12 +1237,18 @@
     "verdict": "refuse",
     "rules": [
      "module"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "module"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -884,10 +1282,16 @@
   },
   "json/notes.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "json/property-array-type.modelspec.json": {
@@ -895,12 +1299,18 @@
     "verdict": "refuse",
     "rules": [
      "unknown-type"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "unknown-type"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -912,23 +1322,35 @@
     "verdict": "refuse",
     "rules": [
      "unknown-type"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "unknown-type"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "json/property-name-not-identifier.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "publish-name-form"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -937,12 +1359,18 @@
     "verdict": "refuse",
     "rules": [
      "member-kind"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "member-kind"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -951,12 +1379,18 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -965,12 +1399,18 @@
     "verdict": "refuse",
     "rules": [
      "unknown-type"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "unknown-type"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -979,34 +1419,56 @@
   },
   "json/qualified-entity-reference.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "json/schema-field.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "json/shape-wrong-types.modelspec.json": {
    "default": {
     "verdict": "refuse",
     "rules": [
+     "removed-construct",
+     "reserved-word",
      "shape"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
+     "removed-construct",
+     "reserved-word",
      "shape"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1015,22 +1477,43 @@
   },
   "json/shared-module.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-entities",
-     "publish-module-name"
+     "publish-module-name",
+     "publish-records"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "json/todo.modelspec.json": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "differs": {
+    "directory": "removed by decision 0019"
    }
   },
   "json/trailing-garbage.modelspec.json": {
@@ -1051,12 +1534,14 @@
    "default": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "unknown-field"
     ]
    },
    "publish": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "unknown-field"
     ]
    }
@@ -1066,12 +1551,18 @@
     "verdict": "refuse",
     "rules": [
      "attribute"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "attribute"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1100,13 +1591,19 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name",
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -1115,32 +1612,57 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "modules/layout-json-copy-in-models-dir": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "modules/layout-key-through-component": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-properties"
+     "publish-fields",
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "removed by decision 0019"
    }
   },
   "modules/layout-missing-sibling-concept": {
@@ -1148,24 +1670,36 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity",
+     "publish-qualified-record",
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "modules/layout-parts-of-one-module": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-component-property"
+     "publish-component-field"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -1176,26 +1710,38 @@
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-entities"
+     "publish-records"
     ]
    }
   },
   "modules/layout-self-contained": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "modules/layout-undeclared-dependency": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "differs": {
@@ -1207,24 +1753,36 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity",
+     "publish-qualified-record",
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "modules/layout-valid": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -1233,12 +1791,18 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/entities.modelspec.hcl"
@@ -1248,12 +1812,18 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/enums.modelspec.hcl"
@@ -1263,31 +1833,49 @@
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
      "duplicate-name"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "path": "modules/layout-duplicate-in-module/spec/graph/modules/sales/models/extra.modelspec.hcl"
   },
   "parts/layout-json-copy-json-alone": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "path": "modules/layout-json-copy-in-models-dir/spec/graph/modules/sales/models/sales.modelspec.json"
   },
   "parts/layout-self-contained-entities": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "path": "modules/layout-self-contained/spec/graph/modules/sales/models/entities.modelspec.hcl"
   },
@@ -1295,12 +1883,14 @@
    "default": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "stale-twin"
     ]
    },
    "publish": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "stale-twin"
     ]
    },
@@ -1308,12 +1898,18 @@
   },
   "parts/twin-name-differs-hcl-alone": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "path": "standalone/twin-name-differs/todo.modelspec.hcl"
@@ -1348,18 +1944,30 @@
   },
   "standalone/carriage-return-after-dollar-in-heredoc": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "standalone/chinook-pair": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "standalone/cross-module-missing": {
@@ -1367,24 +1975,36 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity",
+     "publish-qualified-record",
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "standalone/explicit-module": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "modules": [
@@ -1396,24 +2016,36 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity",
+     "publish-qualified-record",
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "standalone/explicit-module-with-json-copy": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "modules": [
@@ -1436,10 +2068,16 @@
   },
   "standalone/number-after-rewritten-dollar": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "standalone/number-exponent-over-100": {
@@ -1472,61 +2110,111 @@
   },
   "standalone/query-201-wildcards": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "standalone/query-334-placeholders": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "standalone/query-one-line-500-placeholders": {
    "default": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
-    "verdict": "accept"
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
    }
   },
   "standalone/stale-twin": {
    "default": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "stale-twin"
     ]
    },
    "publish": {
     "verdict": "accept",
     "warnings": [
+     "deprecated-spelling",
      "stale-twin"
     ]
    }
   },
   "standalone/twin-and-reference": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "standalone/twin-and-two-modules": {
    "default": {
-    "verdict": "accept"
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
@@ -1535,24 +2223,1704 @@
     "verdict": "refuse",
     "rules": [
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity",
+     "publish-qualified-record",
      "reference"
+    ],
+    "warnings": [
+     "deprecated-spelling"
     ]
    }
   },
   "standalone/twin-name-differs": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   }
+  },
+  "new/hcl/blank-property-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "name-form",
+     "publish-name-form"
+    ]
+   }
+  },
+  "new/hcl/case-only-difference.modelspec.hcl": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   }
+  },
+  "new/hcl/chinook.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/hcl/collection-bind-unresolved.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ]
+   }
+  },
+  "new/hcl/duplicate-entity.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "new/hcl/empty-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form",
+     "publish-fields",
+     "publish-name-form"
+    ]
+   }
+  },
+  "new/hcl/empty.modelspec.hcl": {
    "default": {
     "verdict": "accept"
    },
    "publish": {
     "verdict": "refuse",
     "rules": [
-     "publish-qualified-entity"
+     "publish-records"
+    ]
+   }
+  },
+  "new/hcl/entity-no-own-properties.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-fields"
+    ]
+   }
+  },
+  "new/hcl/entity-ref-to-enum.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "new/hcl/entity-reference-to-component.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "new/hcl/enum-duplicate-values.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values",
+     "publish-records"
+    ]
+   }
+  },
+  "new/hcl/enum-integer-values.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/hcl/enum-no-values.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values",
+     "publish-records"
+    ]
+   }
+  },
+  "new/hcl/expression-value.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "literal"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "literal"
+    ]
+   }
+  },
+  "new/hcl/heredoc-pattern-brackets.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/hcl/map-style-properties.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "literal"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "literal",
+     "publish-fields"
+    ]
+   }
+  },
+  "new/hcl/missing-key.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/hcl/names-not-identifiers.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
+  },
+  "new/hcl/non-identifier-name.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
+  },
+  "new/hcl/qualified-entity-self.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/hcl/reserved-entity-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-name"
+    ]
+   }
+  },
+  "new/hcl/reserved-recordset-name.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct"
+    ]
+   }
+  },
+  "new/hcl/shared-components-and-enums.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-records"
+    ]
+   }
+  },
+  "new/hcl/shop.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-field",
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/hcl/standard-invoice.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-field"
+    ]
+   }
+  },
+  "new/hcl/syntax-error.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "new/hcl/todo-aligned.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/hcl/todo.modelspec.hcl": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/hcl/trio-name-clash.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "new/hcl/unknown-attribute.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   }
+  },
+  "new/hcl/unknown-module.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record",
+     "reference"
+    ]
+   }
+  },
+  "new/hcl/unknown-type.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   }
+  },
+  "new/hcl/unmapped-index.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ]
+   }
+  },
+  "new/hcl/unmapped-migration.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ]
+   }
+  },
+  "new/hcl/unmapped-projection.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reserved-word"
+    ]
+   }
+  },
+  "new/hcl/unresolved-entity.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "new/hcl/unresolved-enum.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "new/hcl/unresolved-use.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "new/json/case-only-difference.modelspec.json": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "name-case"
+    ]
+   }
+  },
+  "new/json/chinook.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/json/component-property.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-field"
+    ]
+   }
+  },
+  "new/json/duplicate-entity-key.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "new/json/duplicate-key-in-property.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "new/json/empty-entity-name.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "name-form",
+     "publish-fields",
+     "publish-name-form"
+    ]
+   }
+  },
+  "new/json/entities-array.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-records",
+     "shape"
+    ]
+   }
+  },
+  "new/json/entities-empty.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-records"
+    ]
+   }
+  },
+  "new/json/entity-empty-properties.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "publish-fields"
+    ]
+   }
+  },
+  "new/json/entity-name-not-identifier.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form",
+     "reference"
+    ]
+   }
+  },
+  "new/json/entity-no-key.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/json/entity-no-properties.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "publish-fields"
+    ]
+   }
+  },
+  "new/json/enum-duplicate-values.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "enum-values"
+    ]
+   }
+  },
+  "new/json/full-shape.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct",
+     "reserved-word"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct",
+     "reserved-word"
+    ]
+   }
+  },
+  "new/json/integer-enum-values.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/json/invalid-utf8.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "encoding"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "encoding"
+    ]
+   }
+  },
+  "new/json/key-not-a-property.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key"
+    ]
+   }
+  },
+  "new/json/modelspec-not-string.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   }
+  },
+  "new/json/module-id-missing.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   }
+  },
+  "new/json/module-name-missing.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name"
+    ]
+   }
+  },
+  "new/json/module-name-not-identifier.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name"
+    ]
+   }
+  },
+  "new/json/module-version-missing.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   }
+  },
+  "new/json/named-enum.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/json/names-not-identifiers.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name",
+     "publish-name-form"
+    ]
+   }
+  },
+  "new/json/no-entities.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-records"
+    ]
+   }
+  },
+  "new/json/no-modelspec.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   }
+  },
+  "new/json/no-module.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "module"
+    ]
+   }
+  },
+  "new/json/not-an-object.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   }
+  },
+  "new/json/not-json.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "new/json/notes.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/json/property-array-type.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   }
+  },
+  "new/json/property-bad-type-name.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   }
+  },
+  "new/json/property-name-not-identifier.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-name-form"
+    ]
+   }
+  },
+  "new/json/property-neither-type-nor-entity.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "member-kind"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "member-kind"
+    ]
+   }
+  },
+  "new/json/property-unknown-entity.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   }
+  },
+  "new/json/property-unknown-type.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "unknown-type"
+    ]
+   }
+  },
+  "new/json/qualified-entity-reference.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/json/schema-field.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/json/shape-wrong-types.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct",
+     "reserved-word",
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "removed-construct",
+     "reserved-word",
+     "shape"
+    ]
+   }
+  },
+  "new/json/shared-module.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-module-name",
+     "publish-records"
+    ]
+   }
+  },
+  "new/json/todo.modelspec.json": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/json/trailing-garbage.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "new/json/unknown-top-level-field.modelspec.json": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "unknown-field"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "unknown-field"
+    ]
+   }
+  },
+  "new/json/wrong-attribute-type.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ]
+   }
+  },
+  "new/json/wrong-version.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   }
+  },
+  "new/modules/layout-cross-file-duplicate": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name",
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/modules/layout-duplicate-in-module": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   }
+  },
+  "new/modules/layout-json-copy-in-models-dir": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/modules/layout-key-through-component": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-fields"
+    ]
+   }
+  },
+  "new/modules/layout-missing-sibling-concept": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record",
+     "reference"
+    ]
+   }
+  },
+  "new/modules/layout-parts-of-one-module": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-component-field"
+    ]
+   }
+  },
+  "new/modules/layout-same-name-in-two-modules": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-records"
+    ]
+   }
+  },
+  "new/modules/layout-self-contained": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/modules/layout-undeclared-dependency": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/modules/layout-unknown-module": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record",
+     "reference"
+    ]
+   }
+  },
+  "new/modules/layout-valid": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/parts/layout-duplicate-in-module-entities": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "new/modules/layout-duplicate-in-module/spec/graph/modules/sales/models/entities.modelspec.hcl"
+  },
+  "new/parts/layout-duplicate-in-module-enums": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "new/modules/layout-duplicate-in-module/spec/graph/modules/sales/models/enums.modelspec.hcl"
+  },
+  "new/parts/layout-duplicate-in-module-extra": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "duplicate-name"
+    ]
+   },
+   "path": "new/modules/layout-duplicate-in-module/spec/graph/modules/sales/models/extra.modelspec.hcl"
+  },
+  "new/parts/layout-json-copy-json-alone": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   },
+   "path": "new/modules/layout-json-copy-in-models-dir/spec/graph/modules/sales/models/sales.modelspec.json"
+  },
+  "new/parts/layout-self-contained-entities": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   },
+   "path": "new/modules/layout-self-contained/spec/graph/modules/sales/models/entities.modelspec.hcl"
+  },
+  "new/parts/stale-twin-json-alone": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "path": "new/standalone/stale-twin/core.modelspec.json"
+  },
+  "new/parts/twin-name-differs-hcl-alone": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   },
+   "path": "new/standalone/twin-name-differs/todo.modelspec.hcl"
+  },
+  "new/standalone/backslash-before-dollar-in-label": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "new/standalone/backslash-before-dollar-in-pattern": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "syntax"
+    ]
+   }
+  },
+  "new/standalone/carriage-return-after-dollar-in-heredoc": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/standalone/chinook-pair": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/standalone/cross-module-missing": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record",
+     "reference"
+    ]
+   }
+  },
+  "new/standalone/explicit-module": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   },
+   "modules": [
+    "shop=parts"
+   ]
+  },
+  "new/standalone/explicit-module-unassigned": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record",
+     "reference"
+    ]
+   }
+  },
+  "new/standalone/explicit-module-with-json-copy": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   },
+   "modules": [
+    "shop=parts"
+   ]
+  },
+  "new/standalone/name-over-255-bytes": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
+  "new/standalone/number-after-rewritten-dollar": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/standalone/number-exponent-over-100": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
+  "new/standalone/number-over-40-characters": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "limit"
+    ]
+   }
+  },
+  "new/standalone/query-201-wildcards": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/standalone/query-334-placeholders": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/standalone/query-one-line-500-placeholders": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "accept"
+   }
+  },
+  "new/standalone/stale-twin": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "stale-twin"
+    ]
+   }
+  },
+  "new/standalone/twin-and-reference": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/standalone/twin-and-two-modules": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/standalone/twin-in-another-directory": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "reference"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record",
+     "reference"
+    ]
+   }
+  },
+  "new/standalone/twin-name-differs": {
+   "default": {
+    "verdict": "accept"
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-qualified-record"
+    ]
+   }
+  },
+  "new/hcl/mixed-spellings.modelspec.hcl": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   }
+  },
+  "new/hcl/record-and-entity-both.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "attribute"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   }
+  },
+  "new/hcl/property-in-component.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "shape"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "publish-records",
+     "shape"
+    ]
+   }
+  },
+  "new/hcl/reserved-kind-names.modelspec.hcl": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "reserved-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "publish-fields",
+     "reserved-name"
+    ]
+   }
+  },
+  "new/json/entities-in-new-format.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ]
+   }
+  },
+  "new/json/records-in-old-format.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "modelspec-version"
+    ],
+    "warnings": [
+     "deprecated-spelling"
+    ]
+   }
+  },
+  "new/json/reserved-kind-names.modelspec.json": {
+   "default": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "reserved-name"
+    ]
+   },
+   "publish": {
+    "verdict": "refuse",
+    "rules": [
+     "key",
+     "publish-fields",
+     "reserved-name"
+    ]
+   }
+  },
+  "new/standalone/twin-new-hcl-old-json": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling",
+     "stale-twin"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling",
+     "stale-twin"
+    ]
+   }
+  },
+  "new/standalone/twin-old-hcl-new-json": {
+   "default": {
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling",
+     "stale-twin"
+    ]
+   },
+   "publish": {
+    "verdict": "accept",
+    "warnings": [
+     "deprecated-spelling",
+     "stale-twin"
     ]
    }
   }

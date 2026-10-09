@@ -9,9 +9,9 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
-// patternModel is a model whose one property has the given text as its pattern.
+// patternModel is a model whose one field has the given text as its pattern.
 func patternModel(value string) string {
-	return "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"string\"\n    pattern = " + value + "\n  }\n}\n"
+	return "record \"E\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"string\"\n    pattern = " + value + "\n  }\n}\n"
 }
 
 // referencePattern reads the pattern the way the HCL library does, from the
@@ -137,8 +137,8 @@ func TestBackslashBeforeDollarOrPercentIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, src := range []string{
 		patternModel(`"^\$[0-9]+\%$"`),
-		"entity \"A\\$B\" {\n}\n",
-		"entity \"A\\%B\" {\n}\n",
+		"record \"A\\$B\" {\n}\n",
+		"record \"A\\%B\" {\n}\n",
 	} {
 		if _, fs := ParseHCL("a"+hclExt, []byte(src)); len(fs) == 0 {
 			t.Errorf("accepted %q", src)
@@ -154,7 +154,7 @@ func TestBackslashBeforeDollarOrPercentIsRefused(t *testing.T) {
 // or `%`, and a heredoc beside another keeps each one's own text.
 func TestHeredocEscapesAreKeptApart(t *testing.T) {
 	t.Parallel()
-	src := "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"string\"\n    pattern = <<A\n\ue000$\ue001%\ue002\nA\n    format = <<B\n$$ %% \ue000\nB\n    enum = [<<C\nx$y\nC\n    , \"$\"]\n  }\n}\n"
+	src := "record \"E\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"string\"\n    pattern = <<A\n\ue000$\ue001%\ue002\nA\n    format = <<B\n$$ %% \ue000\nB\n    enum = [<<C\nx$y\nC\n    , \"$\"]\n  }\n}\n"
 	m, fs := ParseHCL("a"+hclExt, []byte(src))
 	if len(fs) != 0 {
 		t.Fatalf("findings %v", fs)
@@ -171,12 +171,32 @@ func TestHeredocEscapesAreKeptApart(t *testing.T) {
 		t.Errorf("enum = %+v", enum.Value)
 	}
 	// Block labels are quoted strings: `$` there goes through the escapes.
-	m, fs = ParseHCL("a"+hclExt, []byte("entity \"A$%B${\" {\n}\n"))
+	m, fs = ParseHCL("a"+hclExt, []byte("record \"A$%B${\" {\n}\n"))
 	if len(fs) == 0 || m.Broken == false {
 		t.Errorf("an interpolation in a label was accepted: %v", fs)
 	}
-	m, fs = ParseHCL("a"+hclExt, []byte("entity \"A$%B$${\" {\n}\n"))
+	m, fs = ParseHCL("a"+hclExt, []byte("record \"A$%B$${\" {\n}\n"))
 	if len(m.Concepts) != 1 || m.Concepts[0].Name != "A$%B${" {
 		t.Errorf("label = %v, findings %v", m.Concepts, fs)
+	}
+}
+
+// An offset in the parser's input maps back to the source, whatever was rewritten
+// before it.
+func TestOffsetsMapBackToTheSource(t *testing.T) {
+	t.Parallel()
+	src := []byte("before \"$\" \"%$$\" <<EOT\n$ %\nEOT\nafter \"$${\" entity\n")
+	input, _, _, offsets := parserInput(src, lexHCL("a.hcl", src))
+	if string(input) == string(src) || len(offsets) == 0 {
+		t.Fatalf("nothing was rewritten: %q", input)
+	}
+	for _, word := range []string{"before", "after", "entity"} {
+		at := strings.Index(string(input), word)
+		if got := offsets.source(at); got != strings.Index(string(src), word) {
+			t.Errorf("%s: input offset %d maps to %d, want %d", word, at, got, strings.Index(string(src), word))
+		}
+	}
+	if (offsetMap(nil)).source(7) != 7 {
+		t.Error("an input that was not rewritten maps to itself")
 	}
 }

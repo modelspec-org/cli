@@ -246,9 +246,9 @@ func expect(t *testing.T, got []string, want ...string) {
 	}
 }
 
-const okEntity = `entity "A" {
+const okRecord = `record "A" {
   key = ["id"]
-  property "id" {
+  field "id" {
     type = "int"
   }
 }

@@ -10,7 +10,13 @@
 //  2. the publish profile refuses whatever the default profile refuses;
 //  3. a model that lints clean exports (HCL) to JSON that parses, round-trips
 //     and lints clean under the same name;
-//  4. one input costs a bounded amount of work: the bytes allocated reading and
+//  4. a model that lints clean is rewritten (modelspec rewrite) to the same model,
+//     which lints clean, and rewriting that again changes nothing;
+//  5. a file that rewrite accepts, clean or not, is rewritten at the old spellings
+//     the reader found and nowhere else, with the count it reports, to the same
+//     concepts, and rewriting that again changes nothing; rewrite never refuses
+//     with its "defect" message;
+//  6. one input costs a bounded amount of work: the bytes allocated reading and
 //     checking it, exporting it and reading the export back (FuzzHCL does all of
 //     that inside within) stay within allocBase plus allocPerByte for each byte of
 //     the input (a count of the work done, which does not depend on the load of the
@@ -22,6 +28,7 @@
 package fuzz
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,12 +41,23 @@ import (
 )
 
 // The budget of one input. Reading and checking a large valid file (under both
-// profiles, as refusal does) allocates about 470 times its size; the budget is twice
-// that, and a fixed amount for the smallest inputs.
+// profiles, as refusal does) allocates about 470 times its size; the budget is
+// twice that, and a fixed amount for the smallest inputs. It bounds the reader, the
+// checks, the export and the read of the export (within).
+//
+// The rewrite oracles have a budget of their own (withinRewrite), so that the
+// margin of the first is not spent on them. They read the input many times over: the
+// reader for the count and for the check of the result, the rewrite and the second
+// rewrite of its result, and for a clean model the same again under both profiles.
+// Measured on the seeds, the worst (7.6 KB) allocates 1.7 MB for the first (15% of
+// its budget) and 10.4 MB for the second (54% of its budget).
 const (
 	allocBase    = 4 << 20
 	allocPerByte = 1000
 	maxTime      = 10 * time.Second
+
+	rewriteAllocBase    = 4 << 20
+	rewriteAllocPerByte = 2000
 )
 
 // guard runs work and calls stalled, from another goroutine, if work has not
@@ -56,13 +74,24 @@ func guard(limit time.Duration, stalled func(), work func()) {
 // as a failing input and keeps.
 func within(t *testing.T, src []byte, work func()) {
 	t.Helper()
+	bounded(t, src, allocBase, allocPerByte, work)
+}
+
+// withinRewrite is within with the budget of the rewrite oracles.
+func withinRewrite(t *testing.T, src []byte, work func()) {
+	t.Helper()
+	bounded(t, src, rewriteAllocBase, rewriteAllocPerByte, work)
+}
+
+func bounded(t *testing.T, src []byte, base, perByte int, work func()) {
+	t.Helper()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	guard(maxTime, func() {
 		panic(fmt.Sprintf("an input of %d bytes is still running after %v", len(src), maxTime))
 	}, work)
 	runtime.ReadMemStats(&after)
-	if used, limit := after.TotalAlloc-before.TotalAlloc, uint64(allocBase+allocPerByte*len(src)); used > limit {
+	if used, limit := after.TotalAlloc-before.TotalAlloc, uint64(base+perByte*len(src)); used > limit {
 		t.Fatalf("an input of %d bytes allocated %d bytes, over the budget of %d", len(src), used, limit)
 	}
 }
@@ -95,15 +124,83 @@ func seeds(f *testing.F, dir, suffix string) {
 	f.Add([]byte("[[[[[[[[[[[[[[[["))
 	f.Add([]byte("x = <<EOT\n\"\nEOT\nkey = [[[[\n"))
 	f.Add([]byte("x = -------------1"))
-	f.Add([]byte("entity \"A\" {\n  key = a[*][*][*][*]\n}\n"))
+	f.Add([]byte("record \"A\" {\n  key = a[*][*][*][*]\n}\n"))
 	f.Add([]byte("x = <<EOT\n%{\nif x}%{/**/if y}\nEOT\n"))
 	f.Add([]byte("x = a::b() + c.d[0] ? (1) : [for a in b : a]\n"))
 	// Inputs that were once slow or large: numbers with a huge exponent or many
 	// digits, and long names.
 	f.Add([]byte("enum \"E\" {\n  values = [1e10000000]\n}\n"))
-	f.Add([]byte("entity \"A\" {\n  key = []\n  max_len = 1e4000000\n}\n"))
+	f.Add([]byte("record \"A\" {\n  key = []\n  max_len = 1e4000000\n}\n"))
 	f.Add([]byte("{\"modelspec\": \"1.0-draft\", \"enums\": {\"E\": {\"values\": [1e10000000, 1" + strings.Repeat("0", 400) + "]}}}"))
-	f.Add([]byte("entity \"" + strings.Repeat("A", 3000) + "\" {\n}\n"))
+	f.Add([]byte("record \"" + strings.Repeat("A", 3000) + "\" {\n}\n"))
+	// The old spelling, the removed constructs and the reserved words.
+	f.Add([]byte("entity \"A\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"r\" {\n    entity = \"A\"\n  }\n}\n"))
+	f.Add([]byte("record \"A\" {\n  field \"r\" {\n    entity = \"A\"\n    record = \"A\"\n  }\n  index \"i\" {\n  }\n}\ncollection \"c\" {\n}\nprojection \"p\" {\n}\n"))
+	f.Add([]byte("{\"modelspec\":\"1.0-draft\",\"module\":{\"id\":\"e\",\"version\":\"1\"},\"entities\":{\"A\":{\"properties\":{\"a\":{\"type\":\"string\"}}},\"A\":{\"properties\":{\"a\":{\"entity\":\"X\",\"record\":\"Y\"}}}}}"))
+	f.Add([]byte("entity {\n  property \"p\" {\n    record = \"A\"\n    entity = \"A\"\n  }\n}\nrecord \"B\" {\n  field \"x\" {\n    record = \"A\"\n    entity = { a = \"b\" }\n  }\n}\n"))
+	f.Add([]byte("{\"modelspec\": \"1.0-draft\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}, \"records\": {}, \"collections\": {}, \"projections\": {}}"))
+	f.Add([]byte("{\"modelspec\": \"1.0-draft-2\", \"module\": {\"id\": \"x\", \"version\": \"1\"}, \"entities\": {\"A\": {\"properties\": {\"p\": {\"entity\": \"A\"}}}}}"))
+}
+
+// rewriteAccepted checks the fifth oracle for any source. A refusal is no failure
+// (rewrite refuses files it cannot rewrite safely), except the one that says the
+// result was not the same model: that is a defect.
+func rewriteAccepted(t *testing.T, file string, src []byte) {
+	t.Helper()
+	out, n, err := modelspec.Rewrite(file, src)
+	if err != nil {
+		if strings.Contains(err.Error(), "does not read as the same model") {
+			t.Fatalf("rewrite found its own result wrong: %v\n%s", err, src)
+		}
+		return
+	}
+	m, _ := modelspec.Parse(file, src)
+	if len(m.Old) != n {
+		t.Fatalf("rewrite counted %d replacements, the reader found %d", n, len(m.Old))
+	}
+	var want []byte
+	pos := 0
+	for _, o := range m.Old {
+		if o.Start < pos || o.End < o.Start || o.End > len(src) {
+			t.Fatalf("old spelling %+v is out of place", o)
+		}
+		want = append(append(want, src[pos:o.Start]...), o.New...)
+		pos = o.End
+	}
+	want = append(want, src[pos:]...)
+	if !bytes.Equal(want, out) {
+		t.Fatalf("rewrite changed more than the old spellings:\n%s\n---\n%s", src, out)
+	}
+	back, _ := modelspec.Parse(file, out)
+	if len(back.Concepts) != len(m.Concepts) || len(back.Old) != 0 {
+		t.Fatalf("the rewritten file has %d concepts (was %d) and %d old spellings", len(back.Concepts), len(m.Concepts), len(back.Old))
+	}
+	for i, k := range m.Concepts {
+		if b := back.Concepts[i]; b.Kind != k.Kind || b.Name != k.Name || len(b.Members) != len(k.Members) {
+			t.Fatalf("concept %q changed in the rewrite", k.Name)
+		}
+	}
+	if again, n, err := modelspec.Rewrite(file, out); err != nil || n != 0 || !bytes.Equal(again, out) {
+		t.Fatalf("rewriting the rewrite changed it (%d replacements, %v)", n, err)
+	}
+}
+
+// rewritten checks the fourth oracle for a source that lints clean: it is rewritten
+// to a source that reads as clean, and rewriting that changes nothing.
+func rewritten(t *testing.T, file string, src []byte) {
+	t.Helper()
+	out, _, err := modelspec.Rewrite(file, src)
+	if err != nil {
+		t.Fatalf("a clean model is not rewritten: %v", err)
+	}
+	m, parse := modelspec.Parse(file, out)
+	if !refusal(t, m, parse) {
+		t.Fatalf("the rewrite of a clean model does not lint clean:\n%s", out)
+	}
+	again, n, err := modelspec.Rewrite(file, out)
+	if err != nil || n != 0 || !bytes.Equal(again, out) {
+		t.Fatalf("rewriting the rewrite changed it (%d replacements, %v):\n%s", n, err, out)
+	}
 }
 
 func lint(m *modelspec.Model, parse []modelspec.Finding, p modelspec.Profile) []modelspec.Finding {
@@ -123,15 +220,18 @@ func refusal(t *testing.T, m *modelspec.Model, parse []modelspec.Finding) (clean
 func FuzzHCL(f *testing.F) {
 	enabled(f)
 	seeds(f, "hcl", ".modelspec.hcl")
+	seeds(f, "new/hcl", ".modelspec.hcl")
 	f.Fuzz(func(t *testing.T, src []byte) {
 		// Everything one input costs runs inside within: the reading and the checks, the
 		// export, the read of the export and the comparison, so the watchdog and the
 		// allocation budget cover all of it.
+		clean := false
 		within(t, src, func() {
 			m, parse := modelspec.ParseHCL("fuzz.modelspec.hcl", src)
-			if !refusal(t, m, parse) || len(m.Unmapped) > 0 {
+			if !refusal(t, m, parse) {
 				return
 			}
+			clean = true
 			node, err := m.JSON(modelspec.ModuleIdentity{ID: "x/fuzz", Name: "fuzz", Version: "1"})
 			if err != nil {
 				t.Fatalf("a clean model does not export: %v", err)
@@ -145,16 +245,30 @@ func FuzzHCL(f *testing.F) {
 				t.Fatalf("the export does not round-trip: %v %s", err, modelspec.Diff(node, again))
 			}
 		})
+		withinRewrite(t, src, func() {
+			rewriteAccepted(t, "fuzz.modelspec.hcl", src)
+			if clean {
+				rewritten(t, "fuzz.modelspec.hcl", src)
+			}
+		})
 	})
 }
 
 func FuzzJSON(f *testing.F) {
 	enabled(f)
 	seeds(f, "json", ".modelspec.json")
+	seeds(f, "new/json", ".modelspec.json")
 	f.Fuzz(func(t *testing.T, src []byte) {
+		clean := false
 		within(t, src, func() {
 			m, parse := modelspec.ParseJSON("fuzz.modelspec.json", src)
-			refusal(t, m, parse)
+			clean = refusal(t, m, parse)
+		})
+		withinRewrite(t, src, func() {
+			rewriteAccepted(t, "fuzz.modelspec.json", src)
+			if clean {
+				rewritten(t, "fuzz.modelspec.json", src)
+			}
 		})
 	})
 }

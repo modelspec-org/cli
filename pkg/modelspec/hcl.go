@@ -23,8 +23,8 @@ func ParseHCL(file string, src []byte) (*Model, []Finding) {
 		m.Broken = true
 		return m, found
 	}
-	input, heredocs, numbers := parserInput(src, tokens)
-	p := &hclReader{m: m, heredocs: heredocs, numbers: numbers}
+	input, heredocs, numbers, offsets := parserInput(src, tokens)
+	p := &hclReader{m: m, heredocs: heredocs, numbers: numbers, offsets: offsets}
 	parsed, diags := hclsyntax.ParseConfig(input, file, hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
 		m.Broken = true
@@ -48,6 +48,7 @@ func ParseHCL(file string, src []byte) (*Model, []Finding) {
 	for _, blk := range body.Blocks {
 		p.topBlock(blk)
 	}
+	sort.Slice(m.Old, func(i, j int) bool { return m.Old[i].Start < m.Old[j].Start })
 	return m, p.result()
 }
 
@@ -63,6 +64,7 @@ type hclReader struct {
 	findingList
 	heredocs map[int]bool   // where, in the parsed source, a heredoc begins: see parserInput
 	numbers  map[int]string // the text of the number that begins there
+	offsets  offsetMap      // from the parsed source back to the file
 }
 
 func (p *hclReader) add(line int, rule, msg string) {
@@ -91,58 +93,80 @@ func (p *hclReader) label(blk *hclsyntax.Block, line int) (string, bool) {
 	return blk.Labels[0], true
 }
 
-func (p *hclReader) topBlock(blk *hclsyntax.Block) {
-	line := blk.DefRange().Start.Line
-	switch blk.Type {
-	case "entity", "component", "enum", "collection", "recordset":
-		name, ok := p.label(blk, line)
-		if !ok {
-			return
-		}
-		p.concept(Kind(blk.Type), name, line, blk.Body)
-	case "projection", "migration":
-		name, ok := p.label(blk, line)
-		if !ok {
-			return
-		}
-		// Decision 0009 lists `projection` blocks and spec/migration-metadata.md
-		// shows `migration` blocks, but no document defines their HCL attributes
-		// or how they map to the JSON "projections" and "migrations" objects.
-		p.m.Unmapped = append(p.m.Unmapped, Unmapped{What: fmt.Sprintf("%s %q", blk.Type, name), Line: line})
-	default:
-		p.add(line, RuleShape, fmt.Sprintf("unknown block type %q; ModelSpec declares entity, component, enum, collection, recordset, projection and migration blocks", blk.Type))
+// old records the old spelling from at r (a range in the parsed source), which
+// modelspec rewrite replaces by repl.
+func (p *hclReader) old(r hcl.Range, from, repl string) {
+	p.m.Old = append(p.m.Old, OldSpelling{Line: r.Start.Line, Start: p.offsets.source(r.Start.Byte), End: p.offsets.source(r.End.Byte), Old: from, New: repl})
+}
+
+// refuse records why modelspec rewrite must not touch the file; the first reason
+// stays.
+func (p *hclReader) refuse(reason string) {
+	if p.m.cannotRewrite == "" {
+		p.m.cannotRewrite = reason
 	}
 }
 
-// memberBlock is the block type a concept kind uses for its members.
-var memberBlock = map[Kind]string{
-	KindEntity:     "property",
-	KindComponent:  "field",
-	KindCollection: "field",
-	KindRecordset:  "column",
+// removed reports a block of a kind that decision 0019 removed, and reserved one
+// of a word it reserved. The block is not read.
+func (p *hclReader) removed(line int, blockType string) {
+	p.add(line, RuleRemoved, fmt.Sprintf("%s blocks were removed (decision 0019): a stored set of rows is described by the database's own description, and the shape of a result is a record with no key", blockType))
+	p.refuse(fmt.Sprintf("it holds the %s block at line %d, a construct decision 0019 removed", blockType, line))
+}
+
+func (p *hclReader) reserved(line int, blockType string) {
+	p.add(line, RuleReservedWord, fmt.Sprintf("%s is a reserved word with no content yet (decision 0019); a model cannot use it", blockType))
+	p.refuse(fmt.Sprintf("it holds the %s block at line %d, a word decision 0019 reserved", blockType, line))
+}
+
+func (p *hclReader) topBlock(blk *hclsyntax.Block) {
+	line := blk.DefRange().Start.Line
+	switch blk.Type {
+	case "record", "entity", "component", "enum":
+		if blk.Type == "entity" {
+			p.old(blk.TypeRange, "entity", "record")
+		}
+		name, ok := p.label(blk, line)
+		if !ok {
+			// The block is not read, but a rewrite must not leave old spellings in it.
+			if blk.Type != "enum" {
+				p.oldInBody(blk.Body, blk.Type == "record" || blk.Type == "entity")
+			}
+			return
+		}
+		kind := Kind(blk.Type)
+		if blk.Type == "entity" {
+			kind = KindRecord
+		}
+		p.concept(kind, name, line, blk.Body)
+	case "collection", "recordset":
+		p.removed(line, blk.Type)
+	case "projection", "migration":
+		p.reserved(line, blk.Type)
+	default:
+		p.add(line, RuleShape, fmt.Sprintf("unknown block type %q; ModelSpec declares record, component and enum blocks (and entity, the old spelling of record)", blk.Type))
+	}
 }
 
 func (p *hclReader) concept(kind Kind, name string, line int, body *hclsyntax.Body) {
 	c := &Concept{Kind: kind, Name: name, Line: line}
-	c.Attrs = p.attrs(body)
+	c.Attrs = p.attrs(body, false)
 	for _, blk := range body.Blocks {
 		bline := blk.DefRange().Start.Line
 		switch {
-		case blk.Type == memberBlock[kind]:
+		case (blk.Type == "field" && kind != KindEnum) || (blk.Type == "property" && kind == KindRecord):
+			if blk.Type == "property" {
+				p.old(blk.TypeRange, "property", "field")
+			}
 			mname, ok := p.label(blk, bline)
 			if !ok {
+				p.oldInMember(blk.Body)
 				continue
 			}
 			p.checkNoBlocks(blk)
-			c.Members = append(c.Members, Member{Name: mname, Line: bline, Attrs: p.attrs(blk.Body)})
-		case kind == KindEntity && blk.Type == "index":
-			iname, ok := p.label(blk, bline)
-			if !ok {
-				continue
-			}
-			// Core-model "Indexes" shows `index` blocks, but the JSON format
-			// defines no place for them outside "projections".
-			p.m.Unmapped = append(p.m.Unmapped, Unmapped{What: fmt.Sprintf("entity %q index %q", name, iname), Line: bline})
+			c.Members = append(c.Members, Member{Name: mname, Line: bline, Attrs: p.attrs(blk.Body, true)})
+		case kind == KindRecord && blk.Type == "index":
+			p.reserved(bline, blk.Type)
 		default:
 			p.add(bline, RuleShape, fmt.Sprintf("%s %q cannot contain a %q block", kind, name, blk.Type))
 		}
@@ -156,16 +180,61 @@ func (p *hclReader) checkNoBlocks(blk *hclsyntax.Block) {
 	}
 }
 
-// attrs reads a body's attributes as literals, in source order.
-func (p *hclReader) attrs(body *hclsyntax.Body) []Attr {
+// oldInMember records the old spelling of the reference setting in a member whose
+// block is not read (its labels are wrong).
+func (p *hclReader) oldInMember(body *hclsyntax.Body) {
+	if a, ok := body.Attributes["entity"]; ok {
+		p.oldEntity(body, a)
+	}
+}
+
+// oldEntity records the old spelling of the reference setting in a member, and
+// refuses a rewrite of a member that has the new one beside it: the rewrite would
+// make two. It is called wherever the old setting is recorded, whether or not the
+// member is read or its value is a literal.
+func (p *hclReader) oldEntity(body *hclsyntax.Body, a *hclsyntax.Attribute) {
+	p.old(a.NameRange, "entity", "record")
+	if _, both := body.Attributes["record"]; both {
+		p.refuse(fmt.Sprintf("a member has both record and entity (line %d)", a.SrcRange.Start.Line))
+	}
+}
+
+// oldInBody records the old spellings in the body of a block that is not read: the
+// members of a record written property, and the references in its members.
+func (p *hclReader) oldInBody(body *hclsyntax.Body, isRecord bool) {
+	for _, blk := range body.Blocks {
+		switch {
+		case isRecord && blk.Type == "property":
+			p.old(blk.TypeRange, "property", "field")
+			p.oldInMember(blk.Body)
+		case blk.Type == "field":
+			p.oldInMember(blk.Body)
+		}
+	}
+}
+
+// attrs reads a body's attributes as literals, in source order. In a member the
+// reference to a record is written record, or entity in the old spelling; it is
+// the attribute record either way, and a member that has both is an error.
+func (p *hclReader) attrs(body *hclsyntax.Body, member bool) []Attr {
 	var out []Attr
 	for _, name := range sortedAttrNames(body) {
 		a := body.Attributes[name]
 		line := a.SrcRange.Start.Line
+		if member && name == "entity" {
+			p.oldEntity(body, a) // before the value is judged: a value that is refused is still spelled the old way
+		}
 		n, msg := p.literalNode(a.Expr, line)
 		if msg != "" {
 			p.add(line, RuleLiteral, fmt.Sprintf("attribute %q: %s", name, msg))
 			continue
+		}
+		if member && name == "entity" {
+			if _, both := body.Attributes["record"]; both {
+				p.add(line, RuleAttribute, "has both record and entity; entity is the old spelling of record (decision 0018), and a member refers to one record")
+				continue
+			}
+			name = "record"
 		}
 		out = append(out, Attr{Name: name, Value: n, Line: line})
 	}

@@ -28,47 +28,25 @@ func parseJSON(src string) (*modelspec.Model, []modelspec.Finding) {
 	return modelspec.ParseJSON("a.modelspec.json", []byte(src))
 }
 
-// patternModel is a model whose one property has the given text as its pattern.
+// patternModel is a model whose one field has the given text as its pattern.
 func patternModel(value string) string {
-	return "entity \"E\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"string\"\n    pattern = " + value + "\n  }\n}\n"
+	return "record \"E\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"string\"\n    pattern = " + value + "\n  }\n}\n"
 }
 
 // linearShapes are models of n units of each part that the checker's work must
 // grow linearly with: the function builds a model's source and says how to read it.
 func linearShapes() map[string]func(n int) (string, func(src string) (*modelspec.Model, []modelspec.Finding)) {
 	return map[string]func(n int) (string, func(src string) (*modelspec.Model, []modelspec.Finding)){
-		"binds to one entity's properties": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
-			var b strings.Builder
-			b.WriteString("entity \"E\" {\n  key = [\"p0\"]\n")
-			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "  property \"p%d\" {\n    type = \"int\"\n  }\n", i)
-			}
-			b.WriteString("}\ncollection \"c\" {\n  kind = \"editable\"\n")
-			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "  field \"f%d\" {\n    bind = \"E.p%d\"\n  }\n", i, i)
-			}
-			b.WriteString("}\n")
-			return b.String(), parseHCL
-		},
-		"binds to one entity's properties, in JSON": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
-			var props, fields []string
-			for i := 0; i < n; i++ {
-				props = append(props, fmt.Sprintf(`"p%d": {"type": "int"}`, i))
-				fields = append(fields, fmt.Sprintf(`"f%d": {"bind": "E.p%d"}`, i, i))
-			}
-			return `{"modelspec": "1.0-draft", "module": {"id": "x", "version": "1"}, "entities": {"E": {"key": ["p0"], "properties": {` +
-				strings.Join(props, ", ") + `}}}, "collections": {"c": {"kind": "editable", "fields": {` + strings.Join(fields, ", ") + `}}}}`, parseJSON
-		},
 		"one use list of many components": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
 			var b, use strings.Builder
 			for i := 0; i < n; i++ {
 				fmt.Fprintf(&b, "component \"C%d\" {\n}\n", i)
 				fmt.Fprintf(&use, "\"C%d\", ", i)
 			}
-			fmt.Fprintf(&b, "entity \"E\" {\n  key = []\n  use = [%s\"C0\"]\n}\n", use.String())
+			fmt.Fprintf(&b, "record \"E\" {\n  key = []\n  use = [%s\"C0\"]\n}\n", use.String())
 			return b.String(), parseHCL
 		},
-		"many entities that use one big component": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
+		"many records that use one big component": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
 			var b strings.Builder
 			b.WriteString("component \"Big\" {\n")
 			for i := 0; i < n; i++ {
@@ -76,31 +54,31 @@ func linearShapes() map[string]func(n int) (string, func(src string) (*modelspec
 			}
 			b.WriteString("}\n")
 			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "entity \"E%d\" {\n  use = [\"Big\"]\n  key = [\"f1\"]\n}\n", i)
+				fmt.Fprintf(&b, "record \"E%d\" {\n  use = [\"Big\"]\n  key = [\"f1\"]\n}\n", i)
 			}
 			return b.String(), parseHCL
 		},
-		"a long key and many references between entities": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
+		"a long key and many references between records": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
 			var b strings.Builder
 			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "entity \"E%d\" {\n  key = [\"id\"]\n  property \"id\" {\n    type = \"int\"\n  }\n  property \"r\" {\n    entity = \"E%d\"\n  }\n}\n", i, (i+1)%n)
+				fmt.Fprintf(&b, "record \"E%d\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"int\"\n  }\n  field \"r\" {\n    record = \"E%d\"\n  }\n}\n", i, (i+1)%n)
 			}
 			return b.String(), parseHCL
 		},
-		"a recordset key of many columns": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
+		"a record key of many fields": func(n int) (string, func(string) (*modelspec.Model, []modelspec.Finding)) {
 			var b, key strings.Builder
 			for i := 0; i < n; i++ {
-				fmt.Fprintf(&b, "  column \"c%d\" {\n    type = \"int\"\n  }\n", i)
+				fmt.Fprintf(&b, "  field \"c%d\" {\n    type = \"int\"\n  }\n", i)
 				fmt.Fprintf(&key, "\"c%d\", ", i)
 			}
-			return fmt.Sprintf("recordset \"r\" {\n  key = [%s\"c0\"]\n  query = \"q\"\n%s}\n", key.String(), b.String()), parseHCL
+			return fmt.Sprintf("record \"r\" {\n  key = [%s\"c0\"]\n%s}\n", key.String(), b.String()), parseHCL
 		},
 	}
 }
 
 // The checker's work is linear in the size of the model: eight times the model
 // allocates about eight times the memory, where a scan for each reference, or a
-// map of an entity's properties rebuilt for each bind, took sixty-four times. The
+// map of an record's fields rebuilt for each key lookup, took sixty-four times. The
 // allocator's own count stands for steps (see allocated): it does not depend on
 // time or on the load of the machine. Not parallel, because the count is of the
 // whole process.
@@ -172,7 +150,7 @@ func TestHostileInputDoesNotReachTheParserStack(t *testing.T) {
 	defer debug.SetMaxStack(debug.SetMaxStack(4 << 20))
 	const n = 3000
 	for name, src := range map[string]string{
-		"a full splat":                "entity \"A\" {\n  key = a" + rep("[*]", n) + "\n}\n",
+		"a full splat":                "record \"A\" {\n  key = a" + rep("[*]", n) + "\n}\n",
 		"an attribute splat":          "x = a" + rep(".*", n),
 		"heredoc lines":               "x = <<EOT\n" + rep("a\n", n) + "EOT\n",
 		"directives":                  "x = <<EOT\n" + rep("%{\nif x}", n) + "EOT\n",

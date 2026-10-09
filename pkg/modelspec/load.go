@@ -144,8 +144,9 @@ func ReadSource(fsys FS, name string) ([]byte, error) {
 
 // OSFS is the operating system's filesystem. The zero value is ready to use.
 type OSFS struct {
-	getwd    func() (string, error) // os.Getwd when nil; a seam for tests
-	tempName func() string          // the name of WriteFile's temporary file, random when nil; a seam for tests
+	getwd    func() (string, error)            // os.Getwd when nil; a seam for tests
+	tempName func() string                     // the name of WriteFile's temporary file, random when nil; a seam for tests
+	chmod    func(*os.File, fs.FileMode) error // sets a replaced file's mode on the temporary file, (*os.File).Chmod when nil; a seam for tests
 }
 
 // Open opens without waiting: opening a named pipe for reading otherwise blocks
@@ -161,11 +162,14 @@ func (OSFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) 
 // O_EXCL (a name that exists, a link planted at it included, is an error and is left
 // alone), and renames it over name. A rename replaces a link at name and does not follow
 // it, so a link put there after a check cannot redirect the write. A file that is replaced
-// keeps its permission bits (as far as the umask allows); the temporary file is removed
-// when anything fails.
+// keeps its permission bits exactly (the temporary file is given them with a chmod, so the
+// umask does not narrow them); a file that is new gets perm as far as the umask allows. The
+// data is synced before the rename, and the temporary file is removed when anything fails.
+// A chmod that fails is an error unless the temporary file already has the mode wanted.
 func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	keep := false
 	if info, err := os.Lstat(name); err == nil && info.Mode().IsRegular() {
-		perm = info.Mode().Perm()
+		perm, keep = info.Mode().Perm(), true
 	}
 	tempName := o.tempName
 	if tempName == nil {
@@ -176,7 +180,24 @@ func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	err = writeAndClose(f, data)
+	if keep {
+		chmod := o.chmod
+		if chmod == nil {
+			chmod = (*os.File).Chmod
+		}
+		err = chmod(f, perm)
+		if err != nil {
+			// A file system may refuse a chmod; that is no failure when the file already has the mode.
+			if info, statErr := f.Stat(); statErr == nil && info.Mode().Perm() == perm {
+				err = nil
+			}
+		}
+	}
+	if err == nil {
+		err = writeAndClose(f, data)
+	} else {
+		f.Close()
+	}
 	if err == nil {
 		err = os.Rename(temp, name)
 	}
@@ -186,16 +207,20 @@ func (o OSFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	return err
 }
 
-// writeAndClose writes data and closes w, whether or not the write worked, and returns the
-// first error.
+// writeAndClose writes data, syncs w when it can be synced, and closes it, whether or not
+// the write worked, and returns the first error.
 func writeAndClose(w io.WriteCloser, data []byte) error {
 	_, err := w.Write(data)
+	if s, ok := w.(interface{ Sync() error }); ok && err == nil {
+		err = s.Sync()
+	}
 	if closeErr := w.Close(); err == nil {
 		err = closeErr
 	}
 	return err
 }
-func (OSFS) SameFile(a, b fs.FileInfo) bool { return os.SameFile(a, b) }
+func (OSFS) SameFile(a, b fs.FileInfo) bool           { return os.SameFile(a, b) }
+func (OSFS) EvalSymlinks(name string) (string, error) { return filepath.EvalSymlinks(name) }
 func (o OSFS) Abs(name string) (string, error) {
 	if !filepath.IsAbs(name) {
 		getwd := o.getwd
@@ -541,6 +566,36 @@ func (d *discovery) expand() ([]string, error) {
 	return notes, nil
 }
 
+// addAll adds the paths given on the command line, then the files assigned to
+// modules, which may be any .hcl file.
+func (d *discovery) addAll(paths []string, assign []Assignment) error {
+	for _, p := range paths {
+		if err := d.addPath(p, false); err != nil {
+			return err
+		}
+	}
+	for _, a := range assign {
+		d.module = a.Module
+		if err := d.addPath(a.Path, true); err != nil {
+			return err
+		}
+	}
+	d.module = ""
+	return nil
+}
+
+// DiscoverModules is Discover for the paths together with the files assigned to
+// modules (--module name=path), which may be any .hcl file, as Lint takes them.
+// The module names play no part: the result is the files.
+func DiscoverModules(fsys FS, paths []string, assign []Assignment) ([]Source, []Finding, error) {
+	d := newDiscovery(fsys)
+	if err := d.addAll(paths, assign); err != nil {
+		return nil, nil, err
+	}
+	SortFindings(d.findings)
+	return d.sorted(), d.findings, nil
+}
+
 // Assignment places the model files under Path (a file or a directory) in module
 // Module (--module Module=Path). It wins over every other module rule.
 type Assignment struct {
@@ -744,18 +799,9 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	var res Result
 	var err error
 	d := newDiscovery(fsys)
-	for _, p := range paths {
-		if err := d.addPath(p, false); err != nil {
-			return res, err
-		}
+	if err := d.addAll(paths, opts.Modules); err != nil {
+		return res, err
 	}
-	for _, a := range opts.Modules {
-		d.module = a.Module
-		if err := d.addPath(a.Path, true); err != nil {
-			return res, err
-		}
-	}
-	d.module = ""
 	if len(d.out) == 0 && len(d.skipped) == 0 {
 		return res, errors.New("no ModelSpec files (" + HCLSuffix + ", " + JSONSuffix + ") found in " + strings.Join(paths, ", "))
 	}

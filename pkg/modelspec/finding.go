@@ -32,20 +32,36 @@ const (
 	RuleMemberKind = "member-kind"
 	RuleVersion    = "modelspec-version"
 	RuleModule     = "module"
-	RuleCollection = "collection"
 	RuleUnknown    = "unknown-field" // a top-level JSON field the format does not define
 	RuleIO         = "unreadable"    // a file found by a directory search that cannot be read
 	RuleSkipped    = "skipped-file"  // a model-named link, pipe or device a search does not read: an error, and its module is not checked
 	RuleStaleTwin  = "stale-twin"    // a JSON twin that is not what its HCL exports to
 	RuleNameCase   = "name-case"     // names in one scope that differ only by case
 
-	RulePublishModuleName = "publish-module-name"
-	RulePublishEntities   = "publish-entities"
-	RulePublishProperties = "publish-properties"
-	RulePublishNameForm   = "publish-name-form"
-	RulePublishComponent  = "publish-component-property"
-	RulePublishQualified  = "publish-qualified-entity"
+	RuleDeprecated   = "deprecated-spelling" // the old spelling of record, field and record = (decisions 0018, 0020, 0022)
+	RuleRemoved      = "removed-construct"   // a collection or a recordset (decision 0019)
+	RuleReservedWord = "reserved-word"       // projection, index or migration: reserved, no content yet (decision 0019)
+
+	RulePublishModuleName      = "publish-module-name"
+	RulePublishRecords         = "publish-records"
+	RulePublishFields          = "publish-fields"
+	RulePublishNameForm        = "publish-name-form"
+	RulePublishComponentField  = "publish-component-field"
+	RulePublishQualifiedRecord = "publish-qualified-record"
 )
+
+// OldSpellingSeverity is the severity of the deprecated-spelling finding, and the
+// one place in the code that decides it. The staged rename (decision 0022) ends
+// with the old spelling an error, which the owner approved in advance on
+// 2026-10-09. The step has a condition of its own, which this constant waits for:
+// the old spelling becomes an error only when no registered model is pinned in
+// it. Do not change it before that is true. Changing it touches the production
+// code here and nowhere else (modelspec rewrite does not look at it, because it
+// must read old files to rewrite them), and the tests that pin a warning: the lint
+// and export tests, the corpus test that pairs each old item with its copy in the
+// new spelling (oldSpellingVerdict), and the manifest's old items with the
+// differences from the recorded readers that follow.
+const OldSpellingSeverity = SeverityWarning
 
 // Finding is one located problem in one file.
 type Finding struct {

@@ -6,11 +6,9 @@ import "strings"
 type Kind string
 
 const (
-	KindEntity     Kind = "entity"
-	KindComponent  Kind = "component"
-	KindEnum       Kind = "enum"
-	KindCollection Kind = "collection"
-	KindRecordset  Kind = "recordset"
+	KindRecord    Kind = "record"
+	KindComponent Kind = "component"
+	KindEnum      Kind = "enum"
 )
 
 // Form is the serialisation a model was read from.
@@ -27,9 +25,15 @@ const (
 	JSONSuffix = ".modelspec.json"
 )
 
-// SpecVersion is the only value the JSON form's "modelspec" field may carry
-// (spec/json-format.md, "Format Identity").
-const SpecVersion = "1.0-draft"
+// The two values the JSON form's "modelspec" field may carry
+// (spec/json-format.md, "Format Identity"). The identifier decides the
+// vocabulary of the whole document (decision 0018): SpecVersion is the new one,
+// with the keys records, fields and record; OldSpecVersion is the old one, with
+// entities, properties and entity, which a reader still accepts (decision 0022).
+const (
+	SpecVersion    = "1.0-draft-2"
+	OldSpecVersion = "1.0-draft"
+)
 
 // Attr is one attribute of a concept or member: `required = true`.
 type Attr struct {
@@ -38,8 +42,8 @@ type Attr struct {
 	Line  int
 }
 
-// Member is a property (entity), field (component or collection) or column
-// (recordset). Column names may repeat; the others are unique.
+// Member is a field of a record or of a component (decision 0020). Names are
+// unique in a concept.
 type Member struct {
 	Name  string
 	Line  int
@@ -49,7 +53,7 @@ type Member struct {
 // Attr returns the member's attribute with the given name.
 func (m *Member) Attr(name string) (*Attr, bool) { return findAttr(m.Attrs, name) }
 
-// Concept is an entity, component, enum, collection or recordset.
+// Concept is a record, a component or an enum.
 type Concept struct {
 	Kind    Kind
 	Name    string
@@ -70,23 +74,19 @@ func findAttr(attrs []Attr, name string) (*Attr, bool) {
 	return nil, false
 }
 
-// memberWord is what a concept kind calls its members.
-func memberWord(k Kind) string {
-	switch k {
-	case KindEntity:
-		return "property"
-	case KindRecordset:
-		return "column"
-	default:
-		return "field"
-	}
-}
+// memberWord is what a record and a component call their members (decision
+// 0020), in messages.
+const memberWord = "field"
 
-// Unmapped is an HCL construct that the reader parses for syntax but that has
-// no defined place in the JSON form, so it cannot be exported.
-type Unmapped struct {
-	What string // for example `entity "User" index "by_email"`
-	Line int
+// OldSpelling is one place where a source uses the old spelling of the
+// vocabulary (decisions 0018 and 0020): the bytes [Start, End) of the source hold
+// Old, and modelspec rewrite puts New there. The reader records every one, so the
+// deprecation finding, the export's choice of vocabulary and the rewrite all come
+// from the same list.
+type OldSpelling struct {
+	Line       int
+	Start, End int
+	Old, New   string
 }
 
 // ModuleIdentity is the identity the JSON form carries and HCL does not.
@@ -125,12 +125,15 @@ type Model struct {
 	ModuleLine int
 	// Concepts are in source order.
 	Concepts []*Concept
-	// Unmapped lists HCL constructs the JSON form does not define.
-	Unmapped []Unmapped
-	// Projections and Migrations are carried through unchanged from a JSON
-	// file; nil otherwise.
-	Projections *Node
-	Migrations  *Node
+	// Old lists the old spellings the source uses, in source order; empty when it
+	// uses none, and for a JSON file whose format identifier is not the old one.
+	// An HCL file has no version marker, so for it this list is the whole of what
+	// tells the old vocabulary from the new.
+	Old []OldSpelling
+	// cannotRewrite is why modelspec rewrite must not touch the file: it holds a
+	// construct that no rewriting fixes (removed or reserved), or mixes the two
+	// vocabularies. Empty when the file can be rewritten.
+	cannotRewrite string
 	// Broken is set when the source could not be read into a model; Check skips
 	// it and does not report references into its module.
 	Broken bool
@@ -140,6 +143,10 @@ type Model struct {
 	// unresolved references.
 	Incomplete bool
 }
+
+// OldVocabulary reports whether the model is in the old vocabulary: export
+// writes the vocabulary of its source (decision 0022, step 1).
+func (m *Model) OldVocabulary() bool { return len(m.Old) > 0 }
 
 // HasConcept reports whether the model declares a concept of the kind with the
 // name.
