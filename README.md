@@ -8,6 +8,8 @@ project, no network and no other tool.
   form (`*.modelspec.json`).
 - `modelspec export` writes the JSON form of an HCL model, and `export --check`
   fails when a committed JSON file is not what its HCL exports to.
+- `modelspec rewrite` brings models from the old spelling (`entity`, `property`) to the new
+  one (`record`, `field`), changing nothing else in the files.
 - `modelspec version` and `modelspec self-update`.
 
 The checks are also an importable Go library, `github.com/modelspec-org/cli/pkg/modelspec`.
@@ -77,7 +79,7 @@ relative and an absolute path, a symbolic link named on the command line) is rea
 Text output, sorted by file, line and rule, then a summary:
 
 ```
-model/shop.modelspec.hcl:12: error: entity "Order" property "customer" entity reference "Customer" does not resolve to an entity in module "shop" [reference]
+model/shop.modelspec.hcl:12: error: record "Order" field "customer" record reference "Customer" does not resolve to a record in module "shop" [reference]
 failed: 1 file checked, 1 error, 0 warnings
 ```
 
@@ -91,12 +93,51 @@ line (the `notes` array in JSON) says so once per module. The same module reache
 two files is checked once. `export` loads a module the same way. A module directory that
 cannot be listed is an error (exit 2), not a quiet partial check.
 
+### The new and the old spelling
+
+ModelSpec renamed its entity to a **record** and its property to a **field**, and removed
+collections and recordsets (decisions 0018, 0019 and 0020; the order of the change is
+decision 0022). `modelspec` reads both spellings, in the files of one module and in one file:
+
+| | New | Old (still read) |
+| --- | --- | --- |
+| HCL block | `record "Invoice" { … }` | `entity "Invoice" { … }` |
+| member of a record | `field "CustomerId" { … }` | `property "CustomerId" { … }` |
+| reference setting | `record = "Customer"` | `entity = "Customer"` |
+| JSON format identifier | `"modelspec": "1.0-draft-2"` | `"modelspec": "1.0-draft"` |
+| JSON keys | `records`, `fields`, `record` | `entities`, `properties`, `entity` |
+
+A component's members are `field` in both. Either member word is accepted in either block
+spelling, and a member that has both `record` and `entity` is an error. Messages use the new
+words whichever spelling the source used, and the Go library holds one vocabulary, the new one
+(`KindRecord`; `KindEntity` is kept as a deprecated alias of it).
+
+**The old spelling is a warning** (rule `deprecated-spelling`, both profiles, never the exit code):
+one finding for each file, at the line of the first old spelling (for JSON, at the `modelspec`
+line), saying how many the file holds and that `modelspec rewrite <file>` rewrites it. Nothing
+registered changes meaning: a model in the old spelling lints as before. The severity is decided in
+one place, `OldSpellingSeverity` in `pkg/modelspec/finding.go`; making the old spelling an error is
+a later, separate step (decision 0022) and changes that constant and the corpus test that pairs each
+old item with its copy in the new spelling, nothing else.
+
+**The JSON identifier decides the vocabulary.** A `1.0-draft-2` document with `entities`,
+`properties` or a member key `entity`, and a `1.0-draft` document with `records`, a record's
+`fields` or a member key `record`, is an error (rule `modelspec-version`) that names the key the
+document's format uses. Any other identifier is the same error whatever the keys are.
+
+**Removed and reserved (decision 0019).** `collection` and `recordset` blocks (JSON: `collections`,
+`recordsets`) are errors, rule `removed-construct`: a stored set of rows is described by the
+database's own description, and the shape of a result is a record with no key. `projection` and
+`migration` blocks, `index` blocks inside a record (JSON: `projections`, `migrations`) are errors,
+rule `reserved-word`: the word is reserved and has no content yet. Both forms; other unknown
+top-level JSON keys stay a warning.
+
 ### Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | 0 | Clean: no finding at error severity (warnings may be printed) |
-| 1 | At least one finding at error severity; for `export`, a model that cannot be exported, has errors, or a committed JSON file that has drifted |
+| 1 | At least one finding at error severity; for `export`, a model that cannot be exported, has errors, or a committed JSON file that has drifted; for `rewrite`, a file it cannot rewrite, or under `--check` a file it would change |
 | 2 | Usage or I/O error: unknown flag or profile, unreadable or missing file, no model files found |
 | 10 | `self-update --check` found a newer release |
 
@@ -121,13 +162,16 @@ recorded verdicts against this profile.
 | Rule | Requires | Because |
 | --- | --- | --- |
 | `publish-module-name` | JSON: `module.name` is present and an identifier (letters, digits, `_`, not starting with a digit) | the catalogue refers to a model by it |
-| `publish-entities` | the module declares at least one entity | the catalogue lists a model by its entities |
-| `publish-properties` | every entity has at least one property of its own | the catalogue lists an entity by its properties |
-| `publish-name-form` | entity names and property names are identifiers | the catalogue turns them into record-set and column names |
-| `publish-component-property` | no property has a `component` value | the catalogue lists only scalar and entity-reference properties |
-| `publish-qualified-entity` | an `entity` reference names an entity of the same module, not `<module>.<Name>` | the catalogue resolves entity references inside the one model only |
+| `publish-records` | the module declares at least one record | the catalogue lists a model by its records |
+| `publish-fields` | every record has at least one field of its own | the catalogue lists a record by its fields |
+| `publish-name-form` | record names and field names are identifiers | the catalogue turns them into record-set and column names |
+| `publish-component-field` | no field has a `component` value | the catalogue lists only scalar and record-reference fields |
+| `publish-qualified-record` | a `record` reference names a record of the same module, not `<module>.<Name>` | the catalogue resolves record references inside the one model only |
 
-The publish profile includes every rule of the default profile.
+The publish profile includes every rule of the default profile. The four rules that name a record
+or a field were `publish-entities`, `publish-properties`, `publish-component-property` and
+`publish-qualified-entity`; what each checks did not change (a qualified reference is still refused
+under the publish profile).
 
 ### Modules
 
@@ -159,11 +203,11 @@ its HCL: when it is not what the HCL exports to, `stale-twin` (a warning) says s
 key differs. The copy's own `module.name` is accepted for references inside it. Two genuinely
 different sources claiming one module name are an error where the module is referenced.
 
-A module-qualified reference such as `entity = "core.Space"` (decision 0014) resolves against the
+A module-qualified reference such as `record = "core.Space"` (decision 0014) resolves against the
 modules among the files linted together. When the module is not among them, the error says so
-and how to supply it (`--module core=<path>`, or name its files too). A key or a `bind` sees the
+and how to supply it (`--module core=<path>`, or name its files too). A key sees the
 fields a component contributes through `use`, including a component of another module when that
-module is supplied; when it is not, the key and bind are not judged.
+module is supplied; when it is not, the key is not judged.
 
 ### What the default profile checks
 
@@ -175,40 +219,39 @@ Both forms, on the same typed model:
 | `encoding` | the source is UTF-8 |
 | `limit` | the source is within the size, nesting and heredoc limits (below) |
 | `shape` | blocks, labels and JSON groups have the structure ModelSpec defines; no unknown block types |
+| `deprecated-spelling` | warning: a file uses the old spelling (`entity`, `property`, `entity =`; JSON format `1.0-draft`), once for each file (decisions 0018, 0020, 0022); never the exit code |
+| `removed-construct` | error: a `collection` or `recordset` block, or the JSON key `collections` or `recordsets` (decision 0019) |
+| `reserved-word` | error: a `projection` or `migration` block, an `index` block inside a record, or the JSON key `projections` or `migrations`: reserved words with no content yet (decision 0019) |
 | `literal` | HCL attribute values are literals: no expressions, references, functions or map-style containers (decisions 0007, 0009). Syntax a literal cannot contain is refused from the tokens before the file is parsed (below) |
-| `reference` | `entity`, `component`, `enum`, `use`, collection `source` and `bind` resolve, with the right kind, including module-qualified names (decisions 0013, 0014) |
-| `reserved-name` | no concept is named `entities`, `components`, `enums`, `collections` or `recordsets` (decision 0015) |
-| `duplicate-name` | names are unique per scope in a module: entity, component and enum share one scope; collections and recordsets have their own (decision 0015); property and field names are unique; JSON object keys are never repeated |
-| `name-form` | a concept name contains no dot (decision 0014), and no concept, property or field name is empty or blank (nothing could refer to it). Nothing else is required of a name: `Order-Item` is valid |
+| `reference` | `record`, `component`, `enum` and `use` resolve, with the right kind, including module-qualified names (decisions 0013, 0014) |
+| `reserved-name` | no concept is named `records`, `entities`, `components`, `enums`, `collections` or `recordsets` (decision 0015; `records` is added by this tool, see "Open points") |
+| `duplicate-name` | names are unique in a module: record, component and enum share one scope (decisions 0015, 0019); field names are unique; JSON object keys are never repeated |
+| `name-form` | a concept name contains no dot (decision 0014), and no concept or field name is empty or blank (nothing could refer to it). Nothing else is required of a name: `Order-Item` is valid |
 | `name-case` | warning: two names of one scope that differ only by case (`User` and `user`; a collision on a case-insensitive store). Not an error, because the standard keeps names case-sensitive |
 | `stale-twin` | warning: a JSON twin is not what its HCL exports to |
 | `skipped-file` | error, both profiles: a search found a model-named file that is not a regular file (a symbolic link, a named pipe, a device), or a SpecScore `models` directory that is a symbolic link to a directory, and did not read it. The finding names the path and what it is, and the way out: replace the link with the file or the directory, or name it on the command line. The module the file belongs to is not checked at all in that run (no reference, twin or other finding is reported from a partial load, and none from another module into it, whether the module is a layout module, a `--module` assignment or a standalone file that is itself the link), and `export` and `export --check` refuse it; other modules in the run are checked as usual |
 | `enum-values` | an enum has at least one value and no repeats, also for an inline `enum = [...]`. Values are strings or integers (decision 0013: an enum constrains a string or an int property) |
 | `unknown-type` | `type` is one of the ModelSpec types |
 | `attribute` | only supported attributes, with values of the right type |
-| `member-kind` | an entity property or component field has exactly one of `type`, `entity`, `component` |
-| `key` | an entity may omit `key` when the model does not assert record identity; when present, its non-empty list names distinct properties (or fields of components it uses). A recordset key, when present, names its columns |
-| `collection` | `kind` is `editable` or `computed`; a computed collection without a `query` is a warning |
-| `modelspec-version`, `module` | JSON: `"modelspec"` is `"1.0-draft"`; `module.id` and `module.version` are present (`module.name` is optional) |
+| `member-kind` | a field of a record or of a component has exactly one of `type`, `record`, `component` |
+| `key` | a record may omit `key` when the model does not assert row identity; when present, its non-empty list names distinct fields (or fields of components it uses) |
+| `modelspec-version`, `module` | JSON: `"modelspec"` is `"1.0-draft-2"` or the old `"1.0-draft"`, and the keys are those of that format; `module.id` and `module.version` are present (`module.name` is optional) |
 | `unknown-field` | JSON: a top-level field the format does not define is a warning (`$schema` is accepted; the format is silent on other fields) |
 
-A JSON document needs no entities, and an entity needs no properties: a module of components and
-enums is valid, and so is an entity whose key comes from a component it uses. JSON that `export`
+A JSON document needs no records, and a record needs no fields: a module of components and
+enums is valid, and so is a record whose key comes from a component it uses. JSON that `export`
 writes from HCL that lints clean lints clean (a test runs that round trip over the whole accepting
 HCL corpus).
 
 ### What the default profile does not check
 
 - **Attributes.** The accepted attributes are the lists in `spec/core-model.md` (types,
-  constraints, `bind`, `source`, `query`, `kind`, `key`, `use`, `values`). The standard says
+  constraints, `key`, `use`, `values`; the attributes `bind`, `source`, `query` and `kind` went
+  with collections and recordsets). The standard says
   attributes include "similar metadata", so an attribute outside those lists is refused; if you
   need one, that is a point for the standard (see "Open points").
 - **Values it only reads.** `pattern` is not compiled, `format` is not checked against a list,
-  `query` text and recordset `source` expressions are not interpreted, an enum's values are not
-  checked against the type of the property it constrains.
-- **Constructs with no defined JSON form.** The bodies of `index`, `projection` and `migration`
-  blocks are not read (the blocks lint clean; `export` refuses them), and the contents of the
-  JSON `projections` and `migrations` objects are carried through unchecked.
+  an enum's values are not checked against the type of the field it constrains.
 - **Other repositories.** A module-qualified reference is resolved only against the files linted
   together.
 - **SpecScore's own rules**, such as a module's `dependsOn`, and any comparison with data.
@@ -221,7 +264,7 @@ numbers, booleans and lists (object literals only "where explicitly specified"; 
 `examples/` finds only the non-canonical `properties = { … }`, so `modelspec` reads one and refuses it with
 the map-style message of decision 0007),
 and "do not use dynamic HCL expressions or functions". A reference to another module is a string
-(`entity = "core.Space"`, decision 0014), so it is allowed. `modelspec` takes that to mean this grammar:
+(`record = "core.Space"`, decision 0014), so it is allowed. `modelspec` takes that to mean this grammar:
 
 - block types and labels (a label is a quoted string; a bare word is read as a label too);
 - attribute names, `=`, and these values: a quoted string or a heredoc, a number (`-` only as its sign),
@@ -230,7 +273,7 @@ and "do not use dynamic HCL expressions or functions". A reference to another mo
   message that it must be a literal.
 
 A heredoc keeps its final line break, so a one-line heredoc (`type = <<EOT`, `string`, `EOT`) is the value
-`"string\n"` and never a valid name. The finding about a name (a type, a reference, a key, a `kind`) in an HCL file
+`"string\n"` and never a valid name. The finding about a name (a type, a reference, a key) in an HCL file
 that ends with a line break says so and says to write a quoted string.
 
 **What is refused before parsing.** The HCL parser is recursive, and a stack overflow in Go is fatal, so
@@ -261,7 +304,7 @@ Brackets, quotes and operators inside strings, heredocs and comments are text, s
 | nesting of braces, brackets, quoted strings and heredocs (JSON: arrays and objects) | 64 levels (`MaxDepth`) | `limit` finding; counted from tokens, so brackets in strings and comments do not count |
 | lines of one heredoc | 1,000 (`MaxHeredocLines`) | `limit` finding naming the number of lines; `$` and `%` in a query do not change the count |
 | one number literal (JSON the same) | 40 characters, not counting a sign (`MaxNumberLength`), and, written as digits (no trailing zeros) times a power of ten, an exponent of at most 100 either way (`MaxNumberExponent`) | `limit` finding that says how many characters or which exponent, and the limit. Stricter than the standard, which sets none: see "Numbers and names" |
-| one name: a block label, an identifier, the value of `type`, `entity`, `component`, `enum` or `kind`, an item of `key` or `use` (JSON: every object key, and the same strings) | 255 bytes as written (`MaxNameLength`) | `limit` finding that says how many bytes and the limit. Stricter than the standard, which states no length |
+| one name: a block label, an identifier, the value of `type`, `record` (or the old `entity`), `component` or `enum`, an item of `key` or `use` (JSON: every object key, and the same strings) | 255 bytes as written (`MaxNameLength`) | `limit` finding that says how many bytes and the limit. Stricter than the standard, which states no length |
 | one finding's message | 1,024 bytes (`MaxMessageBytes`); a piece of the user's text in it, 255 (`MaxEchoBytes`) | cut, with a marker that says how long it was |
 | syntax errors, non-literal tokens, or numbers and names over their limits shown for one file | 50 (`MaxSyntaxFindings`) | the rest are not listed; one finding says so |
 | findings kept by one reader, one check and one run | 1,000 (`MaxFindings`) | the rest are counted, not kept: one more finding says how many were left out, with how many were errors and how many warnings. Errors are kept in preference to warnings (an error takes the place of a listed warning), so an error is dropped only when more than 1,000 errors were found, and then the finding is an error, so the exit code is what it would be with no limit. A `skipped-file` error (a module that was not checked) is kept ahead of every other finding, and if more than 1,000 were found the summary says how many of those not listed are skipped files. The line that counts what one reader or check left out stands for those findings: when a run's list drops it, or a `skipped-file` error takes its place, the summary counts all of them and not one. The output stays sorted. The summary line's counts (`N errors`) are of the findings listed, the last finding's text has the rest. The limit is in the library, so memory is bounded too |
@@ -294,14 +337,14 @@ known input on which they differ. Over the corpus and 5.8 million valid files of
 were identical; that is a measurement, not a proof. A string of 520,000 `$a` (1 MiB) takes 0.3 seconds.
 
 **The checker is linear too.** A reference used to be found by scanning every concept of the module, and an
-entity's properties rebuilt for every `bind` that named it: valid models of 4 MB took minutes (see the table
-below). Concepts are now indexed once for each module and the properties of an entity once for each entity (the
-fields of a component are kept once, not copied into each entity that uses it).
+record's fields rebuilt for every lookup that named it: valid models of 4 MB took minutes. Concepts are now
+indexed once for each module and the fields of a record once for each record (the fields of a component are kept
+once, not copied into each record that uses it).
 Tests count the memory allocated at two sizes of each shape, which does not depend on the load of the machine,
 and fail when eight times the model costs more than fourteen times the memory. A scan allocates nothing, so
 other tests count steps: concepts visited to build a module's index (each exactly once, however many lookups
 there are), members listed to build a set (once), and sets and names consulted to answer whether a name is a
-property of an entity (bounded by twice the fields of the components it uses, however many lookups).
+field of a record (bounded by twice the fields of the components it uses, however many lookups).
 
 **Numbers and names.** The HCL library reads a number into 512 bits (about 154 digits) and takes time that
 grows with the exponent: `values = [1e10000000]`, 37 bytes, took 12 seconds and lint passed it; an integer of
@@ -348,13 +391,11 @@ the reader refuse:
 | `$${` x 349,000 (1 MiB) | 0.17 s | 160 MiB |
 | `$a` x 520,000 (1 MiB) | 0.29 s | 380 MiB |
 | one `pattern` of 1,040,000 letters | 0.07 s | 23 MiB |
-| one entity of 10,000 properties and a collection of 14,000 fields bound to them (1.0 MB, HCL) | 0.13 s | 168 MiB |
-| the same in JSON, 15,000 properties and 20,000 binds (1.0 MB) | 0.02 s | 44 MiB |
 | 15,000 components and a `use` list of 70,000 names (1.0 MB) | 0.16 s | 176 MiB |
 | an enum of 200,000 repeats of one value (1.0 MB) | 0.25 s (1,001 findings, 91 KB) | 326 MiB |
 | 520 heredocs of 999 lines (1.0 MB) | 0.22 s | 216 MiB |
 | a label of 1 million `$` (1.0 MB), refused by the name limit | 0.10 s | 379 MiB |
-| a name of 200,000 bytes and 200 properties of unknown type (208 KB), refused | 0.00 s, 134 bytes | 14 MiB |
+| a name of 200,000 bytes and 200 fields of unknown type (208 KB), refused | 0.00 s, 134 bytes | 14 MiB |
 
 A list of numbers, `enum "E" { values = [ ... ] }`, by size (seconds and peak memory; before is the previous head,
 which printed each number as the shortest decimal of its 512 bits, after is the canonical form):
@@ -388,7 +429,7 @@ recurse (it fails by overflowing the stack if the pre-parse refusal is removed),
 refused token. A new version of the `hcl` library, which could add tokens or recursion, needs
 `scripts/fuzz.sh [seconds]` (fuzz targets for the HCL and the JSON readers in `scripts/fuzz/`; oracles: no
 crash, publish refuses whatever the default profile refuses, a clean model exports to JSON that parses and
-lints clean, and one input costs a bounded amount of work (the reading, the checks, the export, the read of the
+lints clean, a clean model is rewritten to a clean model that rewriting again does not change, and one input costs a bounded amount of work (the reading, the checks, the export, the read of the
 export and the comparison all count): at most 4 MiB plus 1,000 bytes allocated for each
 byte of input, counted by the allocator and not by time, and a watchdog ends the process, which the fuzzer reports
 as a failing input, if one input is still running after ten seconds: while it runs, not after it returns). `scripts/fuzz.sh`
@@ -422,11 +463,21 @@ layout module, whatever it is called, and refuses a JSON file given as the sourc
 found and not read (`skipped-file`), references into it were not checked: the export is the model's own and is written as
 before (exit 0), and standard error has that module's `skipped-file` finding and a note that says so.
 
-The JSON follows `spec/json-format.md`: `modelspec`, `module`, then components, enums,
-entities, collections, recordsets (concepts in source order, attributes in source order,
-recordset columns as an ordered array with `name` first). The output of `export` for
-datatug/chinookdb's `model/chinook.modelspec.hcl` is byte-identical to its committed
-`model/chinook.modelspec.json`.
+The JSON follows `spec/json-format.md`: `modelspec`, `module`, then components, enums and
+records (concepts in source order, attributes in source order). **It is written in the vocabulary
+of its source**: an HCL file with no old spelling exports as `"modelspec": "1.0-draft-2"` with
+`records`, `fields` and `record`, and an HCL file with any old spelling (`entity`, `property`,
+`entity =`) as `"1.0-draft"` with `entities`, `properties` and `entity`. So a repository whose
+`export --check` passes keeps passing, and passes again after `modelspec rewrite` has been run on
+both its files; the order of the two rewrites does not matter, but between them the pair is in two
+vocabularies, and the `stale-twin` warning and the `--check` message say that `modelspec rewrite`
+brings it in line. (An HCL file with no record, field or reference in it, only components and enums,
+has no old spelling and so exports as `1.0-draft-2`: beside a `1.0-draft` copy it is a stale twin until
+the copy is rewritten.) Nothing that lints clean lacks a JSON form: every construct the reader still accepts has one,
+and the words with none (`index`, `projection`, `migration`) are errors. The output of `export` for
+datatug/chinookdb's `model/chinook.modelspec.hcl`, in the old spelling, is byte-identical to its committed
+`model/chinook.modelspec.json`, and the export of the same file after `modelspec rewrite` is byte-identical
+to the rewritten JSON.
 
 Numbers are written in their canonical form (see "One form for a number"): `1.0` and `1e0` are `1`, `-0` is `0`, and
 a number that would need more than 40 characters as a plain decimal is written as digits and an exponent (`1e41`),
@@ -457,6 +508,42 @@ file (exit 2) and reads at most one byte over the limit. `export` refuses to wri
 it: valid HCL of 0.7 to 1.0 MB can export to 1.2 to 1.7 MB (1.3 to 1.7 times the size). It exits 1, writes nothing,
 and says why.
 
+## Rewrite
+
+```sh
+modelspec rewrite                    # what would change in this directory: nothing is written
+modelspec rewrite --write model/     # rewrite the files under model/
+modelspec rewrite --check .          # in CI: exit 1 while any file is in the old spelling
+```
+
+`rewrite` takes files and directories the way `lint` does (the same search, the same refusal to follow a
+link found in a search, `--module <name>=<path>` for files that are not called `*.modelspec.hcl`). It replaces
+the old spellings of the table under "The new and the old spelling", and nothing else:
+
+- HCL: the block type `entity`, the block type `property` directly inside a record, and the attribute name
+  `entity` directly inside a member;
+- JSON: the format identifier, the key `entities`, the key `properties` of a record, and the member key `entity`.
+
+It edits byte ranges: every other byte of a file is unchanged, comments, blank lines, indentation, `=`
+alignment (`entity` and `record` have the same length), key order, line endings, and the final newline or
+its absence. A file already in the new spelling is left alone and reported as unchanged, so a second run
+changes nothing. The default is a dry run that prints, for each file that would change, the file and the number
+of replacements, and exits 0; `--write` applies them; `--check` writes nothing and exits 1 when any file would change.
+
+A file is rewritten whatever else is wrong with it (the rewrite is syntactic, and `lint` reports the
+rest), except a file `rewrite` cannot rewrite safely: one that does not parse, one with a removed construct or a
+reserved word (no rewriting fixes it), one that mixes the vocabularies in a way the format does not allow
+(`records` in a `1.0-draft` document, a member with both `record` and `entity`, two lists of members in one
+record), and a JSON file whose identifier is neither `1.0-draft` nor `1.0-draft-2`. It is named on
+standard error with the reason, nothing is written for it, and the exit code is 1; the other files are still
+rewritten. Before a file is written its rewritten text is read again and must be the same model (the same
+concepts, members and attributes) with no old spelling left. The write goes through a temporary file in the
+same directory and a rename, and the file keeps its permissions. A symbolic link named on the command line is
+followed (its target is rewritten and the link stays a link); a link found by a directory search is not
+written through and is reported. An HCL file and its JSON copy are each rewritten when both are named or found;
+rewriting one of a pair leaves the other as `lint` will report it (`stale-twin`). The files are limited as
+`lint` limits them (1 MiB, UTF-8).
+
 ### Open points
 
 The standard does not settle these, so `modelspec` does not invent an answer (each is listed, with what
@@ -468,22 +555,17 @@ The standard does not settle these, so `modelspec` does not invent an answer (ea
   module by name, so the JSON lints clean whatever file it is saved as).
 - **The module short name outside a SpecScore layout.** `lint` takes it from the file name
   (`<name>.modelspec.hcl`), from `module.name` in JSON, or from `--module`.
-- **`index`, `projection` and `migration` blocks.** `spec/core-model.md` shows `index`,
-  decision 0009 lists `projection`, and `spec/migration-metadata.md` shows `migration`, but no
-  document defines their HCL attributes or how they map to the JSON `projections` and
-  `migrations` objects. A file with one lints clean and cannot be exported.
+- **The reserved word `records`.** Decision 0015 reserves five kind names; decision 0018 leaves open
+  whether `records` joins them (it calls that a named unknown). `modelspec` reserves it, as the
+  conservative answer: no concept is named `records`.
 - **Several files in one module.** The JSON form is one document per module and nothing says
   how the files of a module merge, so a file that is one of several files of a module is not
   exported (the other files are named in the refusal). The module is linted whole whichever file is given.
 - **Names.** Empty and blank names are errors (nothing could refer to them), names that differ only by
-  case are warnings, and a property name with a dot is accepted although `bind` and migration renames
-  use dots as separators.
+  case are warnings, and a field name with a dot is accepted.
 - **Integer enum values** are accepted (decision 0013 mentions int properties); the format does
   not say what an enum's values may be.
 - **Unknown top-level JSON fields** are accepted with a warning.
-- **The published todo example**: `examples/todo.modelspec.hcl` names its recordset `task_summary`
-  while `examples/todo.modelspec.json` names it `taskSummary`, so `export --check` reports that
-  difference for the pair as published.
 
 ## Parity with the other readers
 
@@ -491,7 +573,13 @@ The standard does not settle these, so `modelspec` does not invent an answer (ea
 in `testdata/corpus` (**251 manifest items**; each is a file, a SpecScore-layout tree or a set of standalone files, or an
 entry under `parts/` that is one file of another item given alone and must give the verdict of its whole module;
 `testdata/corpus/manifest.json` is the expected verdict of each, under both profiles; a test fails when this
-number is not the manifest's):
+number is not the manifest's). Half of the items are in the old spelling, the other half under `new/` are the same
+items in the new one: where `modelspec rewrite` can rewrite every model file of an item, the copy is what it
+makes of the item, byte for byte (a test checks it), and the item's verdict is the copy's with the warning
+`deprecated-spelling` added; where it cannot (a file that does not parse, or one that holds a collection, a
+recordset or a reserved word), the copy was written by hand. The two readers below do not read the new
+spelling yet, so only the items in the old spelling are compared with them, and the items that now hold a
+removed or reserved construct are recorded as differences ("removed by decision 0019", "reserved by decision 0019"):
 
 - `testdata/golden/specscore.json`: `specscore graph lint`, compared with the **default**
   profile, through the throwaway-project wrapper that datatug/chinookdb's `scripts/lint-modelspec.sh`
