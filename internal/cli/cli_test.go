@@ -689,12 +689,12 @@ func TestExportLintsFirst(t *testing.T) {
 }
 
 // export refuses a source in the old spelling, and says what to do first (decision 0022,
-// step 4): modelspec rewrite brings the file up to date, and then it exports. It does so
-// for export --check as well, and writes nothing. A module supplied with --module is not
-// exported, and its old spelling is a warning that does not stop the export.
+// step 4): modelspec rewrite removes the spelling error, which is not a promise that the
+// export then succeeds. It does so for export --check as well, and writes nothing. A module
+// supplied with --module is not exported, and export says nothing of its old spelling.
 func TestExportRefusesTheOldSpelling(t *testing.T) {
 	t.Parallel()
-	hint := `a.modelspec.hcl has errors; fix them (modelspec lint shows the same findings) before exporting; the old spelling is one of them: modelspec rewrite --write "a.modelspec.hcl" brings the file up to date, and then it can be exported`
+	hint := `a.modelspec.hcl has errors; fix them (modelspec lint shows the same findings) before exporting; the old spelling is one of them: modelspec rewrite --write "a.modelspec.hcl" removes that error`
 	finding := `a.modelspec.hcl:1: error: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "a.modelspec.hcl" rewrites the file [deprecated-spelling]`
 	for name, args := range map[string][]string{
 		"to standard output": append([]string{"export", "a.modelspec.hcl"}, exportID...),
@@ -706,9 +706,18 @@ func TestExportRefusesTheOldSpelling(t *testing.T) {
 		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), finding+"\n") || !strings.Contains(h.errb.String(), hint) {
 			t.Errorf("%s: exit %d, stdout %q, stderr %q, written %v", name, code, h.out, h.errb, h.fsys.written)
 		}
+		if strings.Contains(h.errb.String(), "and then it can be exported") {
+			t.Errorf("%s: the hint promises that the export then succeeds: %q", name, h.errb)
+		}
+	}
+	// A file that holds an unknown type as well as the old spelling: the rewrite removes the
+	// spelling error and the other error remains, and the hint does not say otherwise.
+	h := newHarness(map[string]string{"a.modelspec.hcl": strings.Replace(oldHCL, `"int"`, `"nonesuch"`, 1)})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 1 || !strings.Contains(h.errb.String(), "removes that error") || strings.Contains(h.errb.String(), "can be exported") {
+		t.Errorf("an old spelling and an unknown type: exit %d, stderr %q", code, h.errb)
 	}
 	// Other errors in the same file are still named, with no word about the old spelling when there is none.
-	h := newHarness(map[string]string{"a.modelspec.hcl": badHCL})
+	h = newHarness(map[string]string{"a.modelspec.hcl": badHCL})
 	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 1 || strings.Contains(h.errb.String(), "old spelling is one of them") {
 		t.Errorf("an invalid model in the new spelling: exit %d, stderr %q", code, h.errb)
 	}
@@ -722,22 +731,61 @@ func TestExportRefusesTheOldSpelling(t *testing.T) {
 		t.Errorf("export after rewrite: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
 	}
 	// A model in the new spelling that refers to a module in the old one, supplied with --module:
-	// the export is written, and the module is not exported.
+	// the export is written, and the module is not exported; export says nothing of its spelling.
 	h = newHarness(map[string]string{"booking.modelspec.hcl": bookingHCL, "shared/core.hcl": oldCoreHCL})
 	if code := h.run(append([]string{"export", "booking.modelspec.hcl", "--module", "core=shared/core.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"core.Space"`) || strings.Contains(h.out.String(), `"entities"`) || h.errb.Len() != 0 {
 		t.Errorf("export with an old module supplied: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
 	}
-	// A model with no record, whose committed copy is still written as 1.0-draft, is the
-	// same text in both formats: --check accepts the copy, which lint refuses until it is rewritten.
+	// A model with no record, whose committed copy is still written as 1.0-draft, exports as
+	// 1.0-draft-2 and the copy is not what it exports to: --check reports it (exit 1), and says
+	// what brings the copy up to date. lint refuses the copy too.
 	const components = "component \"C\" {\n  field \"f\" {\n    type = \"int\"\n  }\n}\n"
 	const componentsDoc = `{"modelspec": "1.0-draft", "module": {"id": "x/y", "name": "y", "version": "1"}, "components": {"C": {"fields": {"f": {"type": "int"}}}}}`
 	h = newHarness(map[string]string{"a.modelspec.hcl": components, "a.modelspec.json": componentsDoc})
-	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 0 {
+	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 1 || h.out.Len() != 0 || !strings.Contains(h.errb.String(), `modelspec is "1.0-draft-2" in the first and "1.0-draft" in the second`) || !strings.Contains(h.errb.String(), "modelspec rewrite --write on the JSON file brings it up to date") {
 		t.Errorf("a check of a model with no record against a 1.0-draft copy: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	h = newHarness(map[string]string{"a.modelspec.hcl": components, "a.modelspec.json": componentsDoc})
+	if code := h.run("rewrite", "--write", "a.modelspec.json"); code != 0 || !strings.Contains(string(h.fsys.written["a.modelspec.json"]), `"1.0-draft-2"`) {
+		t.Fatalf("rewrite of the copy: exit %d, stderr %q, written %q", code, h.errb, h.fsys.written)
+	}
+	h2 := newHarness(map[string]string{"a.modelspec.hcl": components, "a.modelspec.json": string(h.fsys.written["a.modelspec.json"])})
+	if code := h2.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 0 {
+		t.Errorf("a check after the rewrite of the copy: exit %d, stdout %q, stderr %q", code, h2.out, h2.errb)
 	}
 	h = newHarness(map[string]string{"a.modelspec.hcl": components, "a.modelspec.json": componentsDoc})
 	if code := h.run("lint", "a.modelspec.hcl", "a.modelspec.json"); code != 1 || !strings.Contains(h.out.String(), "a.modelspec.json:1: error: is in format 1.0-draft and holds 1 old spelling") {
 		t.Errorf("lint of the pair: exit %d, stdout %q", code, h.out)
+	}
+}
+
+// export decides the refusal of a source in the old spelling from the loaded model, not
+// from the findings, which are capped: another module of the run with more findings than
+// the cap, that sort before the exported file, must not lose the refusal.
+func TestExportRefusesTheOldSpellingBehindManyFindings(t *testing.T) {
+	t.Parallel()
+	var many strings.Builder
+	for i := 0; i < 1200; i++ {
+		fmt.Fprintf(&many, "record \"R%d\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"nonesuch\"\n  }\n}\n", i)
+	}
+	files := func() map[string]string {
+		return map[string]string{"z.modelspec.hcl": oldHCL, "z.modelspec.json": oldDoc, "a/a.hcl": many.String()}
+	}
+	// The cap hides the finding of the exported file: lint lists the first findings only.
+	h := newHarness(files())
+	if code := h.run("lint", "z.modelspec.hcl", "--module", "a=a/a.hcl"); code != 1 || strings.Contains(h.out.String(), "z.modelspec.hcl:") || strings.Contains(h.out.String(), "z.modelspec.json:") {
+		t.Fatalf("the finding of the exported file is not behind the cap: exit %d, stdout %.300q", code, h.out)
+	}
+	for name, args := range map[string][]string{
+		"to standard output": append([]string{"export", "z.modelspec.hcl", "--module", "a=a/a.hcl"}, exportID...),
+		"to a file":          append([]string{"export", "z.modelspec.hcl", "--module", "a=a/a.hcl", "--out", "o.json"}, exportID...),
+		"a check":            {"export", "--check", "z.modelspec.hcl", "z.modelspec.json", "--module", "a=a/a.hcl"},
+	} {
+		h := newHarness(files())
+		code := h.run(args...)
+		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), `the old spelling is one of them: modelspec rewrite --write "z.modelspec.hcl" removes that error`) {
+			t.Errorf("%s: exit %d, stdout %.200q, stderr %.300q, written %v", name, code, h.out, h.errb, h.fsys.written)
+		}
 	}
 }
 
@@ -1448,6 +1496,12 @@ func TestHelpStatesWhichModulesAreChecked(t *testing.T) {
 			"does not depend on the order\nof the file names or of the arguments",
 			"With no path named that exception\ncannot apply: everything --module supplies is checked.",
 			"name the model's\ndirectory as a path as well:\n\n  modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl\n\nshop is then checked (it lies under parts) and core is only referred to.",
+		},
+		"export": {
+			"refused, as lint refuses it",
+			"whatever else the run found",
+			"the format identifier included",
+			"is read so that references into\nits module resolve and is not exported; export reports nothing about it",
 		},
 	} {
 		h := newHarness(nil)
