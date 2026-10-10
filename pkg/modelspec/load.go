@@ -769,8 +769,9 @@ func liesBySameFile(fsys FS, abs string, namedInfos []fs.FileInfo) (bool, error)
 // it. The module is known by its name: two sources that claim one name are one module here.
 // EVERY NAME a file is supplied under counts, for all three things: where the file lies
 // (under a named path when any of its names is), which modules it belongs to (the module
-// of the name it was kept under, each module any other name of it was assigned to, and the
-// layout module any other name of it is a file of, are checked together), and the pair rule: an HCL file and the JSON copy beside it
+// of the name it was kept under, each module any other name of it was assigned to, and, for
+// a name that was not assigned to a module, the layout module the name is a file of, are
+// checked together), and the pair rule: an HCL file and the JSON copy beside it
 // (X.modelspec.hcl and X.modelspec.json, by any name of either) are checked together
 // whatever module --module assigns either of them to, so that when the module of one is
 // being checked the module of the other is as well, repeated until nothing changes. A
@@ -807,9 +808,8 @@ func markReferenceOnly(fsys FS, models []*Model, files []Source, named []string,
 			index[name] = i
 			if m, ok := explicit[name]; ok {
 				mods[i] = append(mods[i], m)
-			}
-			if id, _, ok := layoutModule(name); ok {
-				mods[i] = append(mods[i], id) // the layout module this name of the file is a file of
+			} else if id, _, ok := layoutModule(name); ok {
+				mods[i] = append(mods[i], id) // the layout module this name of the file is a file of, when --module did not assign the name
 			}
 		}
 	}

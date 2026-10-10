@@ -211,6 +211,15 @@ func TestCheckedModuleIsDecidedPerModule(t *testing.T) {
 	// A copy beside a file that is itself only referred to stays referred to.
 	sameSeverities(t, "the copy of a file that is only referred to", spellingInEveryOrder(t, "copy referred", map[string]string{"main" + hclExt: okRecord, "p/x" + hclExt: oldRecord("P"), "p/x.modelspec.json": oldDoc(jEntities)}, []string{"main" + hclExt}, []Assignment{{"other", "p/x.modelspec.json"}}), map[string]Severity{"p/x" + hclExt: w, "p/x.modelspec.json": w})
 
+	// A pinned module that is itself laid out as a SpecScore module of the same id, supplied under
+	// another module name, is only referred to: the layout module counts for a name that --module
+	// did not assign to a module, and this file has one name, which it did.
+	pinnedLayout := map[string]string{
+		"spec/graph/modules/shop/models/a.hcl": okRecord,
+		"pinned/modules/shop/models/old.hcl":   oldRecord("Old"),
+	}
+	sameSeverities(t, "a pinned layout module under another module name", spellingInEveryOrder(t, "pinned layout", pinnedLayout, []string{"spec"}, []Assignment{{"shopv1", "pinned/modules/shop/models"}}), map[string]Severity{"pinned/modules/shop/models/old.hcl": w})
+
 	// Several modules are supplied, and only one of them is named: the others are referred to.
 	three := map[string]string{
 		"main" + hclExt: okRecord,
