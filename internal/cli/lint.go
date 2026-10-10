@@ -92,7 +92,10 @@ keep the pinned module outside the paths named, or name the model's directory ra
 than ".". That is decided for the module as a whole, once every file is loaded, so it
 does not depend on the order of the file names or of the arguments. It changes one rule
 only, the old spelling (below); every other rule is applied to a module that is only
-referred to in full.
+referred to in full. This is a claim about which modules are being checked, and so about
+the severity of an old spelling and the exit status it gives; for a file given under two
+names, the name it is printed under and the stale-twin warning for a copy beside its
+second name follow the name that was met first.
 
 Profiles. The default profile checks the standard (spec/core-model.md,
 spec/hcl-authoring.md, spec/json-format.md and the decisions) and nothing else.

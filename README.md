@@ -149,6 +149,8 @@ loaded, so the answer does not depend on the order of the file names or of the a
   spelling. It changes the spelling rule only: every other rule is applied to such a module in
   full, and an unknown type in it fails the run.
 
+This is a claim about which modules are being checked, and so about the severity of an old spelling and the exit status it gives; for a file given under two names, the name it is printed under and the `stale-twin` warning for a copy beside its second name follow the name that was met first.
+
 With no path named the exception cannot apply. To check a model kept in plain `.hcl` files against
 a pinned module in the old spelling, name the model's directory as a path as well:
 
