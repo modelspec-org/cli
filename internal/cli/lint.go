@@ -81,9 +81,9 @@ a symbolic link to a named directory, and another letter case of its name where 
 file system ignores case, lie under it. Every name a file is supplied under counts:
 for where it lies (it lies under a named path when any of its names does), for the
 pair above (by any name of either file), and for the modules it belongs to (the module
-of the name it is read under, each module another name of it was assigned to, and the
-layout module another name of it is a file of, are checked together). With no path named, or with paths that hold
-no model, every module that --module supplies is being checked. A module is only
+of the name it is read under, each module another name of it was assigned to, and, for a
+name that --module did not assign, the layout module that name is a file of, are checked
+together). With no path named, or with paths that hold no model, every module that --module supplies is being checked. A module is only
 referred to when paths are named and none of its files is named or lies under one of
 them: its files came only from --module, so that references into it resolve. A
 pinned module kept under a path named, such as lint . --module
@@ -92,8 +92,8 @@ keep the pinned module outside the paths named, or name the model's directory ra
 than ".". That is decided for the module as a whole, once every file is loaded, so it
 does not depend on the order of the file names or of the arguments. It changes one rule
 only, the old spelling (below); every other rule is applied to a module that is only
-referred to in full. This is a claim about which modules are being checked, and so about
-the severity of an old spelling and the exit status it gives; for a file given under two
+referred to in full. That it does not depend on the order is a claim about which modules
+are being checked, and so about the severity of an old spelling and the exit status it gives; for a file given under two
 names, the name it is printed under and the stale-twin warning for a copy beside its
 second name follow the name that was met first.
 

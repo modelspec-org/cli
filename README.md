@@ -136,8 +136,8 @@ loaded, so the answer does not depend on the order of the file names or of the a
   where the file system ignores case, lie under it. Every name a file is supplied under counts: for
   where it lies (it lies under a named path when any of its names does), for the pair above (by any
   name of either file), and for the modules it belongs to (the module of the name it is read under,
-  each module another name of it was assigned to, and the layout module another name of it is a file of,
-  are checked together). `export` and `export --check` check the file
+  each module another name of it was assigned to, and, for a name that `--module` did not assign, the
+  layout module that name is a file of, are checked together). `export` and `export --check` check the file
   they are given and its module.
 - With **no path named** (or only paths that hold no model), every module that `--module` supplies is
   being checked, so `modelspec lint --module core=shared/` checks `shared/` in full.
@@ -149,7 +149,7 @@ loaded, so the answer does not depend on the order of the file names or of the a
   spelling. It changes the spelling rule only: every other rule is applied to such a module in
   full, and an unknown type in it fails the run.
 
-This is a claim about which modules are being checked, and so about the severity of an old spelling and the exit status it gives; for a file given under two names, the name it is printed under and the `stale-twin` warning for a copy beside its second name follow the name that was met first.
+That it does not depend on the order is a claim about which modules are being checked, and so about the severity of an old spelling and the exit status it gives; for a file given under two names, the name it is printed under and the `stale-twin` warning for a copy beside its second name follow the name that was met first.
 
 With no path named the exception cannot apply. To check a model kept in plain `.hcl` files against
 a pinned module in the old spelling, name the model's directory as a path as well:
