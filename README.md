@@ -133,8 +133,10 @@ loaded, so the answer does not depend on the order of the file names or of the a
   a path, is a file of that path. A module is known by its name: two sources that claim one module
   name are one module here, so naming one of them has the other checked. A path is the same place
   however it is reached: a symbolic link to a named directory, and another letter case of its name
-  where the file system ignores case, lie under it, and a file supplied under two names lies under a
-  named path when any of its names does. `export` and `export --check` check the file
+  where the file system ignores case, lie under it. Every name a file is supplied under counts: for
+  where it lies (it lies under a named path when any of its names does), for the pair above (by any
+  name of either file), and for the modules it belongs to (the module of the name it is read under
+  and each module another name of it was assigned to are checked together). `export` and `export --check` check the file
   they are given and its module.
 - With **no path named** (or only paths that hold no model), every module that `--module` supplies is
   being checked, so `modelspec lint --module core=shared/` checks `shared/` in full.
