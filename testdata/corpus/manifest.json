@@ -1,5 +1,5 @@
 {
- "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). Every item in the old spelling (entity, property, entity =; format 1.0-draft) is refused, with the error deprecated-spelling (decision 0022, step 4: the old spelling is an error in a model that is being checked, and the whole item is named to lint) - except in a file that only the item's `modules` supply (parts/a.hcl and parts/b.hcl of standalone/explicit-module and standalone/explicit-module-with-json-copy), which is read so that the references into it resolve and keeps the warning; that is the only difference between its verdict and the verdict of its copy in the new spelling, where there is a copy. `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why (the recorded readers still read the old spelling, so an old item that lint refuses for the spelling alone has an entry): specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item under parts/ is one file of another item, given alone (as an editor or a hook would): `path` is where it is under this directory, and a module is the unit, so its verdict is that of the whole module it belongs to. Parts are not compared with the other readers, which lint a whole project. An item without `differs` must have the same verdict as the reader recorded for it. An item under new/ is the item of the same path in the new spelling (record, field, record =; format 1.0-draft-2). Where `modelspec rewrite` can rewrite every model file of the old item, the copy is what rewrite makes of it, byte for byte (a test checks it). Where it cannot, because a file does not parse, repeats a key in a JSON object, or holds a removed construct or a reserved word (decision 0019), the copy was written by hand: the old words replaced, and for an item whose removed construct was only a part of its purpose (a collection beside records) without it; the old item keeps the construct and so refuses. The items listed in the test as new only have no old twin: they hold both spellings together. Items under new/ are not compared with the other readers, which do not read the new spelling yet; the same goes for new/parts/.",
+ "about": "Expected verdicts of `modelspec lint` for every corpus item, under both profiles. An item is a file (hcl/, json/) or a directory (modules/: a SpecScore project in the SpecScore layout; standalone/: files linted together, with `modules` as --module assignments relative to the item). Every item in the old spelling (entity, property, entity =; format 1.0-draft) is refused, with the error deprecated-spelling (decision 0022, step 4: the old spelling is an error in a module that is being checked). An item is linted with its own directory as the one path named, so every file of it, `modules` assignments included, lies under a named path and is checked; that is the only difference between its verdict and the verdict of its copy in the new spelling, where there is a copy. The warning for a module that is only referred to needs a module supplied from outside every path named, which no item can do (its `modules` are relative to the item), so it is tested in the Go tests of lint. `differs` names the reader whose recorded verdict (testdata/golden) is different, and says why, compared with the verdict of lint without the spelling error (the recorded readers still read the old spelling): specscore is compared with the default profile, the Directory's JSON reader with the publish profile. An item under parts/ is one file of another item, given alone (as an editor or a hook would): `path` is where it is under this directory, and a module is the unit, so its verdict is that of the whole module it belongs to. Parts are not compared with the other readers, which lint a whole project. An item without `differs` must have the same verdict as the reader recorded for it. An item under new/ is the item of the same path in the new spelling (record, field, record =; format 1.0-draft-2). Where `modelspec rewrite` can rewrite every model file of the old item, the copy is what rewrite makes of it, byte for byte (a test checks it). Where it cannot, because a file does not parse, repeats a key in a JSON object, or holds a removed construct or a reserved word (decision 0019), the copy was written by hand: the old words replaced, and for an item whose removed construct was only a part of its purpose (a collection beside records) without it; the old item keeps the construct and so refuses. The items listed in the test as new only have no old twin: they hold both spellings together. Items under new/ are not compared with the other readers, which do not read the new spelling yet; the same goes for new/parts/.",
  "items": {
   "hcl/blank-property-name.modelspec.hcl": {
    "default": {
@@ -39,9 +39,6 @@
     "warnings": [
      "name-case"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/chinook.modelspec.hcl": {
@@ -56,9 +53,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/collection-bind-unresolved.modelspec.hcl": {
@@ -143,9 +137,6 @@
      "deprecated-spelling",
      "publish-fields"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/entity-ref-to-enum.modelspec.hcl": {
@@ -213,6 +204,9 @@
     "rules": [
      "deprecated-spelling"
     ]
+   },
+   "differs": {
+    "specscore": "lint accepts integer enum values and specscore refuses them; decision 0013 says an enum constrains a string or an int property, so the standard allows them"
    }
   },
   "hcl/enum-no-values.modelspec.hcl": {
@@ -259,9 +253,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/map-style-properties.modelspec.hcl": {
@@ -298,9 +289,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/names-not-identifiers.modelspec.hcl": {
@@ -336,9 +324,6 @@
      "deprecated-spelling",
      "publish-name-form"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/qualified-entity-self.modelspec.hcl": {
@@ -354,9 +339,6 @@
      "deprecated-spelling",
      "publish-qualified-record"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/reserved-entity-name.modelspec.hcl": {
@@ -436,9 +418,6 @@
      "deprecated-spelling",
      "publish-component-field"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "hcl/syntax-error.modelspec.hcl": {
@@ -687,9 +666,6 @@
     "warnings": [
      "name-case"
     ]
-   },
-   "differs": {
-    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/chinook.modelspec.json": {
@@ -704,9 +680,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/component-property.modelspec.json": {
@@ -860,9 +833,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/entity-no-properties.modelspec.json": {
@@ -934,9 +904,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/invalid-utf8.modelspec.json": {
@@ -1066,9 +1033,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/names-not-identifiers.modelspec.json": {
@@ -1172,9 +1136,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/property-array-type.modelspec.json": {
@@ -1305,9 +1266,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/shape-wrong-types.modelspec.json": {
@@ -1400,9 +1358,6 @@
     "warnings": [
      "unknown-field"
     ]
-   },
-   "differs": {
-    "directory": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); the Directory's reader reads it"
    }
   },
   "json/wrong-attribute-type.modelspec.json": {
@@ -1486,9 +1441,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "modules/layout-key-through-component": {
@@ -1541,9 +1493,6 @@
      "deprecated-spelling",
      "publish-component-field"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "modules/layout-same-name-in-two-modules": {
@@ -1569,9 +1518,6 @@
     "rules": [
      "deprecated-spelling"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "modules/layout-undeclared-dependency": {
@@ -1587,6 +1533,9 @@
      "deprecated-spelling",
      "publish-qualified-record"
     ]
+   },
+   "differs": {
+    "specscore": "lint accepts and specscore refuses a qualified reference to a module missing from the referencing module's dependsOn (graph-dependency-direction); that rule is about SpecScore's own module metadata and is not part of ModelSpec, so lint does not apply it"
    }
   },
   "modules/layout-unknown-module": {
@@ -1619,9 +1568,6 @@
      "deprecated-spelling",
      "publish-qualified-record"
     ]
-   },
-   "differs": {
-    "specscore": "lint refuses the old spelling (rule deprecated-spelling, decision 0022, step 4); specscore reads it"
    }
   },
   "parts/layout-duplicate-in-module-entities": {
@@ -1820,9 +1766,6 @@
     "verdict": "refuse",
     "rules": [
      "deprecated-spelling"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
@@ -1830,9 +1773,6 @@
     "rules": [
      "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "modules": [
@@ -1861,9 +1801,6 @@
     "verdict": "refuse",
     "rules": [
      "deprecated-spelling"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "publish": {
@@ -1871,9 +1808,6 @@
     "rules": [
      "deprecated-spelling",
      "publish-qualified-record"
-    ],
-    "warnings": [
-     "deprecated-spelling"
     ]
    },
    "modules": [

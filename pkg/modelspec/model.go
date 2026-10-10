@@ -134,13 +134,14 @@ type Model struct {
 	// construct that no rewriting fixes (removed or reserved), or mixes the two
 	// vocabularies. Empty when the file can be rewritten.
 	cannotRewrite string
-	// ReferenceOnly is set by Lint on a file that was read only because it was
-	// supplied with --module while paths named other files, and that no file a path
-	// names pulls in as the rest of its module: it is there so that references into
-	// its module resolve, and is not itself being checked. The one difference is the
-	// severity of deprecated-spelling (OldSpellingSeverity): a model refers to
-	// another model pinned at a past commit, and that one keeps its old spelling
-	// (decision 0018). The zero value is a model that is being checked.
+	// ReferenceOnly is set by Lint, for every file of a module as a whole, on a module
+	// that is only referred to: paths are named, every file of the module was supplied
+	// with --module, and none of them is, or lies under, a path named. It is there so
+	// that references into it resolve, and the module is not itself being checked. The
+	// one difference is the severity of deprecated-spelling (OldSpellingSeverity): a
+	// model refers to another model pinned at a past commit, and that one keeps its old
+	// spelling (decision 0018). Every other rule is applied to it in full. The zero
+	// value is a model that is being checked. See markReferenceOnly for the decision.
 	ReferenceOnly bool
 	// Broken is set when the source could not be read into a model; Check skips
 	// it and does not report references into its module.

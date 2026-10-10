@@ -222,9 +222,13 @@ func TestParityWithTheOtherReaders(t *testing.T) {
 				t.Errorf("%s has no recorded verdict for %s", tool.file, item)
 				continue
 			}
-			ours := entry.Default.Verdict
+			// The recorded readers read the old spelling and know nothing of the rule that
+			// makes it an error, so lint is compared with the item's verdict without that
+			// error: an old item that lint refuses for the spelling alone is accepted here, as
+			// it was when the spelling was a warning.
+			ours := withoutSpellingError(entry.Default)
 			if tool.profile == ProfilePublish {
-				ours = entry.Publish.Verdict
+				ours = withoutSpellingError(entry.Publish)
 			}
 			reason, differs := entry.Differs[tool.key]
 			if (v.Verdict != ours) != differs {
@@ -251,6 +255,17 @@ func TestParityWithTheOtherReaders(t *testing.T) {
 			}
 		}
 	}
+}
+
+// withoutSpellingError is the verdict of an item with the error deprecated-spelling
+// taken away: "refuse" when another error is left, "accept" when it was the only one.
+func withoutSpellingError(v verdict) string {
+	for _, rule := range v.Rules {
+		if rule != RuleDeprecated {
+			return "refuse"
+		}
+	}
+	return "accept"
 }
 
 func hasAnyPrefix(s string, prefixes []string) bool {
@@ -410,21 +425,20 @@ func TestChinookAndTodoLintCleanAndExportCheck(t *testing.T) {
 // oldSpellingVerdict is what the old spelling does to the verdict of an item: the
 // one place a test knows how severe it is (decision 0022, step 4,
 // OldSpellingSeverity). The old item's expected verdict is this applied to the
-// verdict of its copy in the new spelling. In a file that a run names, which is every
-// file the search of the item finds, the old spelling is an error: checked says the
-// item has one, and the item is refused with deprecated-spelling among its errors. In
-// a file that only the item's modules supply (--module) it is a warning: referred says
-// the item has one, and deprecated-spelling is among its warnings.
-func oldSpellingVerdict(newSpelling verdict, checked, referred bool) verdict {
+// verdict of its copy in the new spelling. An item is linted with its own path as the
+// one path named, and every file of it, those that its modules supply included, lies
+// under that path (the test below says so on its own, with filepath.Rel, and not with
+// the search that lint runs), so every file of the item is in a module that is being
+// checked: when the item holds an old spelling it is refused, with deprecated-spelling
+// among its errors. A module that is only referred to needs a module supplied from
+// outside every path named; no item can do that, since its modules are relative to it,
+// and the Go tests of lint (TestCheckedModuleIsDecidedPerModule) have it.
+func oldSpellingVerdict(newSpelling verdict, holdsOldSpelling bool) verdict {
 	v := verdict{Verdict: newSpelling.Verdict, Rules: newSpelling.Rules, Warnings: newSpelling.Warnings}
-	if checked {
+	if holdsOldSpelling {
 		v.Verdict = "refuse"
 		v.Rules = append(append([]string(nil), v.Rules...), RuleDeprecated)
 		sort.Strings(v.Rules)
-	}
-	if referred {
-		v.Warnings = append(append([]string(nil), v.Warnings...), RuleDeprecated)
-		sort.Strings(v.Warnings)
 	}
 	return v
 }
@@ -528,35 +542,27 @@ func TestEveryItemHasACopyInTheNewSpelling(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", item, err)
 		}
-		// The files the item's path finds are named to lint; the others, which only its
-		// modules supply, are only referred to.
-		searched, _, err := Discover(OSFS{}, []string{src})
-		if err != nil {
-			t.Fatalf("%s: %v", item, err)
-		}
-		named := map[string]bool{}
-		for _, f := range searched {
-			named[f.Abs] = true
-		}
 		files := map[string][]byte{} // the rewritten model files, by path relative to the item
-		checked, referred, refused := 0, 0, ""
+		oldSpellings, refused := 0, ""
 		for _, f := range found {
 			data, err := os.ReadFile(f.Path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			rel, _ := filepath.Rel(src, f.Path)
+			// The item is the path named to lint, and every file of it lies under it, wherever
+			// the file came from (a search of the path, or one of the item's modules): so the
+			// file is checked, and its old spellings are errors.
+			if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				t.Errorf("%s: %s lies outside the item, so it is not named to lint", item, f.Path)
+			}
 			out, n, err := Rewrite(f.Path, data)
 			if err != nil {
 				refused = err.Error()
 				break
 			}
 			files[rel] = out
-			if named[f.Abs] {
-				checked += n
-			} else {
-				referred += n
-			}
+			oldSpellings += n
 		}
 		if byHand[item] != (refused != "") {
 			t.Errorf("%s: rewrite refused = %q, but the list of hand-written copies says %v", item, refused, byHand[item])
@@ -587,9 +593,9 @@ func TestEveryItemHasACopyInTheNewSpelling(t *testing.T) {
 			name      string
 			old, copy verdict
 		}{{"default", entry.Default, twinEntry.Default}, {"publish", entry.Publish, twinEntry.Publish}} {
-			want := oldSpellingVerdict(c.copy, checked > 0, referred > 0)
+			want := oldSpellingVerdict(c.copy, oldSpellings > 0)
 			if c.old.Verdict != want.Verdict || !same(c.old.Rules, want.Rules) || !same(c.old.Warnings, want.Warnings) {
-				t.Errorf("%s, %s profile: manifest says %+v, the copy %+v with %d old spellings in named files and %d in files only referred to gives %+v", item, c.name, c.old, c.copy, checked, referred, want)
+				t.Errorf("%s, %s profile: manifest says %+v, the copy %+v with %d old spellings gives %+v", item, c.name, c.old, c.copy, oldSpellings, want)
 			}
 		}
 	}

@@ -14,9 +14,10 @@
 // explicit Assignment), and Check resolves names across a module's files.
 //
 // The old spelling of the vocabulary (entity, property) is read, and is an error
-// in a model that is being checked and a warning in one that is only referred to
+// in a module that is being checked and a warning in one that is only referred to
 // (Model.ReferenceOnly, OldSpellingSeverity); Model.JSON writes the vocabulary of
-// the model's source.
+// the model's source, which the command export does not use for a source in the old
+// spelling (it refuses one).
 //
 // The package never exits the process, never touches the network and reads
 // files only through the FS interface it is given.

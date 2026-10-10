@@ -435,13 +435,15 @@ func TestLintJSON(t *testing.T) {
 }
 
 // A model that refers to another model pinned at a past commit must not be failed by
-// that model's old spelling: a file that only --module supplies, while a path names
-// another, keeps the warning (decision 0018: a pinned commit stays readable). Every
-// file a path names, and every file when no path is named, has the error.
+// that model's old spelling (decision 0018: a pinned commit stays readable): a module that
+// only --module supplies, while a path names files of other modules, keeps the warning.
+// Every module that a path names a file of, or holds a file of, has the error, and so has
+// every module when no path brings in a file. It is decided for the module, so it does
+// not depend on the order of the arguments.
 func TestLintOldSpellingOfAModuleThatIsOnlyReferredTo(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{"booking.modelspec.hcl": bookingHCL, "shared/core.modelspec.hcl": oldCoreHCL}
-	const warning = `shared/core.modelspec.hcl:1: warning: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); this file is read only so that references into its module resolve (--module), so the old spelling is a warning here (decision 0022); modelspec rewrite --write "shared/core.modelspec.hcl" rewrites the file [deprecated-spelling]` + "\n"
+	const warning = `shared/core.modelspec.hcl:1: warning: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); this module is only referred to: it was supplied with --module so that references into it resolve, and no path named holds a file of it, so the old spelling is a warning here and every other rule is applied to it in full (the specification, "Where The Two Rules Meet"); modelspec rewrite --write "shared/core.modelspec.hcl" rewrites the file [deprecated-spelling]` + "\n"
 	const errorLine = `shared/core.modelspec.hcl:1: error: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "shared/core.modelspec.hcl" rewrites the file [deprecated-spelling]` + "\n"
 	for name, tc := range map[string]struct {
 		args []string
@@ -455,10 +457,11 @@ func TestLintOldSpellingOfAModuleThatIsOnlyReferredTo(t *testing.T) {
 		"the module is named by a path first":                      {[]string{"lint", "shared/core.modelspec.hcl", "booking.modelspec.hcl", "--module", "core=shared/core.modelspec.hcl"}, 1, errorLine + "failed: 2 files checked, 1 error, 0 warnings\n"},
 		"the module is named by a path alone":                      {[]string{"lint", "shared/core.modelspec.hcl"}, 1, errorLine + "failed: 1 file checked, 1 error, 0 warnings\n"},
 		"no path is named, so what is assigned is what is checked": {[]string{"lint", "--module", "core=shared/core.modelspec.hcl"}, 1, errorLine + "failed: 1 file checked, 1 error, 0 warnings\n"},
+		"a path that holds no model names nothing":                 {[]string{"lint", "empty", "--module", "core=shared/core.modelspec.hcl"}, 1, errorLine + "failed: 1 file checked, 1 error, 0 warnings\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			h := newHarness(files)
+			h := newHarness(map[string]string{"booking.modelspec.hcl": files["booking.modelspec.hcl"], "shared/core.modelspec.hcl": files["shared/core.modelspec.hcl"], "empty/notes.txt": "no model here"})
 			if code := h.run(tc.args...); code != tc.code || h.out.String() != tc.out {
 				t.Errorf("exit %d (want %d), stdout %q (want %q), stderr %q", code, tc.code, h.out, tc.out, h.errb)
 			}
@@ -468,6 +471,49 @@ func TestLintOldSpellingOfAModuleThatIsOnlyReferredTo(t *testing.T) {
 	// is named is an error whatever it refers to, and the module's warning stays.
 	h := newHarness(map[string]string{"booking.modelspec.hcl": strings.NewReplacer("record", "entity", "field", "property").Replace(bookingHCL), "shared/core.modelspec.hcl": oldCoreHCL})
 	if code := h.run("lint", "booking.modelspec.hcl", "--module", "core=shared/core.modelspec.hcl"); code != 1 || !strings.Contains(h.out.String(), "booking.modelspec.hcl:1: error: holds 4 old spellings") || !strings.Contains(h.out.String(), "shared/core.modelspec.hcl:1: warning: holds 2 old spellings") || !strings.HasSuffix(h.out.String(), "failed: 2 files checked, 1 error, 1 warning\n") {
+		t.Errorf("exit %d, stdout %q", code, h.out)
+	}
+}
+
+// The files `--module` exists for are plain .hcl files, which no search finds and no path
+// can name. A directory named as a path checks what lies under it, those files included;
+// with no path named the module is checked too, so a model kept in plain files is checked
+// against a pinned module in the old spelling by naming its directory as well (the help
+// and the README say so).
+func TestLintAModelKeptInPlainFiles(t *testing.T) {
+	t.Parallel()
+	parts := map[string]string{"model/part1.hcl": strings.Replace(bookingHCL, "core.Space", "Space", 1), "model/part2.hcl": oldCoreHCL}
+	for name, tc := range map[string]struct {
+		files map[string]string
+		args  []string
+		code  int
+		out   string
+	}{
+		"the directory is named and assigned": {parts, []string{"lint", "model", "--module", "shop=model"}, 1, "model/part2.hcl:1: error: holds 2 old spellings"},
+		"the same in another order":           {parts, []string{"lint", "--module", "shop=model", "model"}, 1, "model/part2.hcl:1: error: holds 2 old spellings"},
+		"no path is named":                    {parts, []string{"lint", "--module", "shop=model"}, 1, "model/part2.hcl:1: error: holds 2 old spellings"},
+		"a file of it cannot be named":        {parts, []string{"lint", ".", "model/part2.hcl", "--module", "shop=model"}, 2, ""},
+		"the directory named, a pinned module in the old spelling referred to": {
+			map[string]string{"parts/a.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "parts", "--module", "shop=parts", "--module", "core=pinned/core.modelspec.hcl"}, 0, "pinned/core.modelspec.hcl:1: warning: holds 2 old spellings"},
+		"the same, the assignments the other way round": {
+			map[string]string{"parts/a.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "--module", "core=pinned/core.modelspec.hcl", "--module", "shop=parts", "parts"}, 0, "pinned/core.modelspec.hcl:1: warning: holds 2 old spellings"},
+		"with no path both are checked": {
+			map[string]string{"parts/a.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "--module", "shop=parts", "--module", "core=pinned/core.modelspec.hcl"}, 1, "pinned/core.modelspec.hcl:1: error: holds 2 old spellings"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(tc.files)
+			if code := h.run(tc.args...); code != tc.code || !strings.Contains(h.out.String(), tc.out) {
+				t.Errorf("exit %d (want %d), stdout %q (want it to contain %q), stderr %q", code, tc.code, h.out, tc.out, h.errb)
+			}
+		})
+	}
+	// Both ways of naming it say the same about the model itself: it is not failed.
+	h := newHarness(map[string]string{"parts/a.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL})
+	if code := h.run("lint", "parts", "--module", "shop=parts", "--module", "core=pinned/core.modelspec.hcl"); code != 0 || !strings.HasSuffix(h.out.String(), "ok: 2 files checked, 0 errors, 1 warning\n") || strings.Contains(h.out.String(), "parts/a.hcl") {
 		t.Errorf("exit %d, stdout %q", code, h.out)
 	}
 }
@@ -1385,6 +1431,33 @@ func TestExportOutRefusesAnInput(t *testing.T) {
 		h := newHarness(files)
 		if code := h.run(append([]string{"export", "m/booking.modelspec.hcl", "--module", "core=shared", "--out", out}, exportID...)...); code != 0 || len(h.fsys.written[out]) == 0 {
 			t.Errorf("--out %s: exit %d, written %v, stderr %q", out, code, h.fsys.written, h.errb)
+		}
+	}
+}
+
+// The help says which modules are checked, and how to check a model kept in plain .hcl
+// files against a pinned module in the old spelling (the form with no path cannot do it),
+// and what export does with the old spelling.
+func TestHelpStatesWhichModulesAreChecked(t *testing.T) {
+	t.Parallel()
+	for command, want := range map[string][]string{
+		"lint": {
+			"unless --module is given: then it checks what --module supplies and\nnothing else",
+			"Which modules are checked.",
+			"lies under a path named there (whether or not\n--module also supplies it)",
+			"does not depend on the order\nof the file names or of the arguments",
+			"With no path named that exception\ncannot apply: everything --module supplies is checked.",
+			"name the model's\ndirectory as a path as well:\n\n  modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl\n\nshop is then checked (it lies under parts) and core is only referred to.",
+		},
+	} {
+		h := newHarness(nil)
+		if code := h.run(command, "--help"); code != 0 {
+			t.Fatalf("%s --help: exit %d", command, code)
+		}
+		for _, w := range want {
+			if !strings.Contains(h.out.String(), w) {
+				t.Errorf("%s --help does not say %q", command, w)
+			}
 		}
 	}
 }

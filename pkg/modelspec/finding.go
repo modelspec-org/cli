@@ -51,17 +51,21 @@ const (
 )
 
 // OldSpellingSeverity is the severity of the deprecated-spelling finding for a file,
-// and the one place in the code that decides it: an error in a file that is being
-// checked, a warning in a file that is only read so that references into its module
-// resolve (referenceOnly is Model.ReferenceOnly).
+// and the one place in the code that decides it: an error in a file of a module that
+// is being checked, a warning in a file of a module that is only referred to
+// (referenceOnly is Model.ReferenceOnly, decided for the module as a whole by
+// markReferenceOnly).
 //
 // The staged rename (decision 0022) ends with the old spelling an error: a model
-// that is being written or registered must not be in it. A model that another
-// refers to, pinned at a past commit, keeps its old spelling and stays readable
-// (decisions 0018 and 0021), and a person checking the model that refers to it must
-// not be failed by it: that is the one exception, and it is a warning.
-// modelspec rewrite does not look at this function, because it must read old files
-// to rewrite them.
+// that is being written or registered must not be in it. The owner approved making
+// the old spelling an error (decision 0022, the entry of 2026-10-09 that quotes "yes,
+// you can and should make the old spelling an error"). The scope of the error was
+// chosen by the implementing session on the recommendation of a census of 2026-10-09;
+// the owner was told of it the same day. A model that another refers to, pinned at a
+// past commit, keeps its old spelling and stays readable (decision 0018), and a person
+// checking the model that refers to it is not failed by it: that is the one exception,
+// and it is a warning. modelspec rewrite does not look at this function, because it
+// must read old files to rewrite them.
 //
 // What pins the rule: TestDeprecatedSpelling (check_test.go) for the library, the
 // lint, export and rewrite tests in internal/cli, the corpus test that pairs each

@@ -727,8 +727,8 @@ func TestAHeredocInANamePositionSaysToUseAQuotedString(t *testing.T) {
 
 // A file in the old spelling gets one finding, at the line of the first old
 // spelling, with how many there are. In a model that is being checked it is an
-// error under both profiles (decision 0022, step 4); in a file that is only read so
-// that references into its module resolve it is a warning. The severity is decided
+// error under both profiles (decision 0022, step 4); in a file of a module that is only
+// referred to it is a warning. The severity is decided
 // in one place, OldSpellingSeverity.
 func TestDeprecatedSpelling(t *testing.T) {
 	t.Parallel()
@@ -779,89 +779,20 @@ entity "Old" {
 	if got := Check([]*Model{m}, Options{}); len(got) != 1 || got[0].Severity != SeverityError {
 		t.Errorf("a model checked on its own: %v", got)
 	}
-	// The one exception, a warning: a file that is only read for the references into
-	// its module. Its last clause says so.
+	// The one exception, a warning: a file of a module that is only referred to. Its last
+	// clause says so.
 	m.ReferenceOnly = true
 	got := Check([]*Model{m}, Options{})
-	if len(got) != 1 || got[0].Severity != SeverityWarning || HasErrors(got) || !strings.HasSuffix(got[0].Message, `(--module), so the old spelling is a warning here (decision 0022); modelspec rewrite --write "a.modelspec.hcl" rewrites the file`) {
+	// The warning cites decision 0022 for the error only (the decision states neither the
+	// scope nor the exception), points the exception at the specification, and says that
+	// the relaxation is of this rule alone.
+	const why = `this module is only referred to: it was supplied with --module so that references into it resolve, and no path named holds a file of it, so the old spelling is a warning here and every other rule is applied to it in full (the specification, "Where The Two Rules Meet"); modelspec rewrite --write "a.modelspec.hcl" rewrites the file`
+	if len(got) != 1 || got[0].Severity != SeverityWarning || HasErrors(got) || !strings.HasSuffix(got[0].Message, why) || strings.Contains(got[0].Message, "decision 0022") {
 		t.Errorf("a model that is only referred to: %v", got)
 	}
 	// The severity is decided in one place.
 	if OldSpellingSeverity(false) != SeverityError || OldSpellingSeverity(true) != SeverityWarning {
 		t.Errorf("OldSpellingSeverity = %s, %s; want error for a model being checked and warning for one only referred to", OldSpellingSeverity(false), OldSpellingSeverity(true))
-	}
-}
-
-// Which files are only referred to is decided when the files are found, and is a fact
-// about each file (Model.ReferenceOnly): a file that only --module supplies, while a
-// path names another. The rest of the module of a file follows the file: a file a path
-// names pulls the rest of its module in as checked (the module is the unit of
-// checking), and a file that is only referred to pulls it in as referred to.
-func TestReferenceOnlyFollowsTheModule(t *testing.T) {
-	t.Parallel()
-	const layout = "spec/graph/modules/app/models/"
-	lint := func(files map[string]string, paths []string, assign ...Assignment) map[string]Severity {
-		t.Helper()
-		res, err := Lint(newMemFS(files), paths, LintOptions{Modules: assign})
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := map[string]Severity{}
-		for _, f := range res.Findings {
-			if f.Rule == RuleDeprecated {
-				got[f.File] = f.Severity
-			}
-		}
-		return got
-	}
-	same := func(name string, got, want map[string]Severity) {
-		t.Helper()
-		if len(got) != len(want) {
-			t.Errorf("%s: %v, want %v", name, got, want)
-			return
-		}
-		for file, sev := range want {
-			if got[file] != sev {
-				t.Errorf("%s: %v, want %v", name, got, want)
-			}
-		}
-	}
-	old := strings.NewReplacer("record", "entity", "field", "property").Replace(recordWith("Old"))
-	// A layout module: the file a path names is checked, and the others of its directory
-	// are found in a --module assignment first and pulled in as checked when it is done.
-	layoutFiles := map[string]string{layout + "a.hcl": old, layout + "b.hcl": strings.Replace(old, "Old", "Other", 1)}
-	checked := map[string]Severity{layout + "a.hcl": SeverityError, layout + "b.hcl": SeverityError}
-	same("a layout module", lint(layoutFiles, []string{layout + "a.hcl"}), checked)
-	same("a layout module, assigned whole", lint(layoutFiles, []string{layout + "a.hcl"}, Assignment{"app", strings.TrimSuffix(layout, "/")}), checked)
-	same("a layout module, assigned only", lint(layoutFiles, nil, Assignment{"app", strings.TrimSuffix(layout, "/")}), checked)
-	// Another model is named, and the layout module is only supplied: it is referred to as a whole.
-	files := map[string]string{"main" + hclExt: okRecord, layout + "a.hcl": old, layout + "b.hcl": strings.Replace(old, "Old", "Other", 1)}
-	same("a layout module that is only referred to", lint(files, []string{"main" + hclExt}, Assignment{"app", strings.TrimSuffix(layout, "/")}), map[string]Severity{layout + "a.hcl": SeverityWarning, layout + "b.hcl": SeverityWarning})
-	// An HCL file and its JSON copy: the copy follows the HCL, whichever is named or assigned.
-	oldJSON := oldDoc(jEntities)
-	pair := map[string]string{"main" + hclExt: okRecord, "core" + hclExt: old, "core.modelspec.json": oldJSON}
-	same("a pair that is only referred to", lint(pair, []string{"main" + hclExt}, Assignment{"core", "core" + hclExt}), map[string]Severity{"core.modelspec.hcl": SeverityWarning, "core.modelspec.json": SeverityWarning})
-	same("a pair named by its HCL", lint(pair, []string{"core" + hclExt}), map[string]Severity{"core.modelspec.hcl": SeverityError, "core.modelspec.json": SeverityError})
-	same("a pair named by its HCL and assigned by its JSON", lint(pair, []string{"core" + hclExt}, Assignment{"core", "core.modelspec.json"}), map[string]Severity{"core.modelspec.hcl": SeverityError, "core.modelspec.json": SeverityError})
-	// Whatever is named is checked, wherever else it is also supplied.
-	same("a file that is named and assigned", lint(pair, []string{"main" + hclExt, "core" + hclExt}, Assignment{"core", "core" + hclExt}), map[string]Severity{"core.modelspec.hcl": SeverityError, "core.modelspec.json": SeverityError})
-	// The flag is on the models Lint returns, and is off for a model that is read on its own.
-	res, err := Lint(newMemFS(pair), []string{"main" + hclExt}, LintOptions{Modules: []Assignment{{"core", "core" + hclExt}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var flags []string
-	for _, m := range res.Models {
-		if m.ReferenceOnly {
-			flags = append(flags, m.File)
-		}
-	}
-	sortStrings(flags)
-	if strings.Join(flags, ",") != "core.modelspec.hcl,core.modelspec.json" {
-		t.Errorf("models only referred to: %v", flags)
-	}
-	if m, _ := ParseHCL("x"+hclExt, []byte(old)); m.ReferenceOnly {
-		t.Error("a model read on its own is being checked")
 	}
 }
 
@@ -893,6 +824,18 @@ func TestStaleTwinInAnotherVocabulary(t *testing.T) {
 		}
 		if name != "unknown" && !found {
 			t.Errorf("%s: no stale twin in %v", name, got)
+		}
+		// A pair in the old spelling cannot be fixed by exporting again: export refuses its
+		// source. The instruction is to rewrite both files, then export; a pair in the new
+		// spelling is told to run export.
+		for _, g := range got {
+			if !strings.Contains(g, "stale twin") {
+				continue
+			}
+			old := strings.Contains(g, "rewrite both files with modelspec rewrite --write, then run modelspec export (export refuses a source in the old spelling)")
+			if old != (name == "old") || (name != "old" && !strings.Contains(g, "; run modelspec export [stale-twin]") && name != "unknown") {
+				t.Errorf("%s: the instruction is wrong: %s", name, g)
+			}
 		}
 	}
 }

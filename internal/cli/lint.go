@@ -44,7 +44,8 @@ Each path is a file or a directory; a directory is searched recursively
 (hidden directories and node_modules are skipped; a search follows no symbolic
 link, and a model file or a SpecScore models directory that is one is a skipped-file
 error: name it on the command line to read it). With no path, lint checks the current
-directory. A file reached by two names is read once.
+directory, unless --module is given: then it checks what --module supplies and
+nothing else. A file reached by two names is read once.
 
 Modules. A module is a set of files, and the module is the unit of checking: if
 a file you give belongs to a module with more files on disk, the whole module is
@@ -56,11 +57,8 @@ across all its files:
   - otherwise <name>.modelspec.hcl is module <name>, and a JSON file is
     module.name (or its file name without .modelspec.json when it has none);
   - --module <name>=<path> (repeatable; a file or a directory) assigns files to
-    a module explicitly and wins over both rules. Assigned files are linted too,
-    and with no path named they are all that is checked. When paths name other
-    files, a file that only --module supplies is read so that references into its
-    module resolve, and keeps the old spelling as a warning (below); name it as a
-    path too to have it checked. Assigning only part of a layout module's
+    a module explicitly and wins over both rules. Assigned files are linted too
+    (see "Which modules are checked"). Assigning only part of a layout module's
     directory is refused: it would split the module.
   - X.modelspec.json beside X.modelspec.hcl is the interchange copy of the same
     module, not a second module (a stale copy is a warning). A JSON file in a
@@ -69,6 +67,18 @@ across all its files:
     claiming one module name are an error where the module is referenced.
 A module-qualified reference such as core.Space resolves against the modules in
 the files linted together.
+
+Which modules are checked. A module is being checked when one of its files is a
+file named on the command line or lies under a path named there (whether or not
+--module also supplies it), and every file of it is then checked: the other .hcl
+files of its layout directory, the JSON copy beside an HCL file, and any file
+--module supplies for it. With no path named, or with paths that hold no model, every
+module that --module supplies is being checked. A module is only referred to when
+paths are named and none of its files is named or lies under one of them: its files
+came only from --module, so that references into it resolve. That is decided for
+the module as a whole, once every file is loaded, so it does not depend on the order
+of the file names or of the arguments. It changes one rule only, the old spelling
+(below); every other rule is applied to a module that is only referred to in full.
 
 Profiles. The default profile checks the standard (spec/core-model.md,
 spec/hcl-authoring.md, spec/json-format.md and the decisions) and nothing else.
@@ -79,12 +89,19 @@ for records and fields, no component-valued fields, and record references only
 within the module.
 
 The old spelling (entity, property and entity = in HCL; format 1.0-draft with
-entities, properties and entity in JSON) is still read, and in a model that is
-being checked it is an error, one for each file that uses it (rule
-deprecated-spelling, both profiles; decision 0022). modelspec rewrite brings the
-file up to date. The exception is a file that only --module supplies while paths
-name others: a model may refer to another model pinned at a past commit, which
-keeps its old spelling and stays readable, so there it is one warning. collection
+entities, properties and entity in JSON) is still read. In a module that is being
+checked it is an error, one for each file that uses it (rule deprecated-spelling,
+both profiles; decision 0022); modelspec rewrite brings the file up to date. In a
+module that is only referred to it is one warning for each file, and does not fail
+the run: a model may refer to another model pinned at a past commit, which keeps its
+old spelling and stays readable (decision 0018). With no path named that exception
+cannot apply: everything --module supplies is checked. To check a model kept in
+plain .hcl files against a pinned module in the old spelling, name the model's
+directory as a path as well:
+
+  modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl
+
+shop is then checked (it lies under parts) and core is only referred to. collection
 and recordset blocks, and the words projection, index and migration, are errors
 (decision 0019).
 
@@ -95,6 +112,7 @@ Output is text by default, or one JSON object with --format json; with
   modelspec lint model/chinook.modelspec.hcl model/chinook.modelspec.json
   modelspec lint spec/                                  # a SpecScore tree
   modelspec lint sales.modelspec.hcl --module core=shared/core/
+  modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl
   modelspec lint --profile publish --format json models/`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if format != "text" && format != "json" {
