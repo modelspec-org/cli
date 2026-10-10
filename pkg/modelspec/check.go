@@ -251,7 +251,7 @@ func (c *checker) unit(u *unit) {
 // deprecated gives the one finding about the old spelling a file uses (decisions
 // 0018, 0020 and 0022): at the line of the first one, or for JSON at the line of
 // the format identifier, with how many the file holds. Its severity is
-// OldSpellingSeverity.
+// OldSpellingSeverity of the file, and its last clause says which it is and why.
 func (c *checker) deprecated(m *Model) {
 	if len(m.Old) == 0 {
 		return
@@ -268,7 +268,15 @@ func (c *checker) deprecated(m *Model) {
 	} else {
 		what = fmt.Sprintf("holds %s: entity, property and entity = are the old spellings of record, field and record =", plural(len(m.Old), "old spelling", "old spellings"))
 	}
-	c.add(line, RuleDeprecated, OldSpellingSeverity, "%s (decision 0018, decision 0020); modelspec rewrite --write %s rewrites the file", what, quote1(m.File))
+	// The clause that says which severity it is and why is part of the format, not an
+	// argument: the arguments of a finding are cut to a short length, being text of the file.
+	const rule = "%s (decision 0018, decision 0020); "
+	const fix = "; modelspec rewrite --write %s rewrites the file"
+	if sev := OldSpellingSeverity(m.ReferenceOnly); sev == SeverityWarning {
+		c.add(line, RuleDeprecated, sev, rule+`this module is only referred to: it was supplied with --module so that references into it resolve, and no path named holds a file of it, so the old spelling is a warning here and every other rule is applied to it in full (the specification, "Where The Two Rules Meet")`+fix, what, quote1(m.File))
+	} else {
+		c.add(line, RuleDeprecated, sev, rule+"the old spelling is an error in a model that is being checked (decision 0022)"+fix, what, quote1(m.File))
+	}
 }
 
 // duplicates reports a concept name declared twice in one name scope of the
@@ -753,6 +761,9 @@ func (c *checker) staleTwin(m *Model) {
 		return // an HCL file that cannot be exported cannot have a twin to compare with
 	}
 	fix := "; run modelspec export"
+	if h.OldVocabulary() {
+		fix = "; rewrite both files with modelspec rewrite --write, then run modelspec export (export refuses a source in the old spelling)"
+	}
 	if note := vocabularyNote(h, m.Root); note != "" {
 		fix = note // one instruction: exporting again would write the old vocabulary or the new one, not the other
 	}

@@ -155,11 +155,16 @@ func (m *Model) exportDrift(committed []byte, id ModuleIdentity) string {
 
 // vocabularyNote is what to say about a difference between a model's export and a
 // JSON document when they are in different vocabularies: the one instruction that
-// fixes it, which replaces any other.
+// fixes it, which replaces any other. A model that is the same text in both
+// vocabularies has nothing to rewrite: the document is the one that is in the format
+// 1.0-draft.
 func vocabularyNote(m *Model, doc *Node) string {
 	v, ok := doc.Get("modelspec")
-	if !ok || v.Type != NodeString || (v.Str != SpecVersion && v.Str != OldSpecVersion) || (v.Str == OldSpecVersion) == m.OldVocabulary() || m.vocabularyFree() {
+	if !ok || v.Type != NodeString || (v.Str != SpecVersion && v.Str != OldSpecVersion) || (v.Str == OldSpecVersion) == m.OldVocabulary() {
 		return ""
+	}
+	if m.vocabularyFree() {
+		return "; the committed JSON is in the earlier format, 1.0-draft, and the model exports as 1.0-draft-2 (a model with no record is the same text in both); modelspec rewrite --write on the JSON file brings it up to date"
 	}
 	return "; the two are in different vocabularies (the old entities, properties and entity, and the new records, fields and record); modelspec rewrite --write on both files brings the pair in line"
 }
@@ -168,11 +173,10 @@ func vocabularyNote(m *Model, doc *Node) string {
 // parsed JSON document: "" when they are the same document with the same key and
 // array order. The error is the export's own refusal.
 func (m *Model) exportDiff(want *Node, id ModuleIdentity) (string, error) {
-	// A model that is the same text in both vocabularies is compared in the one the
-	// document is in, so a copy written as 1.0-draft before the rename is not drift.
-	v, _ := want.Get("modelspec")
-	old := m.OldVocabulary() || (m.vocabularyFree() && v != nil && v.Type == NodeString && v.Str == OldSpecVersion)
-	got, err := m.json(id, old)
+	// What the model exports is compared with the document as it is written, format
+	// identifier included: a model with no record exports as 1.0-draft-2, and a copy of
+	// it written as 1.0-draft is not what it exports to.
+	got, err := m.json(id, m.OldVocabulary())
 	if err != nil {
 		return "", err
 	}

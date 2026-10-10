@@ -9,9 +9,12 @@
 //     (a stack overflow in the HCL parser is fatal and fails the run);
 //  2. the publish profile refuses whatever the default profile refuses;
 //  3. a model that lints clean exports (HCL) to JSON that parses, round-trips
-//     and lints clean under the same name;
-//  4. a model that lints clean is rewritten (modelspec rewrite) to the same model,
-//     which lints clean, and rewriting that again changes nothing;
+//     and lints clean under the same name; a model whose only error is the old
+//     spelling (decision 0022, step 4) exports to JSON of which that is true as well
+//     (the library still writes the old vocabulary for it);
+//  4. a model that lints clean, or whose only error is the old spelling, is rewritten
+//     (modelspec rewrite) to the same model, which lints clean, and rewriting that
+//     again changes nothing;
 //  5. a file that rewrite accepts, clean or not, is rewritten at the old spellings
 //     the reader found and nowhere else, with the count it reports, to the same
 //     concepts, and rewriting that again changes nothing; rewrite never refuses
@@ -185,8 +188,9 @@ func rewriteAccepted(t *testing.T, file string, src []byte) {
 	}
 }
 
-// rewritten checks the fourth oracle for a source that lints clean: it is rewritten
-// to a source that reads as clean, and rewriting that changes nothing.
+// rewritten checks the fourth oracle for a source that lints clean, or has no error
+// but the old spelling: it is rewritten to a source that reads as clean, and rewriting
+// that changes nothing.
 func rewritten(t *testing.T, file string, src []byte) {
 	t.Helper()
 	out, _, err := modelspec.Rewrite(file, src)
@@ -194,7 +198,7 @@ func rewritten(t *testing.T, file string, src []byte) {
 		t.Fatalf("a clean model is not rewritten: %v", err)
 	}
 	m, parse := modelspec.Parse(file, out)
-	if !refusal(t, m, parse) {
+	if clean, _ := refusal(t, m, parse); !clean {
 		t.Fatalf("the rewrite of a clean model does not lint clean:\n%s", out)
 	}
 	again, n, err := modelspec.Rewrite(file, out)
@@ -207,14 +211,25 @@ func lint(m *modelspec.Model, parse []modelspec.Finding, p modelspec.Profile) []
 	return append(append([]modelspec.Finding(nil), parse...), modelspec.Check([]*modelspec.Model{m}, modelspec.Options{Profile: p})...)
 }
 
-func refusal(t *testing.T, m *modelspec.Model, parse []modelspec.Finding) (clean bool) {
+// refusal checks the second oracle and says what the default profile found: clean is
+// no error at all, and spellingOnly is an error that is the old spelling and nothing
+// else (an error since decision 0022, step 4), which rewrite brings to clean.
+func refusal(t *testing.T, m *modelspec.Model, parse []modelspec.Finding) (clean, spellingOnly bool) {
 	t.Helper()
 	def := lint(m, parse, modelspec.ProfileDefault)
 	pub := lint(m, parse, modelspec.ProfilePublish)
 	if modelspec.HasErrors(def) && !modelspec.HasErrors(pub) {
 		t.Fatalf("the default profile refuses and publish accepts:\n%v", def)
 	}
-	return !modelspec.HasErrors(def)
+	if !modelspec.HasErrors(def) {
+		return true, false
+	}
+	for _, f := range def {
+		if f.Severity == modelspec.SeverityError && f.Rule != modelspec.RuleDeprecated {
+			return false, false
+		}
+	}
+	return false, true
 }
 
 func FuzzHCL(f *testing.F) {
@@ -225,20 +240,21 @@ func FuzzHCL(f *testing.F) {
 		// Everything one input costs runs inside within: the reading and the checks, the
 		// export, the read of the export and the comparison, so the watchdog and the
 		// allocation budget cover all of it.
-		clean := false
+		mendable := false // clean, or clean but for the old spelling
 		within(t, src, func() {
 			m, parse := modelspec.ParseHCL("fuzz.modelspec.hcl", src)
-			if !refusal(t, m, parse) {
+			clean, spellingOnly := refusal(t, m, parse)
+			if !clean && !spellingOnly {
 				return
 			}
-			clean = true
+			mendable = true
 			node, err := m.JSON(modelspec.ModuleIdentity{ID: "x/fuzz", Name: "fuzz", Version: "1"})
 			if err != nil {
 				t.Fatalf("a clean model does not export: %v", err)
 			}
 			back, backParse := modelspec.ParseJSON("fuzz.modelspec.json", node.Encode())
-			if !refusal(t, back, backParse) {
-				t.Fatalf("the export of a clean model does not lint clean:\n%v\n%s", lint(back, backParse, modelspec.ProfileDefault), node.Encode())
+			if backClean, backSpellingOnly := refusal(t, back, backParse); backClean != clean || backSpellingOnly != spellingOnly {
+				t.Fatalf("the export of a model that lints clean (%v) or has only the old spelling (%v) is not the same:\n%v\n%s", clean, spellingOnly, lint(back, backParse, modelspec.ProfileDefault), node.Encode())
 			}
 			again, err := modelspec.ParseNode(node.Encode())
 			if err != nil || modelspec.Diff(node, again) != "" {
@@ -247,7 +263,7 @@ func FuzzHCL(f *testing.F) {
 		})
 		withinRewrite(t, src, func() {
 			rewriteAccepted(t, "fuzz.modelspec.hcl", src)
-			if clean {
+			if mendable {
 				rewritten(t, "fuzz.modelspec.hcl", src)
 			}
 		})
@@ -259,14 +275,15 @@ func FuzzJSON(f *testing.F) {
 	seeds(f, "json", ".modelspec.json")
 	seeds(f, "new/json", ".modelspec.json")
 	f.Fuzz(func(t *testing.T, src []byte) {
-		clean := false
+		mendable := false // clean, or clean but for the old spelling
 		within(t, src, func() {
 			m, parse := modelspec.ParseJSON("fuzz.modelspec.json", src)
-			clean = refusal(t, m, parse)
+			clean, spellingOnly := refusal(t, m, parse)
+			mendable = clean || spellingOnly
 		})
 		withinRewrite(t, src, func() {
 			rewriteAccepted(t, "fuzz.modelspec.json", src)
-			if clean {
+			if mendable {
 				rewritten(t, "fuzz.modelspec.json", src)
 			}
 		})

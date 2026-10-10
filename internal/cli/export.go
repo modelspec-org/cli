@@ -62,11 +62,16 @@ module (the SpecScore layout, or --module) is refused, with the other files name
 A model that refers to its own module by name cannot be exported under another
 module.name (the JSON would not lint clean on its own) and is refused.
 
-The JSON is written in the vocabulary of the HCL: a file with no old spelling
-exports as format 1.0-draft-2 (records, fields, record), and a file with any old
-spelling (entity, property, entity =) as 1.0-draft (entities, properties, entity),
-so a committed copy stays what its source exports to until modelspec rewrite brings
-both files up to date.`,
+The JSON is written in format 1.0-draft-2 (records, fields, record). A file with
+any old spelling (entity, property, entity =) is refused, as lint refuses it (rule
+deprecated-spelling, an error; decision 0022), whatever else the run found: run
+modelspec rewrite --write on the HCL file and on its committed JSON copy, then
+export (other errors of the file remain to be fixed). --check compares the
+committed file with what export writes, the format identifier included, so a copy
+written as 1.0-draft is not what the source exports to, also for a model with no
+record, which is the same text in both formats: modelspec rewrite --write brings
+the copy up to date. A file supplied with --module is read so that references into
+its module resolve and is not exported; export reports nothing about its spelling.`,
 		Example: `  modelspec export model/chinook.modelspec.hcl --out model/chinook.modelspec.json \
     --module-id github.com/acme/chinook/model/chinook --module-name chinook --module-version 0.1.0
   modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json`,
@@ -238,8 +243,29 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 			fmt.Fprintln(env.Stderr, f)
 		}
 	}
-	if modelspec.HasErrors(mine) {
-		return nil, nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting", file)}
+	// The old spelling is decided from the loaded model, as Incomplete is, and not from the
+	// findings, which are capped and can have lost the one about the file: the exported file
+	// is named, so its old spelling is an error, and export refuses it.
+	oldSpelling := model.OldVocabulary()
+	if oldSpelling || modelspec.HasErrors(mine) {
+		hint := ""
+		if oldSpelling {
+			// The finding may be one of those the cap dropped: say it, so that the refusal
+			// is not a line that sends the reader to a list that does not hold it.
+			listed := false
+			for _, f := range mine {
+				listed = listed || f.Rule == modelspec.RuleDeprecated
+			}
+			if !listed {
+				for _, f := range modelspec.Check([]*modelspec.Model{model}, modelspec.Options{}) {
+					if f.Rule == modelspec.RuleDeprecated {
+						fmt.Fprintln(env.Stderr, f)
+					}
+				}
+			}
+			hint = fmt.Sprintf("; the old spelling is one of them: modelspec rewrite --write %q removes that error", file)
+		}
+		return nil, nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting%s", file, hint)}
 	}
 	// What was skipped now belongs to other modules, supplied with --module: the model's own
 	// export is whole and stays as it is, but a reference into them was not checked.

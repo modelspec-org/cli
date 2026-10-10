@@ -222,9 +222,13 @@ func TestParityWithTheOtherReaders(t *testing.T) {
 				t.Errorf("%s has no recorded verdict for %s", tool.file, item)
 				continue
 			}
-			ours := entry.Default.Verdict
+			// The recorded readers read the old spelling and know nothing of the rule that
+			// makes it an error, so lint is compared with the item's verdict without that
+			// error: an old item that lint refuses for the spelling alone is accepted here, as
+			// it was when the spelling was a warning.
+			ours := withoutSpellingError(entry.Default)
 			if tool.profile == ProfilePublish {
-				ours = entry.Publish.Verdict
+				ours = withoutSpellingError(entry.Publish)
 			}
 			reason, differs := entry.Differs[tool.key]
 			if (v.Verdict != ours) != differs {
@@ -253,6 +257,17 @@ func TestParityWithTheOtherReaders(t *testing.T) {
 	}
 }
 
+// withoutSpellingError is the verdict of an item with the error deprecated-spelling
+// taken away: "refuse" when another error is left, "accept" when it was the only one.
+func withoutSpellingError(v verdict) string {
+	for _, rule := range v.Rules {
+		if rule != RuleDeprecated {
+			return "refuse"
+		}
+	}
+	return "accept"
+}
+
 func hasAnyPrefix(s string, prefixes []string) bool {
 	for _, p := range prefixes {
 		if strings.HasPrefix(s, p) {
@@ -275,9 +290,11 @@ func TestPublishRefusesWhateverTheDefaultRefuses(t *testing.T) {
 	}
 }
 
-// JSON that `export` writes from HCL that lints clean must itself lint clean, and is
+// JSON that the library writes from HCL that lints clean must itself lint clean, and is
 // in the vocabulary of the HCL: format 1.0-draft-2 for a file with no old spelling,
-// 1.0-draft for one with any.
+// 1.0-draft for one with any. The command export refuses a file with the old spelling
+// (an error), so the old items are the library's: an old item whose only error is the
+// old spelling must export to a document whose only error is the old spelling.
 func TestExportOfCleanHCLLintsClean(t *testing.T) {
 	t.Parallel()
 	var m manifest
@@ -288,7 +305,9 @@ func TestExportOfCleanHCLLintsClean(t *testing.T) {
 		if strings.HasPrefix(item, "new/") {
 			dir = "new/hcl/"
 		}
-		if !strings.HasPrefix(item, dir) || entry.Default.Verdict != "accept" {
+		// Clean, or clean but for the old spelling, which is then its only error.
+		wantErrs := entry.Default.Rules
+		if !strings.HasPrefix(item, dir) || (len(wantErrs) > 0 && !same(wantErrs, []string{RuleDeprecated})) {
 			continue
 		}
 		stem := strings.TrimSuffix(strings.TrimPrefix(item, dir), HCLSuffix)
@@ -321,8 +340,8 @@ func TestExportOfCleanHCLLintsClean(t *testing.T) {
 			continue
 		}
 		_, wantWarnings := ruleSets(Check([]*Model{model}, Options{}))
-		if gotErrs, gotWarnings := ruleSets(Check([]*Model{back}, Options{})); len(gotErrs) != 0 || !same(gotWarnings, wantWarnings) {
-			t.Errorf("%s: the export has errors %v and warnings %v; the HCL has warnings %v", item, gotErrs, gotWarnings, wantWarnings)
+		if gotErrs, gotWarnings := ruleSets(Check([]*Model{back}, Options{})); !same(gotErrs, wantErrs) || !same(gotWarnings, wantWarnings) {
+			t.Errorf("%s: the export has errors %v and warnings %v; the HCL has errors %v and warnings %v", item, gotErrs, gotWarnings, wantErrs, wantWarnings)
 		}
 		// Under another name, or none, the export must still lint clean on its own,
 		// or be refused because the model refers to itself by its name.
@@ -342,29 +361,34 @@ func TestExportOfCleanHCLLintsClean(t *testing.T) {
 			// module.name written even when none was given.
 			named, parse := ParseJSON("other"+JSONSuffix, node.Encode())
 			gotErrs, gotWarnings := ruleSets(Check([]*Model{named}, Options{}))
-			if len(parse) != 0 || len(gotErrs) != 0 || !same(gotWarnings, wantWarnings) {
-				t.Errorf("%s under the name %q: the export has errors %v and warnings %v, parse findings %s; the HCL has warnings %v", item, other, gotErrs, gotWarnings, joinFindings(parse), wantWarnings)
+			if len(parse) != 0 || !same(gotErrs, wantErrs) || !same(gotWarnings, wantWarnings) {
+				t.Errorf("%s under the name %q: the export has errors %v and warnings %v, parse findings %s; the HCL has errors %v and warnings %v", item, other, gotErrs, gotWarnings, joinFindings(parse), wantErrs, wantWarnings)
 			}
 		}
 	}
-	// Nothing that lints clean lacks a JSON form: every accepting HCL item is exported.
+	// Nothing that lints clean lacks a JSON form: every HCL item that is clean but for
+	// the old spelling is exported, in the old vocabulary or the new.
 	if len(exported) < 25 {
-		t.Errorf("only %d accepting HCL items were exported: %v", len(exported), exported)
+		t.Errorf("only %d HCL items were exported: %v", len(exported), exported)
 	}
 }
 
-// pairs are the HCL files and their committed JSON copies that must lint clean
-// together and export to each other, byte for byte where the JSON was written by a
-// JavaScript converter.
+// pairs are the HCL files and their committed JSON copies that must lint together
+// with nothing but the old spelling to say (an error in each of the old pair, nothing
+// in the pairs in the new spelling) and export to each other, byte for byte where the
+// JSON was written by a JavaScript converter. The library still writes the old
+// vocabulary for a model in the old spelling (stale-twin compares in it), which is
+// why the old pair is compared with what it exports to.
 func TestChinookAndTodoLintCleanAndExportCheck(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		dir, hcl, json string
-		warnings       []string // the findings of the pair, which are all deprecated-spelling
+		findings       []string // the findings of the pair, which are all deprecated-spelling
+		severity       Severity // of each
 	}{
-		{"", "chinook", "chinook", []string{RuleDeprecated, RuleDeprecated}},
-		{"new/", "chinook", "chinook", nil},
-		{"new/", "todo-aligned", "todo", nil},
+		{"", "chinook", "chinook", []string{RuleDeprecated, RuleDeprecated}, SeverityError},
+		{"new/", "chinook", "chinook", nil, ""},
+		{"new/", "todo-aligned", "todo", nil, ""},
 	} {
 		hclPath := filepath.Join(corpusDir, filepath.FromSlash(c.dir), "hcl", c.hcl+HCLSuffix)
 		jsonPath := filepath.Join(corpusDir, filepath.FromSlash(c.dir), "json", c.json+JSONSuffix)
@@ -373,11 +397,11 @@ func TestChinookAndTodoLintCleanAndExportCheck(t *testing.T) {
 			var rules []string
 			for _, f := range res.Findings {
 				rules = append(rules, f.Rule)
-				if f.Severity != SeverityWarning {
+				if f.Severity != c.severity {
 					t.Errorf("%s%s (%s profile): %s", c.dir, c.hcl, profile, f)
 				}
 			}
-			if err != nil || res.Files != 2 || !same(rules, c.warnings) {
+			if err != nil || res.Files != 2 || !same(rules, c.findings) {
 				t.Errorf("%s%s (%s profile): lint = %v, %d files, %v", c.dir, c.hcl, profile, res.Findings, res.Files, err)
 			}
 		}
@@ -399,14 +423,23 @@ func TestChinookAndTodoLintCleanAndExportCheck(t *testing.T) {
 }
 
 // oldSpellingVerdict is what the old spelling does to the verdict of an item: the
-// one place a test knows that it is a warning. The old item's expected verdict is
-// this applied to the verdict of its copy in the new spelling, and the day the old
-// spelling becomes an error (decision 0022, step 4, OldSpellingSeverity) this is the
-// function to change, with the manifest's old items.
-func oldSpellingVerdict(newSpelling verdict) verdict {
-	v := verdict{Verdict: newSpelling.Verdict, Rules: newSpelling.Rules}
-	v.Warnings = append(append([]string(nil), newSpelling.Warnings...), RuleDeprecated)
-	sort.Strings(v.Warnings)
+// one place a test knows how severe it is (decision 0022, step 4,
+// OldSpellingSeverity). The old item's expected verdict is this applied to the
+// verdict of its copy in the new spelling. An item is linted with its own path as the
+// one path named, and every file of it, those that its modules supply included, lies
+// under that path (the test below says so on its own, with filepath.Rel, and not with
+// the search that lint runs), so every file of the item is in a module that is being
+// checked: when the item holds an old spelling it is refused, with deprecated-spelling
+// among its errors. A module that is only referred to needs a module supplied from
+// outside every path named; no item can do that, since its modules are relative to it,
+// and the Go tests of lint (TestCheckedModuleIsDecidedPerModule) have it.
+func oldSpellingVerdict(newSpelling verdict, holdsOldSpelling bool) verdict {
+	v := verdict{Verdict: newSpelling.Verdict, Rules: newSpelling.Rules, Warnings: newSpelling.Warnings}
+	if holdsOldSpelling {
+		v.Verdict = "refuse"
+		v.Rules = append(append([]string(nil), v.Rules...), RuleDeprecated)
+		sort.Strings(v.Rules)
+	}
 	return v
 }
 
@@ -510,19 +543,26 @@ func TestEveryItemHasACopyInTheNewSpelling(t *testing.T) {
 			t.Fatalf("%s: %v", item, err)
 		}
 		files := map[string][]byte{} // the rewritten model files, by path relative to the item
-		count, refused := 0, ""
+		oldSpellings, refused := 0, ""
 		for _, f := range found {
 			data, err := os.ReadFile(f.Path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			rel, _ := filepath.Rel(src, f.Path)
+			// The item is the path named to lint, and every file of it lies under it, wherever
+			// the file came from (a search of the path, or one of the item's modules): so the
+			// file is checked, and its old spellings are errors.
+			if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				t.Errorf("%s: %s lies outside the item, so it is not named to lint", item, f.Path)
+			}
 			out, n, err := Rewrite(f.Path, data)
 			if err != nil {
 				refused = err.Error()
 				break
 			}
-			files[rel], count = out, count+n
+			files[rel] = out
+			oldSpellings += n
 		}
 		if byHand[item] != (refused != "") {
 			t.Errorf("%s: rewrite refused = %q, but the list of hand-written copies says %v", item, refused, byHand[item])
@@ -553,12 +593,9 @@ func TestEveryItemHasACopyInTheNewSpelling(t *testing.T) {
 			name      string
 			old, copy verdict
 		}{{"default", entry.Default, twinEntry.Default}, {"publish", entry.Publish, twinEntry.Publish}} {
-			want := c.copy
-			if count > 0 {
-				want = oldSpellingVerdict(c.copy)
-			}
+			want := oldSpellingVerdict(c.copy, oldSpellings > 0)
 			if c.old.Verdict != want.Verdict || !same(c.old.Rules, want.Rules) || !same(c.old.Warnings, want.Warnings) {
-				t.Errorf("%s, %s profile: manifest says %+v, the copy %+v with %d old spellings gives %+v", item, c.name, c.old, c.copy, count, want)
+				t.Errorf("%s, %s profile: manifest says %+v, the copy %+v with %d old spellings gives %+v", item, c.name, c.old, c.copy, oldSpellings, want)
 			}
 		}
 	}

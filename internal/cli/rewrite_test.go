@@ -270,3 +270,27 @@ func TestRewriteWithAFileSystemThatCannotFollowALink(t *testing.T) {
 		t.Errorf("exit %d, stderr %q, written %v", code, h.errb, h.fsys.written)
 	}
 }
+
+// rewrite reads the old spelling, which lint and export now refuse (decision 0022, step 4):
+// it is the way out. The same bytes that lint fails are the ones rewrite changes, and what it
+// writes lints clean.
+func TestRewriteStillReadsWhatLintRefuses(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a.modelspec.hcl": oldHCL, "b.modelspec.json": oldDoc}
+	h := newHarness(files)
+	if code := h.run("lint", "."); code != 1 || strings.Count(h.out.String(), "[deprecated-spelling]") != 2 || !strings.HasSuffix(h.out.String(), "failed: 2 files checked, 2 errors, 0 warnings\n") {
+		t.Fatalf("lint: exit %d, stdout %q", code, h.out)
+	}
+	h = newHarness(files)
+	if code := h.run("rewrite", "--check", "."); code != 1 || h.out.String() != "a.modelspec.hcl: would change, 2 replacements\nb.modelspec.json: would change, 3 replacements\n2 files would change, 0 unchanged\n" || h.errb.Len() != 0 {
+		t.Fatalf("rewrite --check: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	h = newHarness(files)
+	if code := h.run("rewrite", "--write", "."); code != 0 || h.errb.Len() != 0 {
+		t.Fatalf("rewrite --write: exit %d, stderr %q", code, h.errb)
+	}
+	h = newHarness(map[string]string{"a.modelspec.hcl": string(h.fsys.written["a.modelspec.hcl"]), "b.modelspec.json": string(h.fsys.written["b.modelspec.json"])})
+	if code := h.run("lint", "."); code != 0 || h.out.String() != "ok: 2 files checked, 0 errors, 0 warnings\n" {
+		t.Errorf("lint after rewrite: exit %d, stdout %q", code, h.out)
+	}
+}

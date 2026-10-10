@@ -204,8 +204,23 @@ record "A" {
 }
 `
 
-// warnHCL is in the old spelling, which is a warning.
-const warnHCL = `entity "A" {
+// caseHCL has a warning: two names that differ only by case.
+const caseHCL = `record "User" {
+  key = ["id"]
+  field "id" {
+    type = "int"
+  }
+}
+record "user" {
+  key = ["id"]
+  field "id" {
+    type = "int"
+  }
+}
+`
+
+// oldCoreHCL is coreHCL in the old spelling: a module that a model refers to, pinned at a past commit.
+const oldCoreHCL = `entity "Space" {
   key = ["id"]
   property "id" {
     type = "int"
@@ -248,7 +263,10 @@ func TestLintText(t *testing.T) {
 	}{
 		{"clean default path", map[string]string{"a.modelspec.hcl": goodHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
 		{"findings", map[string]string{"a.modelspec.hcl": badHCL, "b.modelspec.hcl": goodHCL}, []string{"lint", "."}, 1, "a.modelspec.hcl:2: error: record \"A\" has an empty key [key]\nfailed: 2 files checked, 1 error, 0 warnings\n", ""},
-		{"warnings only", map[string]string{"a.modelspec.hcl": warnHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "a.modelspec.hcl:1: warning: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); modelspec rewrite --write \"a.modelspec.hcl\" rewrites the file [deprecated-spelling]\nok: 1 file checked, 0 errors, 1 warning\n", ""},
+		{"warnings only", map[string]string{"a.modelspec.hcl": caseHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "a.modelspec.hcl:7: warning: record name \"user\" differs only by case from \"User\" (declared at line 1) in the record/component/enum scope; on a case-insensitive store they collide [name-case]\nok: 1 file checked, 0 errors, 1 warning\n", ""},
+		{"the old spelling is an error", map[string]string{"a.modelspec.hcl": oldHCL}, []string{"lint", "a.modelspec.hcl"}, 1, "a.modelspec.hcl:1: error: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write \"a.modelspec.hcl\" rewrites the file [deprecated-spelling]\nfailed: 1 file checked, 1 error, 0 warnings\n", ""},
+		{"the old spelling is an error under the publish profile too", map[string]string{"a.modelspec.hcl": oldHCL}, []string{"lint", "--profile", "publish", "a.modelspec.hcl"}, 1, "a.modelspec.hcl:1: error: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write \"a.modelspec.hcl\" rewrites the file [deprecated-spelling]\nfailed: 1 file checked, 1 error, 0 warnings\n", ""},
+		{"the old spelling in JSON is an error", map[string]string{"a.modelspec.json": oldDoc}, []string{"lint", "a.modelspec.json"}, 1, "a.modelspec.json:1: error: is in format 1.0-draft and holds 3 old spellings: that identifier, and the keys entities, properties and entity, are the old spellings of 1.0-draft-2, records, fields and record (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write \"a.modelspec.json\" rewrites the file [deprecated-spelling]\nfailed: 1 file checked, 1 error, 0 warnings\n", ""},
 		{"explicit files", map[string]string{"a.modelspec.hcl": goodHCL, "b.modelspec.hcl": badHCL}, []string{"lint", "a.modelspec.hcl"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
 		{"a component field is fine by default", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint"}, 0, "ok: 1 file checked, 0 errors, 0 warnings\n", ""},
 		{"the publish profile refuses it", map[string]string{"a.modelspec.hcl": componentHCL}, []string{"lint", "--profile", "publish"}, 1, "a.modelspec.hcl:12: error: record \"A\" field \"c\" has a component value; the catalogue lists only scalar and record-reference fields [publish-component-field]\nfailed: 1 file checked, 1 error, 0 warnings\n", ""},
@@ -400,15 +418,103 @@ func TestLintJSON(t *testing.T) {
 		t.Fatalf("report = %s", h.out)
 	}
 
-	h = newHarness(map[string]string{"a.modelspec.hcl": badHCL, "w.modelspec.hcl": warnHCL})
+	h = newHarness(map[string]string{"a.modelspec.hcl": badHCL, "o.modelspec.hcl": oldHCL, "w.modelspec.hcl": caseHCL})
 	if code := h.run("lint", "--format=json"); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
 	if err := json.Unmarshal(h.out.Bytes(), &rep); err != nil {
 		t.Fatal(err)
 	}
-	if rep.Errors != 1 || rep.Warnings != 1 || len(rep.Findings) != 2 || rep.Findings[0]["file"] != "a.modelspec.hcl" || rep.Findings[0]["rule"] != "key" || rep.Findings[0]["severity"] != "error" || rep.Findings[0]["line"] != float64(2) {
+	if rep.Errors != 2 || rep.Warnings != 1 || len(rep.Findings) != 3 || rep.Findings[0]["file"] != "a.modelspec.hcl" || rep.Findings[0]["rule"] != "key" || rep.Findings[0]["severity"] != "error" || rep.Findings[0]["line"] != float64(2) {
 		t.Fatalf("report = %s", h.out)
+	}
+	// The old spelling is counted with the errors.
+	if rep.Findings[1]["file"] != "o.modelspec.hcl" || rep.Findings[1]["rule"] != "deprecated-spelling" || rep.Findings[1]["severity"] != "error" || rep.Findings[2]["severity"] != "warning" {
+		t.Fatalf("report = %s", h.out)
+	}
+}
+
+// A model that refers to another model pinned at a past commit must not be failed by
+// that model's old spelling (decision 0018: a pinned commit stays readable): a module that
+// only --module supplies, while a path names files of other modules, keeps the warning.
+// Every module that a path names a file of, or holds a file of, has the error, and so has
+// every module when no path brings in a file. It is decided for the module, so it does
+// not depend on the order of the arguments.
+func TestLintOldSpellingOfAModuleThatIsOnlyReferredTo(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"booking.modelspec.hcl": bookingHCL, "shared/core.modelspec.hcl": oldCoreHCL}
+	const warning = `shared/core.modelspec.hcl:1: warning: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); this module is only referred to: it was supplied with --module so that references into it resolve, and no path named holds a file of it, so the old spelling is a warning here and every other rule is applied to it in full (the specification, "Where The Two Rules Meet"); modelspec rewrite --write "shared/core.modelspec.hcl" rewrites the file [deprecated-spelling]` + "\n"
+	const errorLine = `shared/core.modelspec.hcl:1: error: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "shared/core.modelspec.hcl" rewrites the file [deprecated-spelling]` + "\n"
+	for name, tc := range map[string]struct {
+		args []string
+		code int
+		out  string
+	}{
+		"the module is supplied for its references":                {[]string{"lint", "booking.modelspec.hcl", "--module", "core=shared/core.modelspec.hcl"}, 0, warning + "ok: 2 files checked, 0 errors, 1 warning\n"},
+		"the same under the publish profile":                       {[]string{"lint", "--profile", "publish", "booking.modelspec.hcl", "--module", "core=shared/core.modelspec.hcl"}, 1, "booking.modelspec.hcl:7: error: record \"Booking\" field \"space\" refers to \"core.Space\" in another module; the catalogue resolves record references inside the one model only [publish-qualified-record]\n" + warning + "failed: 2 files checked, 1 error, 1 warning\n"},
+		"a directory supplied as the module":                       {[]string{"lint", "booking.modelspec.hcl", "--module", "core=shared"}, 0, warning + "ok: 2 files checked, 0 errors, 1 warning\n"},
+		"the module is named as a path too":                        {[]string{"lint", "booking.modelspec.hcl", "shared", "--module", "core=shared/core.modelspec.hcl"}, 1, errorLine + "failed: 2 files checked, 1 error, 0 warnings\n"},
+		"the module is named by a path first":                      {[]string{"lint", "shared/core.modelspec.hcl", "booking.modelspec.hcl", "--module", "core=shared/core.modelspec.hcl"}, 1, errorLine + "failed: 2 files checked, 1 error, 0 warnings\n"},
+		"the module is named by a path alone":                      {[]string{"lint", "shared/core.modelspec.hcl"}, 1, errorLine + "failed: 1 file checked, 1 error, 0 warnings\n"},
+		"no path is named, so what is assigned is what is checked": {[]string{"lint", "--module", "core=shared/core.modelspec.hcl"}, 1, errorLine + "failed: 1 file checked, 1 error, 0 warnings\n"},
+		"a path that holds no model names nothing":                 {[]string{"lint", "empty", "--module", "core=shared/core.modelspec.hcl"}, 1, errorLine + "failed: 1 file checked, 1 error, 0 warnings\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(map[string]string{"booking.modelspec.hcl": files["booking.modelspec.hcl"], "shared/core.modelspec.hcl": files["shared/core.modelspec.hcl"], "empty/notes.txt": "no model here"})
+			if code := h.run(tc.args...); code != tc.code || h.out.String() != tc.out {
+				t.Errorf("exit %d (want %d), stdout %q (want %q), stderr %q", code, tc.code, h.out, tc.out, h.errb)
+			}
+		})
+	}
+	// The module that is only referred to is not the model: a model in the old spelling that
+	// is named is an error whatever it refers to, and the module's warning stays.
+	h := newHarness(map[string]string{"booking.modelspec.hcl": strings.NewReplacer("record", "entity", "field", "property").Replace(bookingHCL), "shared/core.modelspec.hcl": oldCoreHCL})
+	if code := h.run("lint", "booking.modelspec.hcl", "--module", "core=shared/core.modelspec.hcl"); code != 1 || !strings.Contains(h.out.String(), "booking.modelspec.hcl:1: error: holds 4 old spellings") || !strings.Contains(h.out.String(), "shared/core.modelspec.hcl:1: warning: holds 2 old spellings") || !strings.HasSuffix(h.out.String(), "failed: 2 files checked, 1 error, 1 warning\n") {
+		t.Errorf("exit %d, stdout %q", code, h.out)
+	}
+}
+
+// The files `--module` exists for are plain .hcl files, which no search finds and no path
+// can name. A directory named as a path checks what lies under it, those files included;
+// with no path named the module is checked too, so a model kept in plain files is checked
+// against a pinned module in the old spelling by naming its directory as well (the help
+// and the README say so).
+func TestLintAModelKeptInPlainFiles(t *testing.T) {
+	t.Parallel()
+	parts := map[string]string{"model/part1.hcl": strings.Replace(bookingHCL, "core.Space", "Space", 1), "model/part2.hcl": oldCoreHCL}
+	for name, tc := range map[string]struct {
+		files map[string]string
+		args  []string
+		code  int
+		out   string
+	}{
+		"the directory is named and assigned": {parts, []string{"lint", "model", "--module", "shop=model"}, 1, "model/part2.hcl:1: error: holds 2 old spellings"},
+		"the same in another order":           {parts, []string{"lint", "--module", "shop=model", "model"}, 1, "model/part2.hcl:1: error: holds 2 old spellings"},
+		"no path is named":                    {parts, []string{"lint", "--module", "shop=model"}, 1, "model/part2.hcl:1: error: holds 2 old spellings"},
+		"a file of it cannot be named":        {parts, []string{"lint", ".", "model/part2.hcl", "--module", "shop=model"}, 2, ""},
+		"the directory named, a pinned module in the old spelling referred to": {
+			map[string]string{"parts/a.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "parts", "--module", "shop=parts", "--module", "core=pinned/core.modelspec.hcl"}, 0, "pinned/core.modelspec.hcl:1: warning: holds 2 old spellings"},
+		"the same, the assignments the other way round": {
+			map[string]string{"parts/a.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "--module", "core=pinned/core.modelspec.hcl", "--module", "shop=parts", "parts"}, 0, "pinned/core.modelspec.hcl:1: warning: holds 2 old spellings"},
+		"with no path both are checked": {
+			map[string]string{"parts/a.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "--module", "shop=parts", "--module", "core=pinned/core.modelspec.hcl"}, 1, "pinned/core.modelspec.hcl:1: error: holds 2 old spellings"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(tc.files)
+			if code := h.run(tc.args...); code != tc.code || !strings.Contains(h.out.String(), tc.out) {
+				t.Errorf("exit %d (want %d), stdout %q (want it to contain %q), stderr %q", code, tc.code, h.out, tc.out, h.errb)
+			}
+		})
+	}
+	// Both ways of naming it say the same about the model itself: it is not failed.
+	h := newHarness(map[string]string{"parts/a.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL})
+	if code := h.run("lint", "parts", "--module", "shop=parts", "--module", "core=pinned/core.modelspec.hcl"); code != 0 || !strings.HasSuffix(h.out.String(), "ok: 2 files checked, 0 errors, 1 warning\n") || strings.Contains(h.out.String(), "parts/a.hcl") {
+		t.Errorf("exit %d, stdout %q", code, h.out)
 	}
 }
 
@@ -571,14 +677,128 @@ func TestExportLintsFirst(t *testing.T) {
 		t.Fatalf("syntax error: exit %d, stderr %q", code, h.errb)
 	}
 	// Warnings are shown and do not stop the export.
-	h = newHarness(map[string]string{"a.modelspec.hcl": warnHCL})
-	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.errb.String(), "[deprecated-spelling]") || !strings.Contains(h.out.String(), `"modelspec": "1.0-draft"`) || !strings.Contains(h.out.String(), `"entities"`) {
+	h = newHarness(map[string]string{"a.modelspec.hcl": caseHCL})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.errb.String(), "[name-case]") || !strings.Contains(h.out.String(), `"modelspec": "1.0-draft-2"`) {
 		t.Fatalf("warning: exit %d, stderr %q, stdout %q", code, h.errb, h.out)
 	}
 	// Findings of other files do not stop it: the context module is broken here.
 	h = newHarness(map[string]string{"a.modelspec.hcl": goodHCL, "ctx/b.hcl": "record {"})
 	if code := h.run(append([]string{"export", "a.modelspec.hcl", "--module", "b=ctx/b.hcl"}, exportID...)...); code != 0 || strings.Contains(h.errb.String(), "ctx/b.hcl") {
 		t.Fatalf("context findings: exit %d, stderr %q", code, h.errb)
+	}
+}
+
+// export refuses a source in the old spelling, and says what to do first (decision 0022,
+// step 4): modelspec rewrite removes the spelling error, which is not a promise that the
+// export then succeeds. It does so for export --check as well, and writes nothing. A module
+// supplied with --module is not exported, and export says nothing of its old spelling.
+func TestExportRefusesTheOldSpelling(t *testing.T) {
+	t.Parallel()
+	hint := `a.modelspec.hcl has errors; fix them (modelspec lint shows the same findings) before exporting; the old spelling is one of them: modelspec rewrite --write "a.modelspec.hcl" removes that error`
+	finding := `a.modelspec.hcl:1: error: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "a.modelspec.hcl" rewrites the file [deprecated-spelling]`
+	for name, args := range map[string][]string{
+		"to standard output": append([]string{"export", "a.modelspec.hcl"}, exportID...),
+		"to a file":          append([]string{"export", "a.modelspec.hcl", "--out", "o.json"}, exportID...),
+		"a check":            {"export", "--check", "a.modelspec.hcl", "a.modelspec.json"},
+	} {
+		h := newHarness(map[string]string{"a.modelspec.hcl": oldHCL, "a.modelspec.json": oldDoc})
+		code := h.run(args...)
+		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), finding+"\n") || !strings.Contains(h.errb.String(), hint) {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q, written %v", name, code, h.out, h.errb, h.fsys.written)
+		}
+		if strings.Contains(h.errb.String(), "and then it can be exported") {
+			t.Errorf("%s: the hint promises that the export then succeeds: %q", name, h.errb)
+		}
+	}
+	// A file that holds an unknown type as well as the old spelling: the rewrite removes the
+	// spelling error and the other error remains, and the hint does not say otherwise.
+	h := newHarness(map[string]string{"a.modelspec.hcl": strings.Replace(oldHCL, `"int"`, `"nonesuch"`, 1)})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 1 || !strings.Contains(h.errb.String(), "removes that error") || strings.Contains(h.errb.String(), "can be exported") {
+		t.Errorf("an old spelling and an unknown type: exit %d, stderr %q", code, h.errb)
+	}
+	// Other errors in the same file are still named, with no word about the old spelling when there is none.
+	h = newHarness(map[string]string{"a.modelspec.hcl": badHCL})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 1 || strings.Contains(h.errb.String(), "old spelling is one of them") {
+		t.Errorf("an invalid model in the new spelling: exit %d, stderr %q", code, h.errb)
+	}
+	// Rewrite first, then export: the same file in the new spelling exports, in 1.0-draft-2.
+	h = newHarness(map[string]string{"a.modelspec.hcl": oldHCL})
+	if code := h.run("rewrite", "--write", "a.modelspec.hcl"); code != 0 || string(h.fsys.written["a.modelspec.hcl"]) != newHCL {
+		t.Fatalf("rewrite: exit %d, stderr %q, written %q", code, h.errb, h.fsys.written)
+	}
+	h = newHarness(map[string]string{"a.modelspec.hcl": string(h.fsys.written["a.modelspec.hcl"])})
+	if code := h.run(append([]string{"export", "a.modelspec.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"modelspec": "1.0-draft-2"`) || !strings.Contains(h.out.String(), `"records"`) || strings.Contains(h.out.String(), `"entities"`) || h.errb.Len() != 0 {
+		t.Errorf("export after rewrite: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// A model in the new spelling that refers to a module in the old one, supplied with --module:
+	// the export is written, and the module is not exported; export says nothing of its spelling.
+	h = newHarness(map[string]string{"booking.modelspec.hcl": bookingHCL, "shared/core.hcl": oldCoreHCL})
+	if code := h.run(append([]string{"export", "booking.modelspec.hcl", "--module", "core=shared/core.hcl"}, exportID...)...); code != 0 || !strings.Contains(h.out.String(), `"core.Space"`) || strings.Contains(h.out.String(), `"entities"`) || h.errb.Len() != 0 {
+		t.Errorf("export with an old module supplied: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	// A model with no record, whose committed copy is still written as 1.0-draft, exports as
+	// 1.0-draft-2 and the copy is not what it exports to: --check reports it (exit 1), and says
+	// what brings the copy up to date. lint refuses the copy too.
+	const components = "component \"C\" {\n  field \"f\" {\n    type = \"int\"\n  }\n}\n"
+	const componentsDoc = `{"modelspec": "1.0-draft", "module": {"id": "x/y", "name": "y", "version": "1"}, "components": {"C": {"fields": {"f": {"type": "int"}}}}}`
+	h = newHarness(map[string]string{"a.modelspec.hcl": components, "a.modelspec.json": componentsDoc})
+	if code := h.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 1 || h.out.Len() != 0 || !strings.Contains(h.errb.String(), `modelspec is "1.0-draft-2" in the first and "1.0-draft" in the second`) || !strings.Contains(h.errb.String(), "modelspec rewrite --write on the JSON file brings it up to date") {
+		t.Errorf("a check of a model with no record against a 1.0-draft copy: exit %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	h = newHarness(map[string]string{"a.modelspec.hcl": components, "a.modelspec.json": componentsDoc})
+	if code := h.run("rewrite", "--write", "a.modelspec.json"); code != 0 || !strings.Contains(string(h.fsys.written["a.modelspec.json"]), `"1.0-draft-2"`) {
+		t.Fatalf("rewrite of the copy: exit %d, stderr %q, written %q", code, h.errb, h.fsys.written)
+	}
+	h2 := newHarness(map[string]string{"a.modelspec.hcl": components, "a.modelspec.json": string(h.fsys.written["a.modelspec.json"])})
+	if code := h2.run("export", "--check", "a.modelspec.hcl", "a.modelspec.json"); code != 0 {
+		t.Errorf("a check after the rewrite of the copy: exit %d, stdout %q, stderr %q", code, h2.out, h2.errb)
+	}
+	h = newHarness(map[string]string{"a.modelspec.hcl": components, "a.modelspec.json": componentsDoc})
+	if code := h.run("lint", "a.modelspec.hcl", "a.modelspec.json"); code != 1 || !strings.Contains(h.out.String(), "a.modelspec.json:1: error: is in format 1.0-draft and holds 1 old spelling") {
+		t.Errorf("lint of the pair: exit %d, stdout %q", code, h.out)
+	}
+}
+
+// export decides the refusal of a source in the old spelling from the loaded model, not
+// from the findings, which are capped: another module of the run with more findings than
+// the cap, that sort before the exported file, must not lose the refusal.
+func TestExportRefusesTheOldSpellingBehindManyFindings(t *testing.T) {
+	t.Parallel()
+	var many strings.Builder
+	for i := 0; i < 1200; i++ {
+		fmt.Fprintf(&many, "record \"R%d\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"nonesuch\"\n  }\n}\n", i)
+	}
+	files := func() map[string]string {
+		// A second entity whose name differs from the first by letter case only: the exported file has
+		// a finding other than the spelling (a warning), which must not be printed with it.
+		return map[string]string{"z.modelspec.hcl": oldHCL + strings.Replace(oldHCL, `"A"`, `"a"`, 1), "z.modelspec.json": oldDoc, "a/a.hcl": many.String()}
+	}
+	// The cap hides the finding of the exported file: lint lists the first findings only.
+	h := newHarness(files())
+	if code := h.run("lint", "z.modelspec.hcl", "--module", "a=a/a.hcl"); code != 1 || strings.Contains(h.out.String(), "z.modelspec.hcl:") || strings.Contains(h.out.String(), "z.modelspec.json:") {
+		t.Fatalf("the finding of the exported file is not behind the cap: exit %d, stdout %.300q", code, h.out)
+	}
+	for name, args := range map[string][]string{
+		"to standard output": append([]string{"export", "z.modelspec.hcl", "--module", "a=a/a.hcl"}, exportID...),
+		"to a file":          append([]string{"export", "z.modelspec.hcl", "--module", "a=a/a.hcl", "--out", "o.json"}, exportID...),
+		"a check":            {"export", "--check", "z.modelspec.hcl", "z.modelspec.json", "--module", "a=a/a.hcl"},
+	} {
+		h := newHarness(files())
+		code := h.run(args...)
+		// The finding the cap dropped from the list is printed, so the refusal does not send the
+		// reader to a list that does not hold it.
+		lines := 0
+		for _, l := range strings.Split(h.errb.String(), "\n") {
+			if strings.HasPrefix(l, "z.modelspec.hcl:") {
+				lines++
+			}
+		}
+		if lines != 1 {
+			t.Errorf("%s: %d finding lines for the exported file, want exactly the spelling finding once: %.400q", name, lines, h.errb)
+		}
+		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), `z.modelspec.hcl:1: error: holds 4 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "z.modelspec.hcl" rewrites the file [deprecated-spelling]`+"\n") || !strings.Contains(h.errb.String(), `the old spelling is one of them: modelspec rewrite --write "z.modelspec.hcl" removes that error`) {
+			t.Errorf("%s: exit %d, stdout %.200q, stderr %.300q, written %v", name, code, h.out, h.errb, h.fsys.written)
+		}
 	}
 }
 
@@ -1273,5 +1493,129 @@ func TestExportOutRefusesAnInput(t *testing.T) {
 		if code := h.run(append([]string{"export", "m/booking.modelspec.hcl", "--module", "core=shared", "--out", out}, exportID...)...); code != 0 || len(h.fsys.written[out]) == 0 {
 			t.Errorf("--out %s: exit %d, written %v, stderr %q", out, code, h.fsys.written, h.errb)
 		}
+	}
+}
+
+// The help says which modules are checked, and how to check a model kept in plain .hcl
+// files against a pinned module in the old spelling (the form with no path cannot do it),
+// and what export does with the old spelling.
+func TestHelpStatesWhichModulesAreChecked(t *testing.T) {
+	t.Parallel()
+	for command, want := range map[string][]string{
+		"lint": {
+			"unless --module is given: then it checks what --module supplies and\nnothing else",
+			"Which modules are checked.",
+			"lies under a path named there (whether or not\n--module also supplies it)",
+			"does not depend on the order\nof the file names or of the arguments",
+			"A module is known\nby its name: two sources that claim one module name are one module here",
+			"a symbolic link to a named directory, and another letter case of its name where the\nfile system ignores case, lie under it",
+			"A\npinned module kept under a path named, such as lint . --module\ncore=.pinned/core.modelspec.hcl, lies under it and is checked; to keep the exception,\nkeep the pinned module outside the paths named, or name the model's directory rather\nthan \".\"",
+			"An HCL file and the JSON copy beside it (X.modelspec.hcl and X.modelspec.json) are checked together, whatever module --module assigns either of them to: when the module of one is being checked, the module of the other is being checked as well",
+			"That it does not depend on the order is a claim about which modules are being checked, and so about the severity of an old spelling and the exit status it gives; for a file given under two names, the name it is printed under and the stale-twin warning for a copy beside its second name follow the name that was met first",
+			"Every name a file is supplied under counts: for where it lies (it lies under a named path when any of its names does), for the pair above (by any name of either file), and for the modules it belongs to (the module of the name it is read under, each module another name of it was assigned to, and, for a name that --module did not assign, the layout module that name is a file of, are checked together)",
+			"With no path named that exception\ncannot apply: everything --module supplies is checked.",
+			"name the model's\ndirectory as a path as well:\n\n  modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl\n\nshop is then checked (it lies under parts) and core is only referred to.",
+		},
+		"export": {
+			"refused, as lint refuses it",
+			"whatever else the run found",
+			"the format identifier included",
+			"is read so that references into\nits module resolve and is not exported; export reports nothing about its spelling",
+		},
+	} {
+		h := newHarness(nil)
+		if code := h.run(command, "--help"); code != 0 {
+			t.Fatalf("%s --help: exit %d", command, code)
+		}
+		// Where a line breaks is not what is said.
+		help := strings.Join(strings.Fields(h.out.String()), " ")
+		for _, w := range want {
+			if !strings.Contains(help, strings.Join(strings.Fields(w), " ")) {
+				t.Errorf("%s --help does not say %q", command, w)
+			}
+		}
+	}
+}
+
+// Decisions of the implementing session where the rule for a module that is being checked
+// and the exception meet: the copy beside a named file is checked whatever module --module
+// gives it; two sources that claim one name are one module; a pinned module kept under a
+// named path is checked; a directory beside the named one whose name begins with it is not
+// under it.
+func TestLintWhereTheTwoRulesMeet(t *testing.T) {
+	t.Parallel()
+	oldCopy := `{"modelspec": "1.0-draft", "module": {"id": "x/y", "name": "x", "version": "1"}, "entities": {"A": {"key": ["id"], "properties": {"id": {"type": "int"}}}}}`
+	for name, tc := range map[string]struct {
+		files map[string]string
+		args  []string
+		code  int
+		out   string
+	}{
+		"the copy of a named HCL file is checked whatever module it is given": {
+			map[string]string{"x.modelspec.hcl": goodHCL, "x.modelspec.json": oldCopy},
+			[]string{"lint", "x.modelspec.hcl", "--module", "other=x.modelspec.json"}, 1, "x.modelspec.json:1: error: is in format 1.0-draft"},
+		"the same, the copy given the module of its HCL file": {
+			map[string]string{"x.modelspec.hcl": goodHCL, "x.modelspec.json": oldCopy},
+			[]string{"lint", "x.modelspec.hcl", "--module", "x=x.modelspec.json"}, 1, "x.modelspec.json:1: error: is in format 1.0-draft"},
+		"two sources of one module name are one module": {
+			map[string]string{"a/core.modelspec.hcl": coreHCL, "b/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "a/core.modelspec.hcl", "--module", "core=b/core.modelspec.hcl"}, 1, "b/core.modelspec.hcl:1: error: holds 2 old spellings"},
+		"a pinned module kept under the named path is checked": {
+			map[string]string{"booking.modelspec.hcl": bookingHCL, ".pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", ".", "--module", "core=.pinned/core.modelspec.hcl"}, 1, ".pinned/core.modelspec.hcl:1: error: holds 2 old spellings"},
+		"a directory beside the named one whose name begins with it is not under it": {
+			map[string]string{"model/booking.modelspec.hcl": bookingHCL, "model-pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "model", "--module", "core=model-pinned/core.modelspec.hcl"}, 0, "model-pinned/core.modelspec.hcl:1: warning: holds 2 old spellings"},
+		"the exception is kept by naming the model's directory rather than the root": {
+			map[string]string{"model/booking.modelspec.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "model", "--module", "core=pinned/core.modelspec.hcl"}, 0, "pinned/core.modelspec.hcl:1: warning: holds 2 old spellings"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(tc.files)
+			if code := h.run(tc.args...); code != tc.code || !strings.Contains(h.out.String(), tc.out) {
+				t.Errorf("exit %d (want %d), stdout %q (want it to contain %q), stderr %q", code, tc.code, h.out, tc.out, h.errb)
+			}
+		})
+	}
+}
+
+// An HCL file and the JSON copy beside it are checked together whatever module --module gives
+// either of them (decision D1, in both directions): the copy is named and assigned and the HCL
+// file beside it is in the old spelling, alone and with the HCL file assigned to a second module,
+// in every order of the arguments.
+func TestLintAPairIsCheckedTogether(t *testing.T) {
+	t.Parallel()
+	oldHCLFile := strings.NewReplacer("record", "entity", "field", "property").Replace(goodHCL)
+	files := map[string]string{"x.modelspec.hcl": oldHCLFile, "x.modelspec.json": `{"modelspec": "1.0-draft-2", "module": {"id": "x/y", "name": "x", "version": "1"}, "records": {"A": {"key": ["id"], "fields": {"id": {"type": "int"}}}}}`}
+	for name, units := range map[string][][]string{
+		"the copy named and assigned":               {{"x.modelspec.json"}, {"--module", "a=x.modelspec.json"}},
+		"the copy named, both files assigned apart": {{"x.modelspec.json"}, {"--module", "a=x.modelspec.json"}, {"--module", "b=x.modelspec.hcl"}},
+	} {
+		var walk func(int, []int)
+		walk = func(k int, used []int) {
+			if k == len(units) {
+				var args []string
+				args = append(args, "lint")
+				for _, u := range used {
+					args = append(args, units[u]...)
+				}
+				h := newHarness(files)
+				if code := h.run(args...); code != 1 || !strings.Contains(h.out.String(), "x.modelspec.hcl:1: error: holds 2 old spellings") || strings.Contains(h.out.String(), ": warning:") {
+					t.Errorf("%s: %v: exit %d, stdout %q", name, args, code, h.out)
+				}
+				return
+			}
+			for i := range units {
+				taken := false
+				for _, u := range used {
+					taken = taken || u == i
+				}
+				if !taken {
+					walk(k+1, append(append([]int(nil), used...), i))
+				}
+			}
+		}
+		walk(0, nil)
 	}
 }

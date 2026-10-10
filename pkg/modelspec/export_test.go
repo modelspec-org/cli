@@ -285,8 +285,10 @@ func TestExportDriftNamesTheVocabulary(t *testing.T) {
 }
 
 // A model that is the same text in both vocabularies (components and enums only, or
-// nothing) exports as 1.0-draft-2, and is compared with a copy written as 1.0-draft
-// in that vocabulary: the copy was right before the rename, and is not drift.
+// nothing) exports as 1.0-draft-2, and a copy of it written as 1.0-draft is not what
+// it exports to: the comparison includes the format identifier (export --check), also
+// for a model with no record. lint refuses such a copy for the old format, and says
+// that it is stale, with the one instruction that fixes it.
 func TestExportOfAModelWithNoVocabularyMarker(t *testing.T) {
 	t.Parallel()
 	const src = "component \"Audit\" {\n  field \"at\" {\n    type = \"datetime\"\n  }\n}\nenum \"S\" {\n  values = [\"a\", \"b\"]\n}\n"
@@ -310,23 +312,28 @@ func TestExportOfAModelWithNoVocabularyMarker(t *testing.T) {
 		t.Fatalf("a plain export is not 1.0-draft-2: %v\n%s", err, plain.Encode())
 	}
 	oldCopy := strings.Replace(string(plain.Encode()), "1.0-draft-2", "1.0-draft", 1)
-	if d := m.ExportDrift([]byte(oldCopy), ModuleIdentity{}); d != "" {
-		t.Errorf("a copy written as 1.0-draft is drift: %q", d)
+	const note = "the committed JSON is in the earlier format, 1.0-draft, and the model exports as 1.0-draft-2 (a model with no record is the same text in both); modelspec rewrite --write on the JSON file brings it up to date"
+	if d := m.ExportDrift([]byte(oldCopy), ModuleIdentity{}); !strings.Contains(d, `modelspec is "1.0-draft-2" in the first and "1.0-draft" in the second`) || !strings.HasSuffix(d, note) {
+		t.Errorf("a copy written as 1.0-draft is not what the model exports to: %q", d)
 	}
 	if d := m.ExportDrift(plain.Encode(), ModuleIdentity{}); d != "" {
 		t.Errorf("a copy written as 1.0-draft-2 is drift: %q", d)
 	}
-	// A real difference in the old copy is still reported, with no word about vocabularies.
-	stale := strings.Replace(oldCopy, `"a"`, `"z"`, 1)
-	if d := m.ExportDrift([]byte(stale), ModuleIdentity{}); !strings.Contains(d, "values[0]") || strings.Contains(d, "vocabular") {
+	// A model with nothing at all, too.
+	empty := mustHCL(t, "")
+	node, err := empty.JSON(testID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := empty.ExportDrift([]byte(strings.Replace(string(node.Encode()), "1.0-draft-2", "1.0-draft", 1)), ModuleIdentity{}); d == "" {
+		t.Error("an empty model: a copy written as 1.0-draft is not drift")
+	}
+	// A real difference in a copy that is written as 1.0-draft-2 is reported with no word about the format.
+	stale := strings.Replace(string(plain.Encode()), `"a"`, `"z"`, 1)
+	if d := m.ExportDrift([]byte(stale), ModuleIdentity{}); !strings.Contains(d, "values[0]") || strings.Contains(d, "1.0-draft") {
 		t.Errorf("drift = %q", d)
 	}
-	// The same through lint: the copy is a stale twin of nothing, and says only that it is old.
+	// The same through lint: the copy is a stale twin, and an error for being in the old format.
 	got := run(map[string]string{"core" + hclExt: src, "core.modelspec.json": strings.Replace(oldCopy, `"id": "x/y"`, `"id": "x/core"`, 1)})
-	for _, g := range got {
-		if strings.Contains(g, "stale") {
-			t.Errorf("a stale twin: %s", g)
-		}
-	}
-	expect(t, got, "core.modelspec.json:2: warning: is in format 1.0-draft and holds 1 old spelling")
+	expect(t, got, `core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft-2" in the first and "1.0-draft" in the second); `+note, "core.modelspec.json:2: error: is in format 1.0-draft and holds 1 old spelling")
 }

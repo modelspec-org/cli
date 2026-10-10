@@ -725,8 +725,11 @@ func TestAHeredocInANamePositionSaysToUseAQuotedString(t *testing.T) {
 	}
 }
 
-// A file in the old spelling gets one warning, at the line of the first old
-// spelling, with how many there are; it never changes whether the model is valid.
+// A file in the old spelling gets one finding, at the line of the first old
+// spelling, with how many there are. In a model that is being checked it is an
+// error under both profiles (decision 0022, step 4); in a file of a module that is only
+// referred to it is a warning. The severity is decided
+// in one place, OldSpellingSeverity.
 func TestDeprecatedSpelling(t *testing.T) {
 	t.Parallel()
 	const old = `# The first old spelling is on line 9.
@@ -747,29 +750,49 @@ entity "Old" {
   }
 }
 `
-	const warning = `: warning: holds 3 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); modelspec rewrite --write "a.modelspec.hcl" rewrites the file [deprecated-spelling]`
+	const checked = `error: holds 3 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "a.modelspec.hcl" rewrites the file [deprecated-spelling]`
 	// Under both profiles.
-	expect(t, run(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9"+warning)
-	expect(t, runPublish(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9"+warning)
-	expect(t, run(map[string]string{"a" + hclExt: "record \"A\" {\n  key = [\"p\"]\n  property \"p\" {\n    type = \"int\"\n  }\n}\n"}), `a.modelspec.hcl:3: warning: holds 1 old spelling: entity, property and entity =`)
+	expect(t, run(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9: "+checked)
+	expect(t, runPublish(map[string]string{"a" + hclExt: old}), "a.modelspec.hcl:9: "+checked)
+	expect(t, run(map[string]string{"a" + hclExt: "record \"A\" {\n  key = [\"p\"]\n  property \"p\" {\n    type = \"int\"\n  }\n}\n"}), `a.modelspec.hcl:3: error: holds 1 old spelling: entity, property and entity =`)
 	// In JSON the finding is at the line of the identifier, which need not be the first key.
 	const key = `"entities": {"A": {"key": [], "properties": {}}}`
 	src := "{\n\"module\": {\"id\": \"x\", \"version\": \"1\"},\n" + key + ",\n\"modelspec\": \"1.0-draft\"\n}"
-	jsonWarning := func(n string) string {
-		return `: warning: is in format 1.0-draft and holds ` + n + `: that identifier, and the keys entities, properties and entity, are the old spellings of 1.0-draft-2, records, fields and record (decision 0018, decision 0020); modelspec rewrite --write "a.modelspec.json" rewrites the file [deprecated-spelling]`
+	jsonFinding := func(n string) string {
+		return `: error: is in format 1.0-draft and holds ` + n + `: that identifier, and the keys entities, properties and entity, are the old spellings of 1.0-draft-2, records, fields and record (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "a.modelspec.json" rewrites the file [deprecated-spelling]`
 	}
-	expect(t, run(map[string]string{"a" + jsonExt: src}), "a.modelspec.json:4"+jsonWarning("3 old spellings"), "has an empty key")
-	expect(t, run(map[string]string{"a" + jsonExt: oldDoc()}), "a.modelspec.json:2"+jsonWarning("1 old spelling"))
+	expect(t, run(map[string]string{"a" + jsonExt: src}), "a.modelspec.json:4"+jsonFinding("3 old spellings"), "has an empty key")
+	expect(t, run(map[string]string{"a" + jsonExt: oldDoc()}), "a.modelspec.json:2"+jsonFinding("1 old spelling"))
 	// Nothing to say about the new spelling, and a file that was not read has no spellings.
 	expect(t, run(map[string]string{"a" + hclExt: okRecord, "b" + jsonExt: doc(jRecords)}))
 	expect(t, run(map[string]string{"a" + hclExt: "entity {"}), "a.modelspec.hcl:1: error")
-	// It is a warning: the model is as valid as without it, and the severity is decided in one place.
+	// The model is invalid because of it, and Check, which Lint calls, says the same of a model
+	// read on its own.
 	res, err := Lint(newMemFS(map[string]string{"a" + hclExt: old}), []string{"."}, LintOptions{})
-	if err != nil || len(res.Findings) != 1 || res.Findings[0].Severity != OldSpellingSeverity || HasErrors(res.Findings) {
+	if err != nil || len(res.Findings) != 1 || res.Findings[0].Severity != SeverityError || !HasErrors(res.Findings) {
 		t.Fatalf("findings = %v, %v", res.Findings, err)
 	}
-	if OldSpellingSeverity != SeverityWarning {
-		t.Errorf("OldSpellingSeverity = %s; the old spelling is a warning until the owner's later step", OldSpellingSeverity)
+	m, parse := ParseHCL("a"+hclExt, []byte(old))
+	if len(parse) != 0 {
+		t.Fatal(parse)
+	}
+	if got := Check([]*Model{m}, Options{}); len(got) != 1 || got[0].Severity != SeverityError {
+		t.Errorf("a model checked on its own: %v", got)
+	}
+	// The one exception, a warning: a file of a module that is only referred to. Its last
+	// clause says so.
+	m.ReferenceOnly = true
+	got := Check([]*Model{m}, Options{})
+	// The warning cites decision 0022 for the error only (the decision states neither the
+	// scope nor the exception), points the exception at the specification, and says that
+	// the relaxation is of this rule alone.
+	const why = `this module is only referred to: it was supplied with --module so that references into it resolve, and no path named holds a file of it, so the old spelling is a warning here and every other rule is applied to it in full (the specification, "Where The Two Rules Meet"); modelspec rewrite --write "a.modelspec.hcl" rewrites the file`
+	if len(got) != 1 || got[0].Severity != SeverityWarning || HasErrors(got) || !strings.HasSuffix(got[0].Message, why) || strings.Contains(got[0].Message, "decision 0022") {
+		t.Errorf("a model that is only referred to: %v", got)
+	}
+	// The severity is decided in one place.
+	if OldSpellingSeverity(false) != SeverityError || OldSpellingSeverity(true) != SeverityWarning {
+		t.Errorf("OldSpellingSeverity = %s, %s; want error for a model being checked and warning for one only referred to", OldSpellingSeverity(false), OldSpellingSeverity(true))
 	}
 }
 
@@ -784,7 +807,7 @@ func TestStaleTwinInAnotherVocabulary(t *testing.T) {
 	expect(t, run(map[string]string{"core" + hclExt: recordWith("Space"), "core.modelspec.json": oldJSON}),
 		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft-2" in the first and "1.0-draft" in the second)`+note, "[deprecated-spelling]")
 	expect(t, run(map[string]string{"core" + hclExt: oldHCL, "core.modelspec.json": newJSON}),
-		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft" in the first and "1.0-draft-2" in the second)`+note, "core.modelspec.hcl:1: warning: holds 2 old spellings")
+		`core.modelspec.json:1: warning: stale twin: core.modelspec.json is not what core.modelspec.hcl exports to (modelspec is "1.0-draft" in the first and "1.0-draft-2" in the second)`+note, "core.modelspec.hcl:1: error: holds 2 old spellings")
 	// The same vocabulary, or an identifier it does not know: no note.
 	for name, files := range map[string]map[string]string{
 		"old":     {"core" + hclExt: oldHCL, "core.modelspec.json": strings.Replace(oldJSON, `"type": "int"`, `"type": "string"`, 1)},
@@ -801,6 +824,18 @@ func TestStaleTwinInAnotherVocabulary(t *testing.T) {
 		}
 		if name != "unknown" && !found {
 			t.Errorf("%s: no stale twin in %v", name, got)
+		}
+		// A pair in the old spelling cannot be fixed by exporting again: export refuses its
+		// source. The instruction is to rewrite both files, then export; a pair in the new
+		// spelling is told to run export.
+		for _, g := range got {
+			if !strings.Contains(g, "stale twin") {
+				continue
+			}
+			old := strings.Contains(g, "rewrite both files with modelspec rewrite --write, then run modelspec export (export refuses a source in the old spelling)")
+			if old != (name == "old") || (name != "old" && !strings.Contains(g, "; run modelspec export [stale-twin]") && name != "unknown") {
+				t.Errorf("%s: the instruction is wrong: %s", name, g)
+			}
 		}
 	}
 }
