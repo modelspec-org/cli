@@ -71,7 +71,7 @@ committed file with what export writes, the format identifier included, so a cop
 written as 1.0-draft is not what the source exports to, also for a model with no
 record, which is the same text in both formats: modelspec rewrite --write brings
 the copy up to date. A file supplied with --module is read so that references into
-its module resolve and is not exported; export reports nothing about it.`,
+its module resolve and is not exported; export reports nothing about its spelling.`,
 		Example: `  modelspec export model/chinook.modelspec.hcl --out model/chinook.modelspec.json \
     --module-id github.com/acme/chinook/model/chinook --module-name chinook --module-version 0.1.0
   modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json`,
@@ -250,6 +250,19 @@ func lintForExport(env *Env, file string, assign []modelspec.Assignment) (*model
 	if oldSpelling || modelspec.HasErrors(mine) {
 		hint := ""
 		if oldSpelling {
+			// The finding may be one of those the cap dropped: say it, so that the refusal
+			// is not a line that sends the reader to a list that does not hold it.
+			listed := false
+			for _, f := range mine {
+				listed = listed || f.Rule == modelspec.RuleDeprecated
+			}
+			if !listed {
+				for _, f := range modelspec.Check([]*modelspec.Model{model}, modelspec.Options{}) {
+					if f.Rule == modelspec.RuleDeprecated {
+						fmt.Fprintln(env.Stderr, f)
+					}
+				}
+			}
 			hint = fmt.Sprintf("; the old spelling is one of them: modelspec rewrite --write %q removes that error", file)
 		}
 		return nil, nil, &exitError{code: ExitFindings, err: fmt.Errorf("%s has errors; fix them (modelspec lint shows the same findings) before exporting%s", file, hint)}

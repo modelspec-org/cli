@@ -783,7 +783,9 @@ func TestExportRefusesTheOldSpellingBehindManyFindings(t *testing.T) {
 	} {
 		h := newHarness(files())
 		code := h.run(args...)
-		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), `the old spelling is one of them: modelspec rewrite --write "z.modelspec.hcl" removes that error`) {
+		// The finding the cap dropped from the list is printed, so the refusal does not send the
+		// reader to a list that does not hold it.
+		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), `z.modelspec.hcl:1: error: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "z.modelspec.hcl" rewrites the file [deprecated-spelling]`+"\n") || !strings.Contains(h.errb.String(), `the old spelling is one of them: modelspec rewrite --write "z.modelspec.hcl" removes that error`) {
 			t.Errorf("%s: exit %d, stdout %.200q, stderr %.300q, written %v", name, code, h.out, h.errb, h.fsys.written)
 		}
 	}
@@ -1494,6 +1496,10 @@ func TestHelpStatesWhichModulesAreChecked(t *testing.T) {
 			"Which modules are checked.",
 			"lies under a path named there (whether or not\n--module also supplies it)",
 			"does not depend on the order\nof the file names or of the arguments",
+			"A module is known\nby its name: two sources that claim one module name are one module here",
+			"a symbolic link to a named directory, and another letter case of its name where the\nfile system ignores case, lie under it",
+			"A\npinned module kept under a path named, such as lint . --module\ncore=.pinned/core.modelspec.hcl, lies under it and is checked; to keep the exception,\nkeep the pinned module outside the paths named, or name the model's directory rather\nthan \".\"",
+			"the JSON copy beside an HCL file (whatever module\n--module gives the copy)",
 			"With no path named that exception\ncannot apply: everything --module supplies is checked.",
 			"name the model's\ndirectory as a path as well:\n\n  modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl\n\nshop is then checked (it lies under parts) and core is only referred to.",
 		},
@@ -1501,17 +1507,62 @@ func TestHelpStatesWhichModulesAreChecked(t *testing.T) {
 			"refused, as lint refuses it",
 			"whatever else the run found",
 			"the format identifier included",
-			"is read so that references into\nits module resolve and is not exported; export reports nothing about it",
+			"is read so that references into\nits module resolve and is not exported; export reports nothing about its spelling",
 		},
 	} {
 		h := newHarness(nil)
 		if code := h.run(command, "--help"); code != 0 {
 			t.Fatalf("%s --help: exit %d", command, code)
 		}
+		// Where a line breaks is not what is said.
+		help := strings.Join(strings.Fields(h.out.String()), " ")
 		for _, w := range want {
-			if !strings.Contains(h.out.String(), w) {
+			if !strings.Contains(help, strings.Join(strings.Fields(w), " ")) {
 				t.Errorf("%s --help does not say %q", command, w)
 			}
 		}
+	}
+}
+
+// Decisions of the implementing session where the rule for a module that is being checked
+// and the exception meet: the copy beside a named file is checked whatever module --module
+// gives it; two sources that claim one name are one module; a pinned module kept under a
+// named path is checked; a directory beside the named one whose name begins with it is not
+// under it.
+func TestLintWhereTheTwoRulesMeet(t *testing.T) {
+	t.Parallel()
+	oldCopy := `{"modelspec": "1.0-draft", "module": {"id": "x/y", "name": "x", "version": "1"}, "entities": {"A": {"key": ["id"], "properties": {"id": {"type": "int"}}}}}`
+	for name, tc := range map[string]struct {
+		files map[string]string
+		args  []string
+		code  int
+		out   string
+	}{
+		"the copy of a named HCL file is checked whatever module it is given": {
+			map[string]string{"x.modelspec.hcl": goodHCL, "x.modelspec.json": oldCopy},
+			[]string{"lint", "x.modelspec.hcl", "--module", "other=x.modelspec.json"}, 1, "x.modelspec.json:1: error: is in format 1.0-draft"},
+		"the same, the copy given the module of its HCL file": {
+			map[string]string{"x.modelspec.hcl": goodHCL, "x.modelspec.json": oldCopy},
+			[]string{"lint", "x.modelspec.hcl", "--module", "x=x.modelspec.json"}, 1, "x.modelspec.json:1: error: is in format 1.0-draft"},
+		"two sources of one module name are one module": {
+			map[string]string{"a/core.modelspec.hcl": coreHCL, "b/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "a/core.modelspec.hcl", "--module", "core=b/core.modelspec.hcl"}, 1, "b/core.modelspec.hcl:1: error: holds 2 old spellings"},
+		"a pinned module kept under the named path is checked": {
+			map[string]string{"booking.modelspec.hcl": bookingHCL, ".pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", ".", "--module", "core=.pinned/core.modelspec.hcl"}, 1, ".pinned/core.modelspec.hcl:1: error: holds 2 old spellings"},
+		"a directory beside the named one whose name begins with it is not under it": {
+			map[string]string{"model/booking.modelspec.hcl": bookingHCL, "model-pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "model", "--module", "core=model-pinned/core.modelspec.hcl"}, 0, "model-pinned/core.modelspec.hcl:1: warning: holds 2 old spellings"},
+		"the exception is kept by naming the model's directory rather than the root": {
+			map[string]string{"model/booking.modelspec.hcl": bookingHCL, "pinned/core.modelspec.hcl": oldCoreHCL},
+			[]string{"lint", "model", "--module", "core=pinned/core.modelspec.hcl"}, 0, "pinned/core.modelspec.hcl:1: warning: holds 2 old spellings"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(tc.files)
+			if code := h.run(tc.args...); code != tc.code || !strings.Contains(h.out.String(), tc.out) {
+				t.Errorf("exit %d (want %d), stdout %q (want it to contain %q), stderr %q", code, tc.code, h.out, tc.out, h.errb)
+			}
+		})
 	}
 }

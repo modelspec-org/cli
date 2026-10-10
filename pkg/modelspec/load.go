@@ -709,11 +709,30 @@ func Load(fsys FS, files []Source, assign []Assignment) ([]*Model, []Finding, er
 	return models, findings, nil
 }
 
-// lies reports whether the file abs is the path named or lies under it (a file is never
-// the parent directory of a path, so "..", the parent itself, needs no case of its own).
+// lies reports whether the file abs is the path named or lies under it, by the text of
+// the two absolute paths.
 func lies(abs, named string) bool {
 	rel, err := filepath.Rel(named, abs)
 	return err == nil && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// liesBySameFile reports whether the file abs, or one of the directories above it, is the
+// same file as the path named (infos are theirs, from Stat), however each was reached: a
+// symbolic link to the named directory, another letter case of its name on a file system
+// that ignores case. It is lies on the files themselves, as discovery.add compares files.
+func liesBySameFile(fsys FS, abs string, namedInfos []fs.FileInfo) bool {
+	for p := abs; ; p = filepath.Dir(p) {
+		if info, err := fsys.Stat(p); err == nil {
+			for _, n := range namedInfos {
+				if fsys.SameFile(info, n) {
+					return true
+				}
+			}
+		}
+		if parent := filepath.Dir(p); parent == p || p == "." {
+			return false
+		}
+	}
 }
 
 // markReferenceOnly sets Model.ReferenceOnly, for each module as a whole, once every
@@ -722,24 +741,60 @@ func lies(abs, named string) bool {
 // named on the command line or lies under a path named there, whether or not --module
 // also supplies it; the other files of the module are then checked with it, the JSON
 // copy and the other .hcl files of the layout directory included, and so is any file
-// that --module supplies for it. A module is only referred to when paths are named, and
-// none of them is, or holds, a file of the module: every one of its files came from
-// --module (or from a file that did, as the rest of its module). When no path brings in
-// a file, none is named: a path that holds no model names nothing, and what --module
-// supplies is what is checked. The module is the unit, so the answer does not depend
-// on the order of file names or of arguments, nor on the route a file was found by.
-func markReferenceOnly(models []*Model, files []Source, named []string) {
+// that --module supplies for it. "Lies under" is decided on the files themselves: by the
+// text of the paths, and, for a file that is under no named path by its text, by Stat
+// and SameFile on the file and the directories above it, so that a second name for the
+// same place (a symbolic link, another letter case) does not defeat it. The module is
+// known by its name: two sources that claim one name are one module here. The copy beside
+// a file of a module that is being checked (X.modelspec.json beside X.modelspec.hcl) is a
+// checked file whatever module --module gives it, and so is its module. A module is only
+// referred to when paths are named, and none of them is, or holds, a file of the module
+// or of its copy: every one of its files came from --module (or from a file that did, as
+// the rest of its module). When no path brings in a file, none is named: a path that holds
+// no model names nothing, and what --module supplies is what is checked. The module is the
+// unit, so the answer does not depend on the order of file names or of arguments, nor on
+// the route a file was found by.
+func markReferenceOnly(fsys FS, models []*Model, files []Source, named []string) {
+	var namedInfos []fs.FileInfo
+	for _, n := range named {
+		if info, err := fsys.Stat(n); err == nil {
+			namedInfos = append(namedInfos, info)
+		}
+	}
 	checked := map[string]bool{} // module name
 	for i, f := range files {
+		under := false
 		for _, n := range named {
 			if lies(f.Abs, n) {
-				checked[models[i].Name] = true
+				under = true
 				break
 			}
+		}
+		if under || liesBySameFile(fsys, f.Abs, namedInfos) {
+			checked[models[i].Name] = true
 		}
 	}
 	if len(checked) == 0 {
 		return
+	}
+	// The copy beside a file of a checked module (X.modelspec.json beside X.modelspec.hcl) is
+	// checked, and so is its module, whatever module --module gives it. The JSON file takes its
+	// module from the HCL file beside it unless it is assigned to another, so only that case
+	// needs this.
+	index := map[string]int{}
+	for i, f := range files {
+		index[f.Abs] = i
+	}
+	copies := map[string]bool{}
+	for i, f := range files {
+		if checked[models[i].Name] && strings.HasSuffix(f.Abs, HCLSuffix) {
+			if j, ok := index[strings.TrimSuffix(f.Abs, HCLSuffix)+JSONSuffix]; ok {
+				copies[models[j].Name] = true
+			}
+		}
+	}
+	for name := range copies {
+		checked[name] = true
 	}
 	for _, m := range models {
 		m.ReferenceOnly = !checked[m.Name]
@@ -856,7 +911,7 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	markReferenceOnly(models, sources, d.named)
+	markReferenceOnly(fsys, models, sources, d.named)
 	if len(d.skipped) > 0 {
 		explicit, _ := explicitModules(fsys, opts.Modules) // Load has just read them without error
 		markIncomplete(models, sources, d.skipped, explicit)

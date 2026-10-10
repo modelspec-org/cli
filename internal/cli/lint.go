@@ -71,14 +71,22 @@ the files linted together.
 Which modules are checked. A module is being checked when one of its files is a
 file named on the command line or lies under a path named there (whether or not
 --module also supplies it), and every file of it is then checked: the other .hcl
-files of its layout directory, the JSON copy beside an HCL file, and any file
---module supplies for it. With no path named, or with paths that hold no model, every
-module that --module supplies is being checked. A module is only referred to when
-paths are named and none of its files is named or lies under one of them: its files
-came only from --module, so that references into it resolve. That is decided for
-the module as a whole, once every file is loaded, so it does not depend on the order
-of the file names or of the arguments. It changes one rule only, the old spelling
-(below); every other rule is applied to a module that is only referred to in full.
+files of its layout directory, the JSON copy beside an HCL file (whatever module
+--module gives the copy), and any file --module supplies for it. A module is known
+by its name: two sources that claim one module name are one module here, so naming
+one of them has the other checked. A path is the same place however it is reached:
+a symbolic link to a named directory, and another letter case of its name where the
+file system ignores case, lie under it. With no path named, or with paths that hold
+no model, every module that --module supplies is being checked. A module is only
+referred to when paths are named and none of its files is named or lies under one of
+them: its files came only from --module, so that references into it resolve. A
+pinned module kept under a path named, such as lint . --module
+core=.pinned/core.modelspec.hcl, lies under it and is checked; to keep the exception,
+keep the pinned module outside the paths named, or name the model's directory rather
+than ".". That is decided for the module as a whole, once every file is loaded, so it
+does not depend on the order of the file names or of the arguments. It changes one rule
+only, the old spelling (below); every other rule is applied to a module that is only
+referred to in full.
 
 Profiles. The default profile checks the standard (spec/core-model.md,
 spec/hcl-authoring.md, spec/json-format.md and the decisions) and nothing else.

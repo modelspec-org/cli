@@ -2,6 +2,8 @@ package modelspec
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -166,6 +168,28 @@ func TestCheckedModuleIsDecidedPerModule(t *testing.T) {
 	referOld := map[string]string{"main" + hclExt: oldWords.Replace(refer["main"+hclExt]), "shared/core.modelspec.hcl": refer["shared/core.modelspec.hcl"]}
 	sameSeverities(t, "the referring model is old", spellingInEveryOrder(t, "referring", referOld, []string{"main" + hclExt}, []Assignment{{"core", "shared/core.modelspec.hcl"}}), map[string]Severity{"main" + hclExt: e, "shared/core.modelspec.hcl": w})
 
+	// A directory beside the named one whose name begins with it is not under it.
+	beside := map[string]string{
+		"model/sales" + hclExt:       recordWith("Sales", member("c", "    record = \"core.Customer\"\n")),
+		"model-pinned/core" + hclExt: oldRecord("Customer"),
+	}
+	sameSeverities(t, "a directory whose name begins with the named one", spellingInEveryOrder(t, "beside", beside, []string{"model"}, []Assignment{{"core", "model-pinned/core" + hclExt}}), map[string]Severity{"model-pinned/core" + hclExt: w})
+
+	// Two sources that claim one module name are one module for this decision: the module is
+	// checked because one of its sources is named, and the other is checked with it (decision D2).
+	twoSources := map[string]string{"a/core" + hclExt: recordWith("Space"), "b/core" + hclExt: oldRecord("Other")}
+	sameSeverities(t, "two sources of one name, one named", spellingInEveryOrder(t, "two sources", twoSources, []string{"a/core" + hclExt}, []Assignment{{"core", "b/core" + hclExt}}), map[string]Severity{"b/core" + hclExt: e})
+
+	// The JSON copy beside a named HCL file is a checked file whatever module --module gives
+	// it (decision D1: the rule for a module that is being checked wins over the exception),
+	// and so is the HCL file beside a named JSON copy.
+	copyPair := map[string]string{"x" + hclExt: okRecord, "x.modelspec.json": oldDoc(jEntities)}
+	sameSeverities(t, "the copy of a named HCL file, assigned to another module", spellingInEveryOrder(t, "copy", copyPair, []string{"x" + hclExt}, []Assignment{{"other", "x.modelspec.json"}}), map[string]Severity{"x.modelspec.json": e})
+	hclOld := map[string]string{"x" + hclExt: oldRecord("A"), "x.modelspec.json": doc(jRecords)}
+	sameSeverities(t, "the HCL file beside a named JSON copy, assigned to another module", spellingInEveryOrder(t, "hcl", hclOld, []string{"x.modelspec.json"}, []Assignment{{"other", "x" + hclExt}}), map[string]Severity{"x" + hclExt: e})
+	// A copy beside a file that is itself only referred to stays referred to.
+	sameSeverities(t, "the copy of a file that is only referred to", spellingInEveryOrder(t, "copy referred", map[string]string{"main" + hclExt: okRecord, "p/x" + hclExt: oldRecord("P"), "p/x.modelspec.json": oldDoc(jEntities)}, []string{"main" + hclExt}, []Assignment{{"other", "p/x.modelspec.json"}}), map[string]Severity{"p/x" + hclExt: w, "p/x.modelspec.json": w})
+
 	// Several modules are supplied, and only one of them is named: the others are referred to.
 	three := map[string]string{
 		"main" + hclExt: okRecord,
@@ -212,4 +236,87 @@ func TestCheckedModuleAgainstAPinnedModule(t *testing.T) {
 	if m, _ := ParseHCL("x"+hclExt, []byte(pinned)); m.ReferenceOnly {
 		t.Error("a model read on its own is being checked")
 	}
+}
+
+// A second name for the same place does not defeat "lies under a named path": a symbolic
+// link to the named directory, and (on a file system that ignores letter case) another case
+// of its name, are the named directory. Decided on the files themselves (Stat and SameFile).
+func TestCheckedModuleLiesUnderANamedPathByAnyName(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"model/x" + hclExt: okRecord, "model/part2.hcl": oldRecord("Customer")}
+	// An in-memory link.
+	for name, tc := range map[string]struct {
+		paths  []string
+		assign []Assignment
+		want   map[string]Severity
+	}{
+		"a link to the named directory is supplied":    {[]string{"model"}, []Assignment{{"shop", "alias"}}, map[string]Severity{"alias/part2.hcl": SeverityError}},
+		"the link is named and the directory supplied": {[]string{"alias"}, []Assignment{{"shop", "model"}}, map[string]Severity{"model/part2.hcl": SeverityError}},
+		"another directory is supplied":                {[]string{"model"}, []Assignment{{"shop", "elsewhere"}}, map[string]Severity{"elsewhere/part2.hcl": SeverityWarning}},
+	} {
+		fsys := newMemFS(files)
+		fsys.MapFS["elsewhere/part2.hcl"] = fsys.MapFS["model/part2.hcl"]
+		fsys.links["alias"] = "model"
+		for _, p := range orders(tc.paths) {
+			res, err := Lint(fsys, p, LintOptions{Modules: tc.assign})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]Severity{}
+			for _, f := range res.Findings {
+				if f.Rule == RuleDeprecated {
+					got[f.File] = f.Severity
+				}
+			}
+			sameSeverities(t, name, got, tc.want)
+		}
+	}
+}
+
+// The same on the real file system: a symbolic link (skipped where the platform cannot make
+// one) and another letter case (only where the volume ignores case: detected here).
+func TestCheckedModuleLiesUnderANamedPathOnTheRealFileSystem(t *testing.T) {
+	t.Parallel()
+	setup := func() string {
+		dir := t.TempDir()
+		for name, src := range map[string]string{"model/x" + hclExt: okRecord, "model/part2.hcl": oldRecord("Customer")} {
+			if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	severities := func(dir string, paths []string, assign []Assignment) map[string]Severity {
+		res, err := Lint(OSFS{}, paths, LintOptions{Modules: assign})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]Severity{}
+		for _, f := range res.Findings {
+			if f.Rule == RuleDeprecated {
+				rel, _ := filepath.Rel(dir, f.File)
+				got[filepath.ToSlash(rel)] = f.Severity
+			}
+		}
+		return got
+	}
+	t.Run("symbolic link", func(t *testing.T) {
+		dir := setup()
+		if err := os.Symlink(filepath.Join(dir, "model"), filepath.Join(dir, "alias")); err != nil {
+			t.Skip("cannot make a symbolic link here:", err)
+		}
+		sameSeverities(t, "link supplied, directory named", severities(dir, []string{filepath.Join(dir, "model")}, []Assignment{{"shop", filepath.Join(dir, "alias")}}), map[string]Severity{"alias/part2.hcl": SeverityError})
+		sameSeverities(t, "directory supplied, link named", severities(dir, []string{filepath.Join(dir, "alias")}, []Assignment{{"shop", filepath.Join(dir, "model")}}), map[string]Severity{"model/part2.hcl": SeverityError})
+	})
+	t.Run("letter case", func(t *testing.T) {
+		dir := setup()
+		if _, err := os.Stat(filepath.Join(dir, "MODEL")); err != nil {
+			t.Skip("this volume tells letter cases apart")
+		}
+		sameSeverities(t, "another case supplied", severities(dir, []string{filepath.Join(dir, "model")}, []Assignment{{"shop", filepath.Join(dir, "MODEL")}}), map[string]Severity{"MODEL/part2.hcl": SeverityError})
+		sameSeverities(t, "another case named", severities(dir, []string{filepath.Join(dir, "MODEL")}, []Assignment{{"shop", filepath.Join(dir, "model")}}), map[string]Severity{"model/part2.hcl": SeverityError})
+	})
 }
