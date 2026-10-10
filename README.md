@@ -126,9 +126,13 @@ loaded, so the answer does not depend on the order of the file names or of the a
 - A module **is being checked** when one of its files is a file named on the command line or lies
   under a path named there, whether or not `--module` also supplies it. Every file of it is then
   checked: the other `.hcl` files of its SpecScore layout directory, the JSON copy beside an HCL
-  file, and any file `--module` supplies for the same module. A plain `.hcl` file that only
-  `--module` can make a model, in a directory that is named as a path, is a file of that path.
-  `export` and `export --check` check the file they are given and its module.
+  file (whatever module `--module` gives the copy), and any file `--module` supplies for the same
+  module. A plain `.hcl` file that only `--module` can make a model, in a directory that is named as
+  a path, is a file of that path. A module is known by its name: two sources that claim one module
+  name are one module here, so naming one of them has the other checked. A path is the same place
+  however it is reached: a symbolic link to a named directory, and another letter case of its name
+  where the file system ignores case, lie under it. `export` and `export --check` check the file
+  they are given and its module.
 - With **no path named** (or only paths that hold no model), every module that `--module` supplies is
   being checked, so `modelspec lint --module core=shared/` checks `shared/` in full.
 - A module is **only referred to** when at least one path is named, every one of its files was
@@ -148,6 +152,11 @@ modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl
 
 `shop` is then checked (it lies under `parts`) and `core` is only referred to. Without `parts`
 as a path, `core` is checked too, and its old spelling is an error.
+
+A pinned module kept under a path named, such as `modelspec lint . --module
+core=.pinned/core.modelspec.hcl`, lies under it and is checked, so its old spelling is an error. To
+keep the exception, keep the pinned module outside the paths named, or name the model's directory
+rather than `.`.
 
 Whose choice the scope is: the owner approved making the old spelling an error (decision 0022, the
 entry of 2026-10-09 that quotes "yes, you can and should make the old spelling an error"). The scope of
@@ -280,7 +289,7 @@ Both forms, on the same typed model:
 | `attribute` | only supported attributes, with values of the right type |
 | `member-kind` | a field of a record or of a component has exactly one of `type`, `record`, `component` |
 | `key` | a record may omit `key` when the model does not assert row identity; when present, its non-empty list names distinct fields (or fields of components it uses) |
-| `modelspec-version`, `module` | JSON: `"modelspec"` is `"1.0-draft-2"` or the old `"1.0-draft"` (read; `deprecated-spelling` is the error for it), and the keys are those of that format; `module.id` and `module.version` are present (`module.name` is optional) |
+| `modelspec-version`, `module` | JSON: `"modelspec"` is `"1.0-draft-2"` or the old `"1.0-draft"` (read; `deprecated-spelling` is the finding for it), and the keys are those of that format; `module.id` and `module.version` are present (`module.name` is optional) |
 | `unknown-field` | JSON: a top-level field the format does not define is a warning (`$schema` is accepted; the format is silent on other fields) |
 
 A JSON document needs no records, and a record needs no fields: a module of components and
@@ -516,16 +525,17 @@ vocabulary**: `"modelspec": "1.0-draft-2"` with `records`, `fields` and `record`
 **An HCL file with any old spelling (`entity`, `property`, `entity =`) is refused**, by `export`,
 `export --out` and `export --check` alike (exit 1, nothing written). The refusal is decided from the
 loaded model, as the refusal of an incomplete module is, and not from the findings, which are capped
-(at most 1,000 are kept for a run): it cannot be lost behind another module's findings. It says that the
-old spelling is an error in a module that is being checked (rule `deprecated-spelling`) and that
-`modelspec rewrite --write <file>` removes that error; the file may have other errors, which stay (an
+(at most 1,000 are kept for a run): it cannot be lost behind another module's findings. When the
+finding of the file is not among those the run lists, `export` prints it (rule `deprecated-spelling`,
+an error in a module that is being checked), and the last line says that the old spelling is one of
+the errors and that `modelspec rewrite --write <file>` removes that error; the file may have other errors, which stay (an
 unknown type, a `collection` block), so the rewrite is the first step and not a promise that the export
 then succeeds. Rewrite first, then export: run `rewrite --write` on the HCL file and on its committed
 JSON copy, then `export` and `export --check` work on the pair as they do on any file in the new
 spelling. In v0.2.0 such a file was exported in the vocabulary of its source, as
 `"modelspec": "1.0-draft"` with `entities`, `properties` and `entity`. A file supplied with `--module` is
-read so that references into its module resolve and is not exported; `export` reports nothing about it
-(the warning for the old spelling of a module that is only referred to is a `lint` finding).
+read so that references into its module resolve and is not exported; `export` reports nothing about its
+spelling (the warning for the old spelling of a module that is only referred to is a `lint` finding).
 
 `export --check` compares the committed file with what `export` writes, the format identifier
 included. An HCL file with no record, no reference to one and no old spelling (only components and
@@ -648,8 +658,8 @@ entry under `parts/` that is one file of another item given alone and must give 
 `testdata/corpus/manifest.json` is the expected verdict of each, under both profiles; a test fails when this
 number is not the manifest's). 121 items are in the old spelling; under `new/` are their 121 copies in the new
 one and 9 items that have no old twin: where `modelspec rewrite` can rewrite every model file of an item, the copy is what it
-makes of the item, byte for byte (a test checks it), and the item's verdict is the copy's, refused, with the error
-`deprecated-spelling` added: an item is linted with its own directory as the one path named, so every file of it, those
+makes of the item, byte for byte (a test checks it), and, where the item holds an old spelling, the item's verdict is the copy's, refused, with the error
+`deprecated-spelling` added: an item is linted with its own path as the one path named, so every file of it, those
 that its `modules` supply included, lies under a named path and is checked (the test states that on its own, not with the
 search `lint` runs; the warning for a module that is only referred to is tested in the Go tests of `lint`, since no
 item can supply a module from outside its own path); where it cannot (a file that does not parse, a JSON file that repeats a key, or one that holds a collection, a

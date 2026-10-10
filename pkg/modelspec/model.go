@@ -153,8 +153,9 @@ type Model struct {
 	Incomplete bool
 }
 
-// OldVocabulary reports whether the model is in the old vocabulary: export
-// writes the vocabulary of its source (decision 0022, step 1).
+// OldVocabulary reports whether the model is in the old vocabulary: Model.JSON writes
+// the vocabulary of its source (decision 0022, step 1); the command export refuses a
+// source in the old vocabulary.
 func (m *Model) OldVocabulary() bool { return len(m.Old) > 0 }
 
 // HasConcept reports whether the model declares a concept of the kind with the

@@ -70,7 +70,7 @@ const (
 // What pins the rule: TestDeprecatedSpelling (check_test.go) for the library, the
 // lint, export and rewrite tests in internal/cli, the corpus test that pairs each
 // old item with its copy in the new spelling (oldSpellingVerdict), and the
-// manifest's old items with the differences from the recorded readers that follow.
+// manifest's old items.
 func OldSpellingSeverity(referenceOnly bool) Severity {
 	if referenceOnly {
 		return SeverityWarning
