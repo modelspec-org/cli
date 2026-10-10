@@ -126,12 +126,15 @@ loaded, so the answer does not depend on the order of the file names or of the a
 - A module **is being checked** when one of its files is a file named on the command line or lies
   under a path named there, whether or not `--module` also supplies it. Every file of it is then
   checked: the other `.hcl` files of its SpecScore layout directory, the JSON copy beside an HCL
-  file (whatever module `--module` gives the copy), and any file `--module` supplies for the same
-  module. A plain `.hcl` file that only `--module` can make a model, in a directory that is named as
+  file, and any file `--module` supplies for the same module. An HCL file and the JSON copy beside it
+  (`X.modelspec.hcl` and `X.modelspec.json`) are checked together, whatever module `--module` assigns
+  either of them to: when the module of one is being checked, the module of the other is being checked
+  as well. A plain `.hcl` file that only `--module` can make a model, in a directory that is named as
   a path, is a file of that path. A module is known by its name: two sources that claim one module
   name are one module here, so naming one of them has the other checked. A path is the same place
   however it is reached: a symbolic link to a named directory, and another letter case of its name
-  where the file system ignores case, lie under it. `export` and `export --check` check the file
+  where the file system ignores case, lie under it, and a file supplied under two names lies under a
+  named path when any of its names does. `export` and `export --check` check the file
   they are given and its module.
 - With **no path named** (or only paths that hold no model), every module that `--module` supplies is
   being checked, so `modelspec lint --module core=shared/` checks `shared/` in full.
