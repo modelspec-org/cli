@@ -309,6 +309,10 @@ type discovery struct {
 	// also holds, for a file kept under one name, the other names it was supplied under
 	// (by Abs): a file that is under a named path by any of its names is under it.
 	also map[string][]string
+	// dropped is every name a file was dropped under (see also), as it was given or found:
+	// expand looks beside each of them as it does beside the names kept, so what is found
+	// does not depend on which name of a file was met first.
+	dropped []Source
 }
 
 // seenFile is a file kept, with the name (Abs) it is kept under.
@@ -342,6 +346,7 @@ func (d *discovery) add(s Source, info fs.FileInfo) bool {
 	for _, other := range d.infos[key] {
 		if d.fsys.SameFile(other.info, info) {
 			d.also[other.abs] = append(d.also[other.abs], s.Abs) // the name it is dropped under is still a name of it
+			d.dropped = append(d.dropped, s)
 			return false
 		}
 	}
@@ -543,7 +548,7 @@ func discover(fsys FS, paths []string, anyHCL bool) ([]Source, []Finding, error)
 func (d *discovery) expand() ([]string, error) {
 	var notes []string
 	doneDir := map[string]bool{}
-	for _, s := range append([]Source(nil), d.sorted()...) {
+	for _, s := range append(append([]Source(nil), d.sorted()...), d.dropped...) {
 		dir := filepath.Dir(s.Path)
 		if id, absDir, ok := layoutDir(s.Abs); ok && !doneDir[absDir] {
 			doneDir[absDir] = true
@@ -764,8 +769,8 @@ func liesBySameFile(fsys FS, abs string, namedInfos []fs.FileInfo) (bool, error)
 // it. The module is known by its name: two sources that claim one name are one module here.
 // EVERY NAME a file is supplied under counts, for all three things: where the file lies
 // (under a named path when any of its names is), which modules it belongs to (the module
-// of the name it was kept under and each module any other name of it was assigned to are
-// checked together), and the pair rule: an HCL file and the JSON copy beside it
+// of the name it was kept under, each module any other name of it was assigned to, and the
+// layout module any other name of it is a file of, are checked together), and the pair rule: an HCL file and the JSON copy beside it
 // (X.modelspec.hcl and X.modelspec.json, by any name of either) are checked together
 // whatever module --module assigns either of them to, so that when the module of one is
 // being checked the module of the other is as well, repeated until nothing changes. A
@@ -802,6 +807,9 @@ func markReferenceOnly(fsys FS, models []*Model, files []Source, named []string,
 			index[name] = i
 			if m, ok := explicit[name]; ok {
 				mods[i] = append(mods[i], m)
+			}
+			if id, _, ok := layoutModule(name); ok {
+				mods[i] = append(mods[i], id) // the layout module this name of the file is a file of
 			}
 		}
 	}

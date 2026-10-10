@@ -662,6 +662,30 @@ func TestCheckedModuleEveryNameOfAFileCounts(t *testing.T) {
 		// module the name it was kept under belongs to.
 		check(t, "a hard link", dir, []string{"model"}, []Assignment{{"a", "other/hard.hcl"}, {"a", "pa/a.hcl"}, {"b", "model/part2.hcl"}, {"b", "pb/b.hcl"}}, "error,error,error")
 	})
+	t.Run("the copy beside a second name of a file", func(t *testing.T) {
+		t.Parallel()
+		// sub/x.modelspec.hcl is current, r/z.modelspec.json is in 1.0-draft; q/y.* are hard links of
+		// them. The copy is beside the named HCL file by the name q/y, so it is the error in every
+		// order of the arguments, not only when q/y is the name that was met first.
+		dir := realTree(t, map[string]string{"sub/x" + hclExt: okRecord, "r/z.modelspec.json": oldDoc(jEntities)}, nil, map[string]string{"q/y" + hclExt: "sub/x" + hclExt, "q/y.modelspec.json": "r/z.modelspec.json"})
+		check(t, "the copy supplied under both names", dir, []string{"sub/x" + hclExt}, []Assignment{{"o", "r/z.modelspec.json"}, {"o", "q/y.modelspec.json"}}, "error")
+		// The pair exists only between the second names of both files: neither the search beside
+		// a kept name nor the kept names themselves are a pair.
+		check(t, "the pair only between second names", dir, []string{"sub/x" + hclExt}, []Assignment{{"m", "q/y" + hclExt}, {"o", "r/z.modelspec.json"}, {"o", "q/y.modelspec.json"}}, "error")
+		// The copy is not supplied at all: it is the 1.0-draft copy beside q/y.modelspec.hcl.
+		dir = realTree(t, map[string]string{"sub/x" + hclExt: okRecord, "q/y.modelspec.json": oldDoc(jEntities)}, nil, map[string]string{"q/y" + hclExt: "sub/x" + hclExt})
+		check(t, "the copy beside a second name, named", dir, []string{"sub/x" + hclExt, "q/y" + hclExt}, nil, "error")
+		check(t, "the copy beside a second name, supplied", dir, []string{"sub/x" + hclExt}, []Assignment{{"m", "q/y" + hclExt}}, "error")
+	})
+	t.Run("a layout file through a link", func(t *testing.T) {
+		t.Parallel()
+		// a.hcl is a file of the layout directory of the named b.hcl, and is checked with it. Assigned
+		// to another module under its own name the assignment is refused (it would split the module);
+		// through a link to the directory it is a file of the same layout module all the same.
+		const models = "spec/graph/modules/shop/models"
+		dir := realTree(t, map[string]string{models + "/a.hcl": oldRecord("A"), models + "/b.hcl": recordWith("B")}, map[string]string{"alias": models}, nil)
+		check(t, "assigned through a link", dir, []string{models + "/b.hcl"}, []Assignment{{"pin", "alias/a.hcl"}}, "error")
+	})
 	t.Run("two levels of links", func(t *testing.T) {
 		t.Parallel()
 		// alias -> model, model/out -> ../pinned: the name alias/out/core.modelspec.hcl is under
