@@ -769,7 +769,9 @@ func TestExportRefusesTheOldSpellingBehindManyFindings(t *testing.T) {
 		fmt.Fprintf(&many, "record \"R%d\" {\n  key = [\"id\"]\n  field \"id\" {\n    type = \"nonesuch\"\n  }\n}\n", i)
 	}
 	files := func() map[string]string {
-		return map[string]string{"z.modelspec.hcl": oldHCL, "z.modelspec.json": oldDoc, "a/a.hcl": many.String()}
+		// A second entity whose name differs from the first by letter case only: the exported file has
+		// a finding other than the spelling (a warning), which must not be printed with it.
+		return map[string]string{"z.modelspec.hcl": oldHCL + strings.Replace(oldHCL, `"A"`, `"a"`, 1), "z.modelspec.json": oldDoc, "a/a.hcl": many.String()}
 	}
 	// The cap hides the finding of the exported file: lint lists the first findings only.
 	h := newHarness(files())
@@ -785,7 +787,16 @@ func TestExportRefusesTheOldSpellingBehindManyFindings(t *testing.T) {
 		code := h.run(args...)
 		// The finding the cap dropped from the list is printed, so the refusal does not send the
 		// reader to a list that does not hold it.
-		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), `z.modelspec.hcl:1: error: holds 2 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "z.modelspec.hcl" rewrites the file [deprecated-spelling]`+"\n") || !strings.Contains(h.errb.String(), `the old spelling is one of them: modelspec rewrite --write "z.modelspec.hcl" removes that error`) {
+		lines := 0
+		for _, l := range strings.Split(h.errb.String(), "\n") {
+			if strings.HasPrefix(l, "z.modelspec.hcl:") {
+				lines++
+			}
+		}
+		if lines != 1 {
+			t.Errorf("%s: %d finding lines for the exported file, want exactly the spelling finding once: %.400q", name, lines, h.errb)
+		}
+		if code != 1 || h.out.Len() != 0 || len(h.fsys.written) != 0 || !strings.Contains(h.errb.String(), `z.modelspec.hcl:1: error: holds 4 old spellings: entity, property and entity = are the old spellings of record, field and record = (decision 0018, decision 0020); the old spelling is an error in a model that is being checked (decision 0022); modelspec rewrite --write "z.modelspec.hcl" rewrites the file [deprecated-spelling]`+"\n") || !strings.Contains(h.errb.String(), `the old spelling is one of them: modelspec rewrite --write "z.modelspec.hcl" removes that error`) {
 			t.Errorf("%s: exit %d, stdout %.200q, stderr %.300q, written %v", name, code, h.out, h.errb, h.fsys.written)
 		}
 	}
@@ -1499,7 +1510,8 @@ func TestHelpStatesWhichModulesAreChecked(t *testing.T) {
 			"A module is known\nby its name: two sources that claim one module name are one module here",
 			"a symbolic link to a named directory, and another letter case of its name where the\nfile system ignores case, lie under it",
 			"A\npinned module kept under a path named, such as lint . --module\ncore=.pinned/core.modelspec.hcl, lies under it and is checked; to keep the exception,\nkeep the pinned module outside the paths named, or name the model's directory rather\nthan \".\"",
-			"the JSON copy beside an HCL file (whatever module\n--module gives the copy)",
+			"An HCL file and the JSON copy beside it (X.modelspec.hcl and X.modelspec.json) are checked together, whatever module --module assigns either of them to: when the module of one is being checked, the module of the other is being checked as well",
+			"a file supplied under two names lies under a named path when any of its names does",
 			"With no path named that exception\ncannot apply: everything --module supplies is checked.",
 			"name the model's\ndirectory as a path as well:\n\n  modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl\n\nshop is then checked (it lies under parts) and core is only referred to.",
 		},
@@ -1564,5 +1576,45 @@ func TestLintWhereTheTwoRulesMeet(t *testing.T) {
 				t.Errorf("exit %d (want %d), stdout %q (want it to contain %q), stderr %q", code, tc.code, h.out, tc.out, h.errb)
 			}
 		})
+	}
+}
+
+// An HCL file and the JSON copy beside it are checked together whatever module --module gives
+// either of them (decision D1, in both directions): the copy is named and assigned and the HCL
+// file beside it is in the old spelling, alone and with the HCL file assigned to a second module,
+// in every order of the arguments.
+func TestLintAPairIsCheckedTogether(t *testing.T) {
+	t.Parallel()
+	oldHCLFile := strings.NewReplacer("record", "entity", "field", "property").Replace(goodHCL)
+	files := map[string]string{"x.modelspec.hcl": oldHCLFile, "x.modelspec.json": `{"modelspec": "1.0-draft-2", "module": {"id": "x/y", "name": "x", "version": "1"}, "records": {"A": {"key": ["id"], "fields": {"id": {"type": "int"}}}}}`}
+	for name, units := range map[string][][]string{
+		"the copy named and assigned":               {{"x.modelspec.json"}, {"--module", "a=x.modelspec.json"}},
+		"the copy named, both files assigned apart": {{"x.modelspec.json"}, {"--module", "a=x.modelspec.json"}, {"--module", "b=x.modelspec.hcl"}},
+	} {
+		var walk func(int, []int)
+		walk = func(k int, used []int) {
+			if k == len(units) {
+				var args []string
+				args = append(args, "lint")
+				for _, u := range used {
+					args = append(args, units[u]...)
+				}
+				h := newHarness(files)
+				if code := h.run(args...); code != 1 || !strings.Contains(h.out.String(), "x.modelspec.hcl:1: error: holds 2 old spellings") || strings.Contains(h.out.String(), ": warning:") {
+					t.Errorf("%s: %v: exit %d, stdout %q", name, args, code, h.out)
+				}
+				return
+			}
+			for i := range units {
+				taken := false
+				for _, u := range used {
+					taken = taken || u == i
+				}
+				if !taken {
+					walk(k+1, append(append([]int(nil), used...), i))
+				}
+			}
+		}
+		walk(0, nil)
 	}
 }

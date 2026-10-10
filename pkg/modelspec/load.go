@@ -296,8 +296,8 @@ type Source struct {
 type discovery struct {
 	warned   map[string]bool // a warning is given once for a file
 	fsys     FS
-	seen     map[string]bool          // by Abs
-	infos    map[string][]fs.FileInfo // by size and time: candidates for SameFile
+	seen     map[string]bool       // by Abs
+	infos    map[string][]seenFile // by size and time: candidates for SameFile
 	out      []Source
 	findings []Finding
 	skipped  []SkippedFile // files met and not read, see skip
@@ -306,6 +306,15 @@ type discovery struct {
 	// (not the paths of --module): what lies under one of them, or is one, is named
 	// (see markReferenceOnly).
 	named []string
+	// also holds, for a file kept under one name, the other names it was supplied under
+	// (by Abs): a file that is under a named path by any of its names is under it.
+	also map[string][]string
+}
+
+// seenFile is a file kept, with the name (Abs) it is kept under.
+type seenFile struct {
+	info fs.FileInfo
+	abs  string
 }
 
 // SkippedFile is a model-named file that a search met and did not read (rule
@@ -320,7 +329,7 @@ type SkippedFile struct {
 }
 
 func newDiscovery(fsys FS) *discovery {
-	return &discovery{fsys: fsys, warned: map[string]bool{}, seen: map[string]bool{}, infos: map[string][]fs.FileInfo{}}
+	return &discovery{fsys: fsys, warned: map[string]bool{}, seen: map[string]bool{}, infos: map[string][]seenFile{}, also: map[string][]string{}}
 }
 
 // add records a file unless the same file is already there; it reports whether
@@ -331,12 +340,13 @@ func (d *discovery) add(s Source, info fs.FileInfo) bool {
 	}
 	key := fmt.Sprintf("%d/%d", info.Size(), info.ModTime().UnixNano())
 	for _, other := range d.infos[key] {
-		if d.fsys.SameFile(other, info) {
+		if d.fsys.SameFile(other.info, info) {
+			d.also[other.abs] = append(d.also[other.abs], s.Abs) // the name it is dropped under is still a name of it
 			return false
 		}
 	}
 	d.seen[s.Abs] = true
-	d.infos[key] = append(d.infos[key], info)
+	d.infos[key] = append(d.infos[key], seenFile{info, s.Abs})
 	d.out = append(d.out, s)
 	return true
 }
@@ -720,13 +730,18 @@ func lies(abs, named string) bool {
 // same file as the path named (infos are theirs, from Stat), however each was reached: a
 // symbolic link to the named directory, another letter case of its name on a file system
 // that ignores case. It is lies on the files themselves, as discovery.add compares files.
+// When a Stat fails the files cannot be compared, and this fails CLOSED: it reports true,
+// so that the module is treated as being checked (the error) and never as only referred to
+// (the warning) on a comparison that was not made.
 func liesBySameFile(fsys FS, abs string, namedInfos []fs.FileInfo) bool {
 	for p := abs; ; p = filepath.Dir(p) {
-		if info, err := fsys.Stat(p); err == nil {
-			for _, n := range namedInfos {
-				if fsys.SameFile(info, n) {
-					return true
-				}
+		info, err := fsys.Stat(p)
+		if err != nil {
+			return true
+		}
+		for _, n := range namedInfos {
+			if fsys.SameFile(info, n) {
+				return true
 			}
 		}
 		if parent := filepath.Dir(p); parent == p || p == "." {
@@ -745,56 +760,73 @@ func liesBySameFile(fsys FS, abs string, namedInfos []fs.FileInfo) bool {
 // text of the paths, and, for a file that is under no named path by its text, by Stat
 // and SameFile on the file and the directories above it, so that a second name for the
 // same place (a symbolic link, another letter case) does not defeat it. The module is
-// known by its name: two sources that claim one name are one module here. The copy beside
-// a file of a module that is being checked (X.modelspec.json beside X.modelspec.hcl) is a
-// checked file whatever module --module gives it, and so is its module. A module is only
+// known by its name: two sources that claim one name are one module here. An HCL file and
+// the JSON copy beside it (X.modelspec.hcl and X.modelspec.json) are checked together
+// whatever module --module assigns either of them to: when the module of one is being
+// checked, so is the module of the other, repeated until nothing changes. A file supplied
+// under two names is under a named path when any of its names is. A module is only
 // referred to when paths are named, and none of them is, or holds, a file of the module
 // or of its copy: every one of its files came from --module (or from a file that did, as
 // the rest of its module). When no path brings in a file, none is named: a path that holds
 // no model names nothing, and what --module supplies is what is checked. The module is the
 // unit, so the answer does not depend on the order of file names or of arguments, nor on
 // the route a file was found by.
-func markReferenceOnly(fsys FS, models []*Model, files []Source, named []string) {
+func markReferenceOnly(fsys FS, models []*Model, files []Source, named []string, also map[string][]string) {
 	var namedInfos []fs.FileInfo
 	for _, n := range named {
-		if info, err := fsys.Stat(n); err == nil {
-			namedInfos = append(namedInfos, info)
+		info, err := fsys.Stat(n)
+		if err != nil {
+			return // the files cannot be compared: fail closed, every module is being checked
 		}
+		namedInfos = append(namedInfos, info)
+	}
+	if len(namedInfos) == 0 {
+		return // no path is named: nothing is compared, every module is being checked
 	}
 	checked := map[string]bool{} // module name
 	for i, f := range files {
+		names := append([]string{f.Abs}, also[f.Abs]...) // a file supplied under two names
 		under := false
-		for _, n := range named {
-			if lies(f.Abs, n) {
-				under = true
-				break
+		for _, name := range names {
+			for _, n := range named {
+				under = under || lies(name, n)
 			}
 		}
-		if under || liesBySameFile(fsys, f.Abs, namedInfos) {
+		for _, name := range names {
+			under = under || liesBySameFile(fsys, name, namedInfos)
+		}
+		if under {
 			checked[models[i].Name] = true
 		}
 	}
 	if len(checked) == 0 {
 		return
 	}
-	// The copy beside a file of a checked module (X.modelspec.json beside X.modelspec.hcl) is
-	// checked, and so is its module, whatever module --module gives it. The JSON file takes its
-	// module from the HCL file beside it unless it is assigned to another, so only that case
-	// needs this.
+	// An HCL file and the JSON copy beside it are checked together, whatever module --module
+	// assigns either of them to: when the module of one is being checked, so is the module of
+	// the other, and so on until nothing changes (the copy of an HCL file of that module, the
+	// HCL file of that copy, ...).
 	index := map[string]int{}
 	for i, f := range files {
 		index[f.Abs] = i
 	}
-	copies := map[string]bool{}
-	for i, f := range files {
-		if checked[models[i].Name] && strings.HasSuffix(f.Abs, HCLSuffix) {
-			if j, ok := index[strings.TrimSuffix(f.Abs, HCLSuffix)+JSONSuffix]; ok {
-				copies[models[j].Name] = true
+	for changed := true; changed; {
+		changed = false
+		for i, f := range files {
+			var partner string
+			switch {
+			case strings.HasSuffix(f.Abs, HCLSuffix):
+				partner = strings.TrimSuffix(f.Abs, HCLSuffix) + JSONSuffix
+			case strings.HasSuffix(f.Abs, JSONSuffix):
+				partner = strings.TrimSuffix(f.Abs, JSONSuffix) + HCLSuffix
+			default:
+				continue
+			}
+			if j, ok := index[partner]; ok && checked[models[i].Name] && !checked[models[j].Name] {
+				checked[models[j].Name] = true
+				changed = true
 			}
 		}
-	}
-	for name := range copies {
-		checked[name] = true
 	}
 	for _, m := range models {
 		m.ReferenceOnly = !checked[m.Name]
@@ -911,7 +943,7 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	markReferenceOnly(fsys, models, sources, d.named)
+	markReferenceOnly(fsys, models, sources, d.named, d.also)
 	if len(d.skipped) > 0 {
 		explicit, _ := explicitModules(fsys, opts.Modules) // Load has just read them without error
 		markIncomplete(models, sources, d.skipped, explicit)

@@ -1,11 +1,14 @@
 package modelspec
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 // Whether the old spelling is an error or a warning in a file is decided for the
@@ -180,13 +183,30 @@ func TestCheckedModuleIsDecidedPerModule(t *testing.T) {
 	twoSources := map[string]string{"a/core" + hclExt: recordWith("Space"), "b/core" + hclExt: oldRecord("Other")}
 	sameSeverities(t, "two sources of one name, one named", spellingInEveryOrder(t, "two sources", twoSources, []string{"a/core" + hclExt}, []Assignment{{"core", "b/core" + hclExt}}), map[string]Severity{"b/core" + hclExt: e})
 
-	// The JSON copy beside a named HCL file is a checked file whatever module --module gives
-	// it (decision D1: the rule for a module that is being checked wins over the exception),
-	// and so is the HCL file beside a named JSON copy.
+	// An HCL file and the JSON copy beside it are checked together, whatever module --module
+	// assigns either of them to (decision D1, the implementing session's: the rule for a
+	// module that is being checked wins over the exception): when the module of one is being
+	// checked, the module of the other is as well, repeated until nothing changes.
 	copyPair := map[string]string{"x" + hclExt: okRecord, "x.modelspec.json": oldDoc(jEntities)}
 	sameSeverities(t, "the copy of a named HCL file, assigned to another module", spellingInEveryOrder(t, "copy", copyPair, []string{"x" + hclExt}, []Assignment{{"other", "x.modelspec.json"}}), map[string]Severity{"x.modelspec.json": e})
 	hclOld := map[string]string{"x" + hclExt: oldRecord("A"), "x.modelspec.json": doc(jRecords)}
 	sameSeverities(t, "the HCL file beside a named JSON copy, assigned to another module", spellingInEveryOrder(t, "hcl", hclOld, []string{"x.modelspec.json"}, []Assignment{{"other", "x" + hclExt}}), map[string]Severity{"x" + hclExt: e})
+	// The copy is named and assigned to a module of its own, and the HCL file beside it is in the
+	// old spelling: the HCL file was read because its copy was named, so it is checked, and so it
+	// is when it is also assigned to a third module (the two-assignment form).
+	namedCopy := map[string]string{"x" + hclExt: oldRecord("A"), "x.modelspec.json": doc(jRecords)}
+	sameSeverities(t, "the named copy is assigned", spellingInEveryOrder(t, "named copy", namedCopy, []string{"x.modelspec.json"}, []Assignment{{"a", "x.modelspec.json"}}), map[string]Severity{"x" + hclExt: e})
+	sameSeverities(t, "the named copy and its HCL file are assigned to two modules", spellingInEveryOrder(t, "named copy, two modules", namedCopy, []string{"x.modelspec.json"}, []Assignment{{"a", "x.modelspec.json"}, {"b", "x" + hclExt}}), map[string]Severity{"x" + hclExt: e})
+	// A chain: the module of the copy holds another HCL file, whose own copy is given a third
+	// module. Every file of the chain is checked.
+	chain := map[string]string{
+		"x" + hclExt:              okRecord,
+		"x.modelspec.json":        oldDoc(jEntities),
+		"pinned/y" + hclExt:       oldRecord("Y"),
+		"pinned/y.modelspec.json": oldDoc(jEntities),
+	}
+	sameSeverities(t, "a chain of copies", spellingInEveryOrder(t, "chain", chain, []string{"x" + hclExt}, []Assignment{{"other", "x.modelspec.json"}, {"other", "pinned/y" + hclExt}, {"third", "pinned/y.modelspec.json"}}),
+		map[string]Severity{"x.modelspec.json": e, "pinned/y" + hclExt: e, "pinned/y.modelspec.json": e})
 	// A copy beside a file that is itself only referred to stays referred to.
 	sameSeverities(t, "the copy of a file that is only referred to", spellingInEveryOrder(t, "copy referred", map[string]string{"main" + hclExt: okRecord, "p/x" + hclExt: oldRecord("P"), "p/x.modelspec.json": oldDoc(jEntities)}, []string{"main" + hclExt}, []Assignment{{"other", "p/x.modelspec.json"}}), map[string]Severity{"p/x" + hclExt: w, "p/x.modelspec.json": w})
 
@@ -319,4 +339,182 @@ func TestCheckedModuleLiesUnderANamedPathOnTheRealFileSystem(t *testing.T) {
 		sameSeverities(t, "another case supplied", severities(dir, []string{filepath.Join(dir, "model")}, []Assignment{{"shop", filepath.Join(dir, "MODEL")}}), map[string]Severity{"MODEL/part2.hcl": SeverityError})
 		sameSeverities(t, "another case named", severities(dir, []string{filepath.Join(dir, "MODEL")}, []Assignment{{"shop", filepath.Join(dir, "model")}}), map[string]Severity{"model/part2.hcl": SeverityError})
 	})
+}
+
+// One file supplied under two names, one of them under a named path, is under it: the verdict
+// is the same in either order of the two --module arguments (a file under a named path by any of
+// its names). The file is printed under the first name met, so the test counts the findings.
+func TestCheckedModuleOfAFileSuppliedUnderTwoNames(t *testing.T) {
+	t.Parallel()
+	lint := func(fsys FS, paths []string, assign []Assignment) []Finding {
+		res, err := Lint(fsys, paths, LintOptions{Modules: assign})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []Finding
+		for _, f := range res.Findings {
+			if f.Rule == RuleDeprecated {
+				got = append(got, f)
+			}
+		}
+		return got
+	}
+	one := func(name string, got []Finding, sev Severity) {
+		t.Helper()
+		if len(got) != 1 || got[0].Severity != sev {
+			t.Errorf("%s: %v, want one finding, a %s", name, got, sev)
+		}
+	}
+	// In memory: model/out is a link to pinned.
+	files := map[string]string{"model/x" + hclExt: okRecord, "pinned/core" + hclExt: oldRecord("Customer")}
+	for _, assign := range orders([]Assignment{{"core", "pinned/core" + hclExt}, {"core", "model/out/core" + hclExt}}) {
+		fsys := newMemFS(files)
+		fsys.links["model/out"] = "pinned"
+		one(fmt.Sprint("a link, ", assign), lint(fsys, []string{"model"}, assign), SeverityError)
+	}
+	// Supplied through the link only, the file is not under the named path by its other name:
+	// there is none. The link points outside the named directory, and a search follows no link.
+	fsys := newMemFS(files)
+	fsys.links["model/out"] = "pinned"
+	one("only its own path", lint(fsys, []string{"model"}, []Assignment{{"core", "pinned/core" + hclExt}}), SeverityWarning)
+
+	// On the real file system: a symbolic link and a hard link (skipped where one cannot be made).
+	dir := t.TempDir()
+	write := func(name, src string) {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("model/x"+hclExt, okRecord)
+	write("pinned/core"+hclExt, oldRecord("Customer"))
+	write("model/part2.hcl", oldRecord("Part"))
+	abs := func(n string) string { return filepath.Join(dir, n) }
+	if err := os.Symlink(abs("pinned"), abs("model/out")); err != nil {
+		t.Log("no symbolic link here:", err)
+	} else {
+		for _, assign := range orders([]Assignment{{"core", abs("pinned/core" + hclExt)}, {"core", abs("model/out/core" + hclExt)}}) {
+			one(fmt.Sprint("a real symbolic link, ", assign), lint(OSFS{}, []string{abs("model")}, assign), SeverityError)
+		}
+	}
+	if err := os.MkdirAll(abs("other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(abs("model/part2.hcl"), abs("other/hard.hcl")); err != nil {
+		t.Log("no hard link here:", err)
+	} else {
+		for _, assign := range orders([]Assignment{{"shop", abs("other/hard.hcl")}, {"shop", abs("model/part2.hcl")}}) {
+			one(fmt.Sprint("a hard link, ", assign), lint(OSFS{}, []string{abs("model")}, assign), SeverityError)
+		}
+		one("a hard link supplied alone", lint(OSFS{}, []string{abs("model")}, []Assignment{{"shop", abs("other/hard.hcl")}}), SeverityWarning)
+	}
+}
+
+// Same-file comparison reaches a file any depth below a second name of the named directory,
+// and compares every named path, whichever comes first.
+func TestCheckedModuleLiesUnderANamedPathBelowAndAmongMany(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"model/x" + hclExt: okRecord, "model/sub/deep.hcl": oldRecord("Deep"), "other/z" + hclExt: okRecord}
+	for name, tc := range map[string]struct {
+		paths  []string
+		assign []Assignment
+		want   map[string]Severity
+	}{
+		"two levels below the second name":    {[]string{"model"}, []Assignment{{"shop", "alias/sub"}}, map[string]Severity{"alias/sub/deep.hcl": SeverityError}},
+		"two named paths, the second matches": {[]string{"other", "model"}, []Assignment{{"shop", "alias"}}, map[string]Severity{"alias/sub/deep.hcl": SeverityError}},
+		"two named paths, neither matches":    {[]string{"other", "elsewhere"}, []Assignment{{"shop", "alias"}}, map[string]Severity{"alias/sub/deep.hcl": SeverityWarning}},
+	} {
+		fsys := newMemFS(files)
+		fsys.MapFS["elsewhere/e"+hclExt] = fsys.MapFS["other/z"+hclExt]
+		fsys.links["alias"] = "model"
+		for _, p := range orders(tc.paths) {
+			res, err := Lint(fsys, p, LintOptions{Modules: tc.assign})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]Severity{}
+			for _, f := range res.Findings {
+				if f.Rule == RuleDeprecated {
+					got[f.File] = f.Severity
+				}
+			}
+			sameSeverities(t, fmt.Sprint(name, p), got, tc.want)
+		}
+	}
+}
+
+// When the files cannot be compared the module is treated as being checked, never as only
+// referred to (the error): a Stat that fails above the file, or on a named path.
+func TestCheckedModuleFailsClosedWhenTheFilesCannotBeCompared(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"model/x" + hclExt: okRecord, "model/sub/deep.hcl": oldRecord("Deep")}
+	// A directory above the file cannot be read.
+	fsys := newMemFS(files)
+	fsys.MapFS["main"+hclExt] = &fstest.MapFile{Data: []byte(okRecord)}
+	fsys.links["alias"] = "model"
+	fsys.statErr["alias"] = errors.New("permission denied")
+	assign := []Assignment{{"shop", "alias/sub"}}
+	res, err := Lint(fsys, []string{"main" + hclExt}, LintOptions{Modules: assign})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sev Severity
+	for _, f := range res.Findings {
+		if f.Rule == RuleDeprecated {
+			sev = f.Severity
+		}
+	}
+	if sev != SeverityError {
+		t.Errorf("a directory above the file cannot be read: %q, want the error", sev)
+	}
+	// The same, with the directory readable, is the warning: nothing is named above the file.
+	delete(fsys.statErr, "alias")
+	if res, err = Lint(fsys, []string{"main" + hclExt}, LintOptions{Modules: assign}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range res.Findings {
+		if f.Rule == RuleDeprecated && f.Severity != SeverityWarning {
+			t.Errorf("the directory is readable and not named: %v", f)
+		}
+	}
+	// markReferenceOnly itself: a named path that cannot be read holds every file. "pinned" is
+	// under no readable named path, and would be only referred to if the comparison were skipped.
+	checkedModel, _ := ParseHCL("main"+hclExt, []byte(okRecord))
+	checkedModel.Name = "main"
+	pinned, _ := ParseHCL("pinned/a"+hclExt, []byte(oldRecord("A")))
+	pinned.Name = "pinned"
+	srcs := []Source{{Path: "main" + hclExt, Abs: "main" + hclExt}, {Path: "pinned/a" + hclExt, Abs: "pinned/a" + hclExt}}
+	markReferenceOnly(newMemFS(map[string]string{"main" + hclExt: okRecord, "pinned/a" + hclExt: oldRecord("A")}), []*Model{checkedModel, pinned}, srcs, []string{"main" + hclExt}, nil)
+	if checkedModel.ReferenceOnly || !pinned.ReferenceOnly {
+		t.Fatalf("with every path readable: named %v, pinned %v; want false and true", checkedModel.ReferenceOnly, pinned.ReferenceOnly)
+	}
+	pinned.ReferenceOnly = false
+	markReferenceOnly(newMemFS(map[string]string{"main" + hclExt: okRecord, "pinned/a" + hclExt: oldRecord("A")}), []*Model{checkedModel, pinned}, srcs, []string{"main" + hclExt, "gone"}, nil)
+	if checkedModel.ReferenceOnly || pinned.ReferenceOnly {
+		t.Error("a named path whose Stat fails: a module is only referred to")
+	}
+}
+
+// statCounter counts the Stat calls it is asked.
+type statCounter struct {
+	*memFS
+	calls int
+}
+
+func (c *statCounter) Stat(name string) (fs.FileInfo, error) {
+	c.calls++
+	return c.memFS.Stat(name)
+}
+
+// With no path named nothing is compared: the same-file comparison does not run.
+func TestCheckedModuleDoesNotCompareFilesWhenNoPathIsNamed(t *testing.T) {
+	t.Parallel()
+	m1, _ := ParseHCL("a"+hclExt, []byte(oldRecord("A")))
+	c := &statCounter{memFS: newMemFS(map[string]string{"d/a.hcl": oldRecord("A")})}
+	markReferenceOnly(c, []*Model{m1}, []Source{{Path: "d/a.hcl", Abs: "d/a.hcl"}}, nil, nil)
+	if c.calls != 0 || m1.ReferenceOnly {
+		t.Errorf("%d Stat calls with no path named, ReferenceOnly %v", c.calls, m1.ReferenceOnly)
+	}
 }
