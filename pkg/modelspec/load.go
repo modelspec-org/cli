@@ -730,107 +730,150 @@ func lies(abs, named string) bool {
 // same file as the path named (infos are theirs, from Stat), however each was reached: a
 // symbolic link to the named directory, another letter case of its name on a file system
 // that ignores case. It is lies on the files themselves, as discovery.add compares files.
-// When a Stat fails the files cannot be compared, and this fails CLOSED: it reports true,
-// so that the module is treated as being checked (the error) and never as only referred to
-// (the warning) on a comparison that was not made.
-func liesBySameFile(fsys FS, abs string, namedInfos []fs.FileInfo) bool {
+// When a Stat fails the files cannot be compared, and this fails CLOSED: it reports true
+// with the error, so that the module is treated as being checked (the error) and never as
+// only referred to (the warning) on a comparison that was not made.
+func liesBySameFile(fsys FS, abs string, namedInfos []fs.FileInfo) (bool, error) {
 	for p := abs; ; p = filepath.Dir(p) {
 		info, err := fsys.Stat(p)
 		if err != nil {
-			return true
+			return true, err
 		}
 		for _, n := range namedInfos {
 			if fsys.SameFile(info, n) {
-				return true
+				return true, nil
 			}
 		}
 		if parent := filepath.Dir(p); parent == p || p == "." {
-			return false
+			return false, nil
 		}
 	}
 }
 
 // markReferenceOnly sets Model.ReferenceOnly, for each module as a whole, once every
 // file is loaded (models[i] was read from files[i]; named is the absolute form of each
-// path named on the command line). A module is being checked when one of its files is
-// named on the command line or lies under a path named there, whether or not --module
-// also supplies it; the other files of the module are then checked with it, the JSON
-// copy and the other .hcl files of the layout directory included, and so is any file
-// that --module supplies for it. "Lies under" is decided on the files themselves: by the
-// text of the paths, and, for a file that is under no named path by its text, by Stat
-// and SameFile on the file and the directories above it, so that a second name for the
-// same place (a symbolic link, another letter case) does not defeat it. The module is
-// known by its name: two sources that claim one name are one module here. An HCL file and
-// the JSON copy beside it (X.modelspec.hcl and X.modelspec.json) are checked together
-// whatever module --module assigns either of them to: when the module of one is being
-// checked, so is the module of the other, repeated until nothing changes. A file supplied
-// under two names is under a named path when any of its names is. A module is only
-// referred to when paths are named, and none of them is, or holds, a file of the module
-// or of its copy: every one of its files came from --module (or from a file that did, as
-// the rest of its module). When no path brings in a file, none is named: a path that holds
-// no model names nothing, and what --module supplies is what is checked. The module is the
-// unit, so the answer does not depend on the order of file names or of arguments, nor on
-// the route a file was found by.
-func markReferenceOnly(fsys FS, models []*Model, files []Source, named []string, also map[string][]string) {
+// path named on the command line; also is the other names a file was supplied under, and
+// explicit the module each --module name of a file was assigned to). A module is being
+// checked when one of its files is named on the command line or lies under a path named
+// there, whether or not --module also supplies it; the other files of the module are then
+// checked with it, the JSON copy and the other .hcl files of the layout directory
+// included, and so is any file that --module supplies for it. "Lies under" is decided on
+// the files themselves: by the text of the paths, and, for a file that is under no named
+// path by its text, by Stat and SameFile on the file and the directories above it, so that
+// a second name for the same place (a symbolic link, another letter case) does not defeat
+// it. The module is known by its name: two sources that claim one name are one module here.
+// EVERY NAME a file is supplied under counts, for all three things: where the file lies
+// (under a named path when any of its names is), which modules it belongs to (the module
+// of the name it was kept under and each module any other name of it was assigned to are
+// checked together), and the pair rule: an HCL file and the JSON copy beside it
+// (X.modelspec.hcl and X.modelspec.json, by any name of either) are checked together
+// whatever module --module assigns either of them to, so that when the module of one is
+// being checked the module of the other is as well, repeated until nothing changes. A
+// module is only referred to when paths are named, and no file of it, under any name, is
+// or lies under one of them, and no partner of such a file is: every one of its files came
+// from --module (or from a file that did, as the rest of its module). When no path brings
+// in a file, none is named: a path that holds no model names nothing, and what --module
+// supplies is what is checked. The module is the unit, so the answer does not depend on
+// the order of file names or of arguments, nor on the route a file was found by.
+//
+// The error is the first failure to compare files (a Stat that failed). The comparison
+// fails closed: the module concerned is then treated as being checked, never as only
+// referred to, and the caller says so in a note.
+func markReferenceOnly(fsys FS, models []*Model, files []Source, named []string, also map[string][]string, explicit map[string]string) error {
 	var namedInfos []fs.FileInfo
 	for _, n := range named {
 		info, err := fsys.Stat(n)
 		if err != nil {
-			return // the files cannot be compared: fail closed, every module is being checked
+			return err // the files cannot be compared: fail closed, every module is being checked
 		}
 		namedInfos = append(namedInfos, info)
 	}
 	if len(namedInfos) == 0 {
-		return // no path is named: nothing is compared, every module is being checked
+		return nil // no path is named: nothing is compared, every module is being checked
 	}
 	checked := map[string]bool{} // module name
+	index := map[string]int{}    // every name of a file -> the file
+	names := make([][]string, len(files))
+	mods := make([][]string, len(files)) // the module of the file, and each module a name of it was assigned to
 	for i, f := range files {
-		names := append([]string{f.Abs}, also[f.Abs]...) // a file supplied under two names
+		names[i] = append([]string{f.Abs}, also[f.Abs]...)
+		mods[i] = []string{models[i].Name}
+		for _, name := range names[i] {
+			index[name] = i
+			if m, ok := explicit[name]; ok {
+				mods[i] = append(mods[i], m)
+			}
+		}
+	}
+	var failed error
+	anyUnder := false
+	for i := range files {
 		under := false
-		for _, name := range names {
+		for _, name := range names[i] {
 			for _, n := range named {
 				under = under || lies(name, n)
 			}
 		}
-		for _, name := range names {
-			under = under || liesBySameFile(fsys, name, namedInfos)
+		for _, name := range names[i] {
+			same, err := liesBySameFile(fsys, name, namedInfos)
+			under = under || same
+			if err != nil && failed == nil {
+				failed = err
+			}
 		}
 		if under {
-			checked[models[i].Name] = true
+			anyUnder = true
+			for _, m := range mods[i] {
+				checked[m] = true
+			}
 		}
 	}
-	if len(checked) == 0 {
-		return
+	if !anyUnder {
+		return failed
 	}
-	// An HCL file and the JSON copy beside it are checked together, whatever module --module
-	// assigns either of them to: when the module of one is being checked, so is the module of
-	// the other, and so on until nothing changes (the copy of an HCL file of that module, the
-	// HCL file of that copy, ...).
-	index := map[string]int{}
-	for i, f := range files {
-		index[f.Abs] = i
+	// The modules of one file, and the modules of an HCL file and of the JSON copy beside it
+	// (by any name of either), are checked together, until nothing changes.
+	check := func(ms []string) bool {
+		changed := false
+		for _, m := range ms {
+			if !checked[m] {
+				checked[m] = true
+				changed = true
+			}
+		}
+		return changed
 	}
 	for changed := true; changed; {
 		changed = false
-		for i, f := range files {
-			var partner string
-			switch {
-			case strings.HasSuffix(f.Abs, HCLSuffix):
-				partner = strings.TrimSuffix(f.Abs, HCLSuffix) + JSONSuffix
-			case strings.HasSuffix(f.Abs, JSONSuffix):
-				partner = strings.TrimSuffix(f.Abs, JSONSuffix) + HCLSuffix
-			default:
+		for i := range files {
+			one := false
+			for _, m := range mods[i] {
+				one = one || checked[m]
+			}
+			if !one {
 				continue
 			}
-			if j, ok := index[partner]; ok && checked[models[i].Name] && !checked[models[j].Name] {
-				checked[models[j].Name] = true
-				changed = true
+			changed = check(mods[i]) || changed
+			for _, name := range names[i] {
+				var partner string
+				switch {
+				case strings.HasSuffix(name, HCLSuffix):
+					partner = strings.TrimSuffix(name, HCLSuffix) + JSONSuffix
+				case strings.HasSuffix(name, JSONSuffix):
+					partner = strings.TrimSuffix(name, JSONSuffix) + HCLSuffix
+				default:
+					continue
+				}
+				if j, ok := index[partner]; ok {
+					changed = check(mods[j]) || changed
+				}
 			}
 		}
 	}
 	for _, m := range models {
 		m.ReferenceOnly = !checked[m.Name]
 	}
+	return failed
 }
 
 // markIncomplete marks the models of every module that has a skipped file: the
@@ -943,9 +986,11 @@ func Lint(fsys FS, paths []string, opts LintOptions) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	markReferenceOnly(fsys, models, sources, d.named, d.also)
+	explicit, _ := explicitModules(fsys, opts.Modules) // Load has just read them without error
+	if err := markReferenceOnly(fsys, models, sources, d.named, d.also, explicit); err != nil {
+		res.Notes = append(res.Notes, fmt.Sprintf("the files could not be compared with the paths named (%v), so the modules that could not be compared were treated as being checked, and their old spelling is an error", err))
+	}
 	if len(d.skipped) > 0 {
-		explicit, _ := explicitModules(fsys, opts.Modules) // Load has just read them without error
 		markIncomplete(models, sources, d.skipped, explicit)
 	}
 	res.Skipped = d.skipped

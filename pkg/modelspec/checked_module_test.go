@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -479,6 +480,20 @@ func TestCheckedModuleFailsClosedWhenTheFilesCannotBeCompared(t *testing.T) {
 			t.Errorf("the directory is readable and not named: %v", f)
 		}
 	}
+	// The note says why: the files could not be compared, so the modules concerned were
+	// treated as being checked.
+	fsys.statErr["alias"] = errors.New("permission denied")
+	if res, err = Lint(fsys, []string{"main" + hclExt}, LintOptions{Modules: assign}); err != nil {
+		t.Fatal(err)
+	}
+	const note = "the files could not be compared with the paths named (permission denied), so the modules that could not be compared were treated as being checked, and their old spelling is an error"
+	if len(res.Notes) != 1 || res.Notes[0] != note {
+		t.Errorf("notes = %q, want %q", res.Notes, note)
+	}
+	delete(fsys.statErr, "alias")
+	if res, err = Lint(fsys, []string{"main" + hclExt}, LintOptions{Modules: assign}); err != nil || len(res.Notes) != 0 {
+		t.Errorf("a comparison that could be made says nothing: %q, %v", res.Notes, err)
+	}
 	// markReferenceOnly itself: a named path that cannot be read holds every file. "pinned" is
 	// under no readable named path, and would be only referred to if the comparison were skipped.
 	checkedModel, _ := ParseHCL("main"+hclExt, []byte(okRecord))
@@ -486,12 +501,17 @@ func TestCheckedModuleFailsClosedWhenTheFilesCannotBeCompared(t *testing.T) {
 	pinned, _ := ParseHCL("pinned/a"+hclExt, []byte(oldRecord("A")))
 	pinned.Name = "pinned"
 	srcs := []Source{{Path: "main" + hclExt, Abs: "main" + hclExt}, {Path: "pinned/a" + hclExt, Abs: "pinned/a" + hclExt}}
-	markReferenceOnly(newMemFS(map[string]string{"main" + hclExt: okRecord, "pinned/a" + hclExt: oldRecord("A")}), []*Model{checkedModel, pinned}, srcs, []string{"main" + hclExt}, nil)
+	two := map[string]string{"main" + hclExt: okRecord, "pinned/a" + hclExt: oldRecord("A")}
+	if err := markReferenceOnly(newMemFS(two), []*Model{checkedModel, pinned}, srcs, []string{"main" + hclExt}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
 	if checkedModel.ReferenceOnly || !pinned.ReferenceOnly {
 		t.Fatalf("with every path readable: named %v, pinned %v; want false and true", checkedModel.ReferenceOnly, pinned.ReferenceOnly)
 	}
 	pinned.ReferenceOnly = false
-	markReferenceOnly(newMemFS(map[string]string{"main" + hclExt: okRecord, "pinned/a" + hclExt: oldRecord("A")}), []*Model{checkedModel, pinned}, srcs, []string{"main" + hclExt, "gone"}, nil)
+	if err := markReferenceOnly(newMemFS(two), []*Model{checkedModel, pinned}, srcs, []string{"main" + hclExt, "gone"}, nil, nil); err == nil {
+		t.Error("a named path whose Stat fails: no error is returned for the note")
+	}
 	if checkedModel.ReferenceOnly || pinned.ReferenceOnly {
 		t.Error("a named path whose Stat fails: a module is only referred to")
 	}
@@ -513,8 +533,141 @@ func TestCheckedModuleDoesNotCompareFilesWhenNoPathIsNamed(t *testing.T) {
 	t.Parallel()
 	m1, _ := ParseHCL("a"+hclExt, []byte(oldRecord("A")))
 	c := &statCounter{memFS: newMemFS(map[string]string{"d/a.hcl": oldRecord("A")})}
-	markReferenceOnly(c, []*Model{m1}, []Source{{Path: "d/a.hcl", Abs: "d/a.hcl"}}, nil, nil)
+	_ = markReferenceOnly(c, []*Model{m1}, []Source{{Path: "d/a.hcl", Abs: "d/a.hcl"}}, nil, nil, nil)
 	if c.calls != 0 || m1.ReferenceOnly {
 		t.Errorf("%d Stat calls with no path named, ReferenceOnly %v", c.calls, m1.ReferenceOnly)
 	}
+}
+
+// realTree writes files under a temporary directory, with symbolic links (name -> target) and
+// hard links (name -> existing name); it skips the test where the platform cannot make one.
+func realTree(t *testing.T, files map[string]string, symlinks, hardlinks map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, src := range files {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range symlinks {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Skip("cannot make a symbolic link here:", err)
+		}
+	}
+	for name, existing := range hardlinks {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(filepath.Join(dir, existing), filepath.Join(dir, name)); err != nil {
+			t.Skip("cannot make a hard link here:", err)
+		}
+	}
+	return dir
+}
+
+// spellingSeverities lints in dir (paths and modules are relative to it) and returns the
+// severity of every deprecated-spelling finding, sorted: the name a file is printed under is
+// the first met, which depends on the order of the arguments, so the names are not compared.
+func spellingSeverities(t *testing.T, dir string, paths []string, assign []Assignment) string {
+	t.Helper()
+	var ps []string
+	for _, p := range paths {
+		ps = append(ps, filepath.Join(dir, p))
+	}
+	var as []Assignment
+	for _, a := range assign {
+		as = append(as, Assignment{a.Module, filepath.Join(dir, a.Path)})
+	}
+	res, err := Lint(OSFS{}, ps, LintOptions{Modules: as})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range res.Findings {
+		if f.Rule == RuleDeprecated {
+			got = append(got, string(f.Severity))
+		}
+	}
+	sort.Strings(got)
+	return strings.Join(got, ",")
+}
+
+// caseInsensitive reports whether the volume of dir ignores letter case.
+func caseInsensitive(t *testing.T, dir string) bool {
+	t.Helper()
+	probe := filepath.Join(dir, "case-probe")
+	if err := os.WriteFile(probe, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := os.Stat(filepath.Join(dir, "CASE-PROBE"))
+	return err == nil
+}
+
+// Every name a file is supplied under counts, for all three things (the implementing
+// session's decision): where the file lies, the HCL/JSON pair rule, and the modules it belongs
+// to. The inputs go through a symbolic link and, where the volume ignores letter case, another
+// case, and (c) one file under two names given to two modules, in every order.
+func TestCheckedModuleEveryNameOfAFileCounts(t *testing.T) {
+	t.Parallel()
+	check := func(t *testing.T, name, dir string, paths []string, assign []Assignment, want string) {
+		t.Helper()
+		for _, p := range orders(paths) {
+			for _, a := range orders(assign) {
+				if got := spellingSeverities(t, dir, p, a); got != want {
+					t.Errorf("%s: paths %v modules %v: %q, want %q", name, p, a, got, want)
+				}
+			}
+		}
+	}
+	t.Run("(a) the pair through another name", func(t *testing.T) {
+		t.Parallel()
+		// The copy is in the old format, the HCL file beside it is current.
+		dir := realTree(t, map[string]string{"sub/x" + hclExt: okRecord, "sub/x.modelspec.json": oldDoc(jEntities)}, map[string]string{"alias": "sub"}, nil)
+		check(t, "the copy through a link", dir, []string{"sub/x" + hclExt}, []Assignment{{"other", "alias/x.modelspec.json"}}, "error")
+		check(t, "the HCL file named through a link", dir, []string{"alias/x" + hclExt}, []Assignment{{"other", "sub/x.modelspec.json"}}, "error")
+		if caseInsensitive(t, dir) {
+			check(t, "the copy in another case", dir, []string{"sub/x" + hclExt}, []Assignment{{"other", "sub/X.modelspec.json"}}, "error")
+			check(t, "the HCL file named in another case", dir, []string{"sub/X" + hclExt}, []Assignment{{"other", "sub/x.modelspec.json"}}, "error")
+		}
+		// The HCL file is in the old spelling and the copy is the one that is named.
+		dir = realTree(t, map[string]string{"sub/x" + hclExt: oldRecord("A"), "sub/x.modelspec.json": doc(jRecords)}, map[string]string{"alias": "sub"}, nil)
+		check(t, "the HCL file through a link", dir, []string{"sub/x.modelspec.json"}, []Assignment{{"other", "alias/x" + hclExt}}, "error")
+		check(t, "the copy named through a link", dir, []string{"alias/x.modelspec.json"}, []Assignment{{"other", "sub/x" + hclExt}}, "error")
+		if caseInsensitive(t, dir) {
+			check(t, "the HCL file in another case", dir, []string{"sub/x.modelspec.json"}, []Assignment{{"other", "sub/X" + hclExt}}, "error")
+		}
+	})
+	t.Run("(b) the named file assigned under another name", func(t *testing.T) {
+		t.Parallel()
+		dir := realTree(t, map[string]string{"model/x" + hclExt: okRecord, "pinned/more.hcl": oldRecord("More")}, map[string]string{"alias": "model"}, nil)
+		own := []Assignment{{"y", "model/x" + hclExt}, {"y", "pinned/more.hcl"}}
+		check(t, "its own name (the control)", dir, []string{"model/x" + hclExt}, own, "error")
+		check(t, "through a link", dir, []string{"model/x" + hclExt}, []Assignment{{"y", "alias/x" + hclExt}, {"y", "pinned/more.hcl"}}, "error")
+		check(t, "through a link, the directory named", dir, []string{"model"}, []Assignment{{"y", "alias/x" + hclExt}, {"y", "pinned/more.hcl"}}, "error")
+		if caseInsensitive(t, dir) {
+			check(t, "in another case", dir, []string{"model/x" + hclExt}, []Assignment{{"y", "Model/x" + hclExt}, {"y", "pinned/more.hcl"}}, "error")
+			check(t, "in another case, the directory named", dir, []string{"model"}, []Assignment{{"y", "Model/x" + hclExt}, {"y", "pinned/more.hcl"}}, "error")
+		}
+	})
+	t.Run("(c) one file under two names given to two modules", func(t *testing.T) {
+		t.Parallel()
+		dir := realTree(t, map[string]string{"model/x" + hclExt: okRecord, "model/part2.hcl": oldRecord("Part"), "pa/a.hcl": oldRecord("PA"), "pb/b.hcl": oldRecord("PB")}, nil, map[string]string{"other/hard.hcl": "model/part2.hcl"})
+		// The file is under the named path, so both modules are being checked, whichever
+		// module the name it was kept under belongs to.
+		check(t, "a hard link", dir, []string{"model"}, []Assignment{{"a", "other/hard.hcl"}, {"a", "pa/a.hcl"}, {"b", "model/part2.hcl"}, {"b", "pb/b.hcl"}}, "error,error,error")
+	})
+	t.Run("two levels of links", func(t *testing.T) {
+		t.Parallel()
+		// alias -> model, model/out -> ../pinned: the name alias/out/core.modelspec.hcl is under
+		// the named directory only through alias, two levels above the file, and it is the name
+		// the file is dropped under (the first name met is pinned/core.modelspec.hcl).
+		dir := realTree(t, map[string]string{"model/x" + hclExt: okRecord, "pinned/core" + hclExt: oldRecord("Customer")}, map[string]string{"alias": "model", "model/out": "../pinned"}, nil)
+		check(t, "a dropped name two levels below a link", dir, []string{"model"}, []Assignment{{"core", "pinned/core" + hclExt}, {"core", "alias/out/core" + hclExt}}, "error")
+	})
 }

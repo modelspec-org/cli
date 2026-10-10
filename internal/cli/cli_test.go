@@ -1511,7 +1511,7 @@ func TestHelpStatesWhichModulesAreChecked(t *testing.T) {
 			"a symbolic link to a named directory, and another letter case of its name where the\nfile system ignores case, lie under it",
 			"A\npinned module kept under a path named, such as lint . --module\ncore=.pinned/core.modelspec.hcl, lies under it and is checked; to keep the exception,\nkeep the pinned module outside the paths named, or name the model's directory rather\nthan \".\"",
 			"An HCL file and the JSON copy beside it (X.modelspec.hcl and X.modelspec.json) are checked together, whatever module --module assigns either of them to: when the module of one is being checked, the module of the other is being checked as well",
-			"a file supplied under two names lies under a named path when any of its names does",
+			"Every name a file is supplied under counts: for where it lies (it lies under a named path when any of its names does), for the pair above (by any name of either file), and for the modules it belongs to (the module of the name it is read under and each module another name of it was assigned to are checked together)",
 			"With no path named that exception\ncannot apply: everything --module supplies is checked.",
 			"name the model's\ndirectory as a path as well:\n\n  modelspec lint parts --module shop=parts --module core=pinned/core.modelspec.hcl\n\nshop is then checked (it lies under parts) and core is only referred to.",
 		},
